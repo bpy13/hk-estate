@@ -25,9 +25,11 @@ Bugs that will be fixed go in `open-items.md` instead.
 
 ## Scraping
 
-- **28Hse rate-limits long runs.** After ~45 minutes at 1 request/s it answered 429. The
-  backfill now waits 2 s between requests, pauses 10 minutes on a 429/5xx and stops after
-  three in a row; rerunning resumes.
+- **28Hse rate-limits long runs.** After ~45 minutes at 1 request/s (~1,600 requests) it
+  answered 429, then allowed only ~25 requests per 10-minute pause (a rolling quota). The
+  backfill now waits 4 s between requests (~900 an hour), pauses 15 minutes on a 429/5xx
+  and stops after three in a row on one page; rerunning resumes. A territory-wide backfill
+  at this pace is far slower than the Phase 0 estimate (see open items).
 - **DuckDB allows one process at a time.** Long jobs open the database only while writing;
   other commands wait for the file (up to 5 minutes).
 

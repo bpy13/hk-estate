@@ -30,11 +30,12 @@ from hkestate.sources import hse28
 from hkestate.sources.hse28 import EstateRef
 
 COMMAND = "backfill"
-COOLDOWN_S = 600  # pause after the site answers 429/5xx despite the fetcher's back-off
+COOLDOWN_S = 900  # pause after the site answers 429/5xx despite the fetcher's back-off
 BUSY_LIMIT = 3  # tries per page before the run stops (it resumes on the next run)
-# Gap between 28Hse requests for backfills. 28Hse answered 429 after ~45 minutes at the
-# 1 s minimum, so long runs go at half that rate.
-BACKFILL_MIN_INTERVAL_S = 2.0
+# Gap between 28Hse requests for backfills. 28Hse answered 429 after ~45 minutes (~1,600
+# requests) at the 1 s minimum and then allowed only ~25 requests per 10-minute pause, which
+# looks like a rolling hourly quota; 4 s (~900 an hour) stays under it.
+BACKFILL_MIN_INTERVAL_S = 4.0
 
 
 class SourceBusy(Exception):

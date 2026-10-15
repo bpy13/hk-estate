@@ -51,4 +51,11 @@ here; a limit or trap we live with goes in `known-issues.md`. Each item in one p
   2–6 weeks earlier and known only where Centadata has the deal. Fine for yearly figures;
   decide in Phase 4 whether to shift 28Hse dates by the typical gap.
 
+- **28Hse rate limit changes the Phase 3 backfill estimate.** At ~900 requests an hour
+  (what 28Hse tolerates), the territory-wide 28Hse pass (~195k pages) takes ~9 days, not
+  ~3 (the agreed limit was 1–3 days). Options for Phase 3: (a) accept ~9 days of background
+  running in chunks; (b) skip the 2018–2021 per-flat pass outside the pilot (~150k of the
+  pages; history then starts March 2021 except via Centadata's latest deal per flat).
+  Default: (a), run in nightly chunks. Decide before Task 3.2.
+
 ## Later
