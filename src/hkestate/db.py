@@ -255,7 +255,10 @@ VIEWS_DDL = [
     dup AS (  -- the same sale reported again (agency report, other source): keep best copy
         SELECT DISTINCT a.source, a.source_id
         FROM base a JOIN base o
-          ON a.unit_id = o.unit_id
+          ON (a.unit_id = o.unit_id
+              -- an agency report giving only a floor band: same building and flat
+              OR (a.floor_label IN ('高層', '中層', '低層')
+                  AND a.building_id = o.building_id AND a.flat = o.flat))
          AND NOT (a.source = o.source AND a.source_id = o.source_id)
          AND abs(a.price_hkd - o.price_hkd) <= {DUP_PRICE_TOL} * o.price_hkd
          AND abs(date_diff('day', a.deal_date, o.deal_date)) <= {DUP_DAYS}
@@ -352,8 +355,24 @@ TXN_COLUMNS = [
     "non_market",
     "raw_json",
 ]
-# Fields that do not make a row "changed" when they differ.
-_NOT_HASHED = {"fetched_at", "url", "row_hash", "raw_json"}
+# The fields that define a deal. Only a change in these adds a new version of a source row;
+# the same deal read from a different page (list vs per-flat page, which show different
+# extras such as gross area or rooms) does not.
+HASHED_COLUMNS = [
+    "source",
+    "source_id",
+    "building_id",
+    "floor_label",
+    "flat",
+    "deal_date",
+    "instrument_date",
+    "registration_date",
+    "deal_type",
+    "price_hkd",
+    "saleable_sqft",
+    "first_hand",
+    "non_market",
+]
 
 
 def _jsonable(v):
@@ -363,7 +382,7 @@ def _jsonable(v):
 
 
 def row_hash(row: Mapping) -> str:
-    content = {k: _jsonable(row.get(k)) for k in TXN_COLUMNS if k not in _NOT_HASHED}
+    content = {k: _jsonable(row.get(k)) for k in HASHED_COLUMNS}
     blob = json.dumps(content, sort_keys=True, ensure_ascii=False)
     return hashlib.sha1(blob.encode("utf-8")).hexdigest()
 

@@ -143,12 +143,17 @@ Lint: `ruff check .`.
     - a live run loads monthly price and rent indices by class, popular developments, and
       completions and stock
     - `SELECT count(*)` per series > 0, and the latest month is within 3 months of today.
-- [ ] **Task 1.3: Transaction scraper (master source)**
+- [x] **Task 1.3: Transaction scraper (master source)**
   - Files: `src/hkestate/sources/<master>.py`, `src/hkestate/normalise.py` (floor labels,
     TC/SC, areas), `tests/test_<master>.py`, `tests/test_normalise.py`, trimmed fixtures in
     `tests/fixtures/`.
   - Done when: parser and normaliser tests pass (skipped floors, G/F, podium, 頂層,
     gross-only conversion).
+  - Found while building: 28Hse deal lists mix Land Registry deals (linked to a flat) and
+    agency-reported "market" deals (linked to a deal id, often only a floor band such as
+    高層). Market deals are stored too and dropped as duplicates once the registry deal
+    for the same building + flat + price (±1%, 90 days) arrives. Some deals are marked
+    連車位 (price includes a parking space); kept in `raw_json` for now (open item).
 - [ ] **Task 1.4: Pilot backfill, idempotent**
   - Files: `src/hkestate/cli.py` (`hkestate backfill --estates <list>`), `tests/test_backfill.py`.
   - Done when:

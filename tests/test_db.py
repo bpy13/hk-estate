@@ -188,6 +188,42 @@ def test_market_report_superseded_by_registry_deal_on_same_unit(con):
     assert _clean_ids(con) == {"r"}
 
 
+def test_market_report_with_floor_band_matches_registry_deal_by_building_and_flat(con):
+    _setup_building(con)
+    _txn(con, "m", 8_000_000, date(2024, 1, 5), unit="A", deal_type="market")
+    con.execute("UPDATE txn_raw SET floor_label = '高層' WHERE source_id = 'm'")
+    _txn(con, "r", 8_050_000, date(2024, 1, 25), unit="A", deal_type="registry")
+    _txn(con, "other-flat", 8_000_000, date(2024, 1, 26), unit="B", deal_type="registry")
+    assert _clean_ids(con) == {"r", "other-flat"}
+
+
+def test_same_sale_from_list_and_flat_page_is_one_version(con):
+    _setup_building(con)
+    _txn(con, "d1", 8_000_000, date(2024, 1, 5), gross=None)
+    # The per-flat page adds gross area and a different URL: not a new version.
+    db.insert_txn_raw(
+        con,
+        [
+            {
+                "source": "hse28",
+                "source_id": "d1",
+                "fetched_at": datetime(2026, 10, 17),
+                "url": "https://example.com/flat",
+                "building_id": "b1",
+                "floor_label": "10",
+                "flat": "u",
+                "deal_date": date(2024, 1, 5),
+                "deal_type": "registry",
+                "price_hkd": 8_000_000,
+                "saleable_sqft": 500.0,
+                "gross_sqft": 640.0,
+                "rooms": 3,
+            }
+        ],
+    )
+    assert con.execute("SELECT count(*) FROM txn_raw").fetchone()[0] == 1
+
+
 def test_second_source_duplicate_is_dropped_but_unique_deal_kept(con):
     _setup_building(con)
     _txn(con, "h", 8_000_000, date(2024, 1, 5), unit="A")
