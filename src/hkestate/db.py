@@ -10,7 +10,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import random
+import time
 from collections.abc import Iterable, Mapping
+from contextlib import contextmanager
 from datetime import date, datetime
 from pathlib import Path
 
@@ -41,10 +44,30 @@ def default_db_path() -> Path:
     return get_data_dir() / "hkestate.duckdb"
 
 
-def connect(path: Path | str | None = None) -> duckdb.DuckDBPyConnection:
+def connect(path: Path | str | None = None, *, wait_s: float = 300.0) -> duckdb.DuckDBPyConnection:
+    """Open the database. DuckDB allows one process at a time, so if another command holds
+    the file we wait (up to `wait_s`) for it to be released."""
     path = Path(path) if path else default_db_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    return duckdb.connect(str(path))
+    deadline = time.monotonic() + wait_s
+    while True:
+        try:
+            return duckdb.connect(str(path))
+        except duckdb.IOException as e:
+            if "lock" not in str(e).lower() or time.monotonic() > deadline:
+                raise
+            time.sleep(0.5 + random.random())
+
+
+@contextmanager
+def session(path: Path | str | None = None):
+    """A short-lived connection: long jobs open the file only while writing, so other
+    commands can use the database in between."""
+    con = connect(path)
+    try:
+        yield con
+    finally:
+        con.close()
 
 
 def unit_id(building_id: str, floor_label: str, flat: str) -> str:
@@ -61,6 +84,7 @@ TABLES_DDL = [
         name_zh     VARCHAR NOT NULL,
         name_en     VARCHAR,
         district    VARCHAR,
+        group_name  VARCHAR,               -- estate group, e.g. LOHAS Park's developments
         source      VARCHAR NOT NULL,      -- source the id was minted from
         source_key  VARCHAR NOT NULL,
         created_at  TIMESTAMP DEFAULT current_timestamp
@@ -97,7 +121,9 @@ TABLES_DDL = [
         saleable_sqft   DOUBLE,
         gross_sqft      DOUBLE,
         rooms           INTEGER,
-        source_unit_key VARCHAR               -- e.g. 28Hse unit-id
+        source_unit_key VARCHAR,              -- e.g. 28Hse unit-id
+        src_deal_count  INTEGER,              -- deals the source says it holds for the flat
+        src_url         VARCHAR
     )""",
     """
     CREATE TABLE IF NOT EXISTS txn_raw (

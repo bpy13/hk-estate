@@ -27,6 +27,9 @@ dependencies = [
     "xlrd>=2.0",  # RVD publishes legacy .xls files
 ]
 
+[project.scripts]
+hkestate = "hkestate.cli:main"
+
 [project.optional-dependencies]
 dev = ["pytest>=8", "ruff>=0.5", "nbstripout>=0.7"]
 
