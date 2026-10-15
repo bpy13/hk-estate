@@ -66,6 +66,33 @@ def test_init_db_is_idempotent(tmp_path):
     assert TABLES <= table_names(c)
 
 
+@pytest.mark.parametrize(
+    "message",
+    [
+        "IO Error: Could not set lock on file",
+        "IO Error: Cannot open file: The process cannot access the file because it is being "
+        "used by another process. File is already open in python.exe",
+    ],
+)
+def test_connect_waits_while_another_process_holds_the_file(tmp_path, monkeypatch, message):
+    import duckdb
+
+    real = duckdb.connect
+    calls = []
+
+    def flaky(path, *a, **k):
+        calls.append(path)
+        if len(calls) < 3:
+            raise duckdb.IOException(message)
+        return real(path, *a, **k)
+
+    monkeypatch.setattr(db.duckdb, "connect", flaky)
+    monkeypatch.setattr(db.time, "sleep", lambda s: None)
+    c = db.connect(tmp_path / "x.duckdb")
+    c.close()
+    assert len(calls) == 3
+
+
 def test_connect_creates_parent_folder(tmp_path):
     path = tmp_path / "nested" / "dir" / "x.duckdb"
     c = db.connect(path)

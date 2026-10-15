@@ -54,7 +54,10 @@ def connect(path: Path | str | None = None, *, wait_s: float = 300.0) -> duckdb.
         try:
             return duckdb.connect(str(path))
         except duckdb.IOException as e:
-            if "lock" not in str(e).lower() or time.monotonic() > deadline:
+            text = str(e).lower()
+            # Linux/Mac say "lock"; Windows says "used by another process" / "already open".
+            busy = any(k in text for k in ("lock", "another process", "already open"))
+            if not busy or time.monotonic() > deadline:
                 raise
             time.sleep(0.5 + random.random())
 
