@@ -117,7 +117,7 @@ Lint: `ruff check .`.
 
 ## Phase 1 – Data foundation (pilot)
 
-- [ ] **Task 1.1: Schema and DB layer**
+- [x] **Task 1.1: Schema and DB layer**
   - Files: `src/hkestate/db.py` (DDL + `connect()`), `docs/architecture.md`, `tests/test_db.py`.
   - Done when: tests show `init_db()` creates the tables, is idempotent, and that clean
     views drop the excluded rows.
@@ -132,6 +132,10 @@ Lint: `ruff check .`.
     - Dates: `instrument_date`, `registration_date`.
     - Exclusion flags per decisions.md: under HK$500k, 5-MAD outlier, bulk deals,
       non-market transfers, first-hand.
+    - Added while building: `market_stat` (RVD completions, stock, vacancy, take-up),
+      `run_progress` (finished steps, for resuming), views `txn_latest` → `txn_all` (flags)
+      → `txn` (clean), and an `excl_duplicate` flag (the same sale from an agency report or
+      a second source). Rules in `docs/architecture.md`.
 - [ ] **Task 1.2: RVD loader**
   - Files: `src/hkestate/sources/rvd.py`, `tests/test_rvd.py` (fixture CSV).
   - Done when:
