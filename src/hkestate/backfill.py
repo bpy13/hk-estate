@@ -94,7 +94,9 @@ _RANGE = re.compile(r"^(.*?)(\d+)-(\d+)(號)$")
 
 
 def _key(text: str) -> str:
-    return norm_name(text).translate(_VARIANTS)
+    # 街/道/路/徑 before a street number are treated alike: the sources disagree
+    # (Centadata 蘭秀道1-3號, 28Hse 蘭秀街1號).
+    return re.sub(r"[街道路徑](?=\d)", "街", norm_name(text).translate(_VARIANTS))
 
 
 def match_buildings(location: str, buildings: dict[str, tuple[str, str]]) -> list[str]:

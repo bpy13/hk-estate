@@ -247,3 +247,10 @@ def test_address_range_block_maps_to_each_numbered_building():
     ]
     assert backfill.match_buildings("1期 百老匯街4號", buildings) == ["s1-b4"]
     assert backfill.match_building("1期 百老匯街1-3號", buildings) is None  # several
+
+
+def test_street_type_word_is_ignored_in_numbered_addresses():
+    # Centadata writes 蘭秀道1-3號, 28Hse 蘭秀街1號 / 蘭秀街3號 (same blocks)
+    buildings = {"b1": ("第五期", "蘭秀街1號"), "b3": ("第五期", "蘭秀街3號"),
+                 "b9": ("第五期", "恆柏街1號")}
+    assert sorted(backfill.match_buildings("5期 蘭秀道1-3號", buildings)) == ["b1", "b3"]
