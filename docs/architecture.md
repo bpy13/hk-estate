@@ -64,7 +64,9 @@ the same ids: estate `h28-<id>`, phase `h28-<id>-s<n>`, building `h28-<id>-b<n>`
 | `run_progress` | finished steps of a resumable command; a rerun skips them | (command, step_key) |
 
 Dates: `deal_date` is the date the source shows; `instrument_date` (agreement) and
-`registration_date` are kept separately when a source gives them (Centadata does).
+`registration_date` are kept separately when a source gives them (Centadata does). 28Hse
+dates its Land Registry deals by registration date, so `txn_all` fills
+`registration_date` from `deal_date` for them.
 
 Exclusion flags in `txn_all` (decisions.md "Schema"):
 
@@ -75,7 +77,7 @@ Exclusion flags in `txn_all` (decisions.md "Schema"):
 | `excl_first_hand` | developer sale |
 | `excl_non_market` | non-market transfer (when a source marks it) |
 | `excl_bulk` | 3 or more flats in one building on the same day |
-| `excl_outlier` | price per sq ft more than 5 median absolute deviations from the building's median for that year (needs ≥5 deals in the building-year) |
+| `excl_outlier` | price per sq ft more than 5 median absolute deviations from the building's median for that year (MAD scaled by 1.4826, floor 5% of the median; needs ≥5 deals in the building-year) |
 
 The views are recomputed on every query. At territory scale (Phase 3) `txn_all` may need to
 be materialised as a table after each load.

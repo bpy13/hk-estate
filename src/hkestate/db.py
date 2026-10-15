@@ -25,6 +25,11 @@ from hkestate.config import get_data_dir
 MIN_PRICE_HKD = 500_000
 OUTLIER_MADS = 5
 OUTLIER_MIN_DEALS = 5  # fewer deals in a building-year: no outlier test
+# The MAD is scaled by 1.4826 (so 5 MADs ~ 5 standard deviations for normal data) and never
+# taken below 5% of the median: in a building of near-identical flats the raw MAD is tiny
+# and would flag ordinary floor or view premiums.
+MAD_SCALE = 1.4826
+MAD_FLOOR = 0.05
 BULK_MIN_UNITS = 3  # this many flats in one building on one day = bulk deal
 DUP_PRICE_TOL = 0.01  # same sale reported twice: price within 1% ...
 DUP_DAYS = 90  # ... and dates within 90 days
@@ -329,11 +334,12 @@ VIEWS_DDL = [
     ),
     mad AS (
         SELECT p.building_id, yr.yr, yr.med, yr.n,
-            median(abs(p.psf_hkd - yr.med)) AS mad
+            greatest({MAD_SCALE} * median(abs(p.psf_hkd - yr.med)), {MAD_FLOOR} * yr.med)
+                AS mad
         FROM psf p JOIN yr
           ON p.building_id = yr.building_id AND year(p.deal_date) = yr.yr
         WHERE p.psf_hkd IS NOT NULL AND NOT (p.excl_duplicate OR p.excl_low_price OR p.excl_bulk)
-        GROUP BY ALL
+        GROUP BY p.building_id, yr.yr, yr.med, yr.n
     )
     SELECT psf.* EXCLUDE (source_rank),
         coalesce(m.n >= {OUTLIER_MIN_DEALS} AND m.mad > 0

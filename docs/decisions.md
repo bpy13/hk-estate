@@ -195,6 +195,23 @@ Details and measurements in `docs/sources.md`. Supersedes parts of "Source roles
 - **Fetcher:** robots.txt parsed with `protego` (wildcards), robots `Crawl-delay` honoured,
   robots.txt answering 401/403/5xx means stay away.
 
+## Phase 1 build (2026-10-16, Claude's calls)
+- **28Hse dates Land Registry deals by registration date**, not agreement date (Centadata
+  cross-check: all 70 matched Goldwin Heights deals). `deal_date` for 28Hse registry deals is
+  therefore the registration date (copied into `registration_date` in the views); the
+  agreement date is known only where Centadata gives it. Agreements are typically 2–6 weeks
+  earlier.
+- **Outlier rule made robust:** still 5 MADs from the building's yearly median price per
+  sq ft, but the MAD is scaled by 1.4826 (the usual factor that makes it comparable to a
+  standard deviation) and never taken below 5% of the median. With the raw MAD, a building
+  of near-identical flats flagged 17 of ~290 Goldwin Heights deals, including ordinary
+  high-floor premiums; now 3, all clearly abnormal.
+- **Bulk deals:** 3 or more flats in one building on one day (no buyer names are stored, so
+  same-buyer can't be checked).
+- **Same sale reported twice** (an agency report later registered, or Centadata and 28Hse
+  both holding it): same flat, price within 1%, dates within 90 days; the 28Hse Land
+  Registry copy wins.
+
 ## Repository
 - **Public GitHub repo `hk-estate` on account `bpy13`** (2026-10-16). Because it is public:
   scraped data, the database and raw-page cache are never committed (`data/` ignored), and no

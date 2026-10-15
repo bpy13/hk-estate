@@ -171,6 +171,19 @@ def test_clean_view_drops_5_mad_outliers_within_building_year(con):
     assert len(_clean_ids(con)) == 10
 
 
+def test_uniform_building_does_not_flag_a_normal_premium(con):
+    # Near-identical flats: the raw MAD is tiny. A high-floor deal 20% above the median is
+    # ordinary and must not be flagged; a deal at 2.3x the median still is.
+    _setup_building(con)
+    for i, psf in enumerate([20000, 20100, 19900, 20050, 19950, 20000, 20020, 19980, 20010]):
+        _txn(con, f"n{i}", psf * 800, date(2021, 1 + i, 3), unit=f"U{i}", saleable=800.0)
+    _txn(con, "premium", 24_000 * 800, date(2021, 11, 1), unit="P", saleable=800.0)
+    _txn(con, "odd", 46_000 * 800, date(2021, 12, 1), unit="Q", saleable=800.0)
+    ids = _clean_ids(con)
+    assert "premium" in ids
+    assert "odd" not in ids
+
+
 def test_outlier_rule_needs_enough_deals(con):
     # With only 2 deals in the building-year the median absolute deviation is meaningless:
     # nothing is flagged.
