@@ -108,7 +108,11 @@ class Fetcher:
         clock: Callable[[], float] = time.monotonic,
         today: Callable[[], date] = _hk_today,
         jitter: Callable[[], float] | None = None,
+        min_interval: float = MIN_INTERVAL_S,
     ):
+        # Long runs can ask for a wider gap than the 1 s minimum (some sites answer 429
+        # after a long stretch at 1 request/s). robots.txt Crawl-delay still wins if longer.
+        self.min_interval = max(min_interval, MIN_INTERVAL_S)
         self.cache_dir = Path(cache_dir) if cache_dir else get_data_dir() / "cache"
         self._client = httpx.Client(
             transport=transport,
@@ -236,7 +240,7 @@ class Fetcher:
     def _wait_for_host(self, host: str) -> None:
         last = self._last_request.get(host)
         if last is not None:
-            interval = self._min_interval.get(host, MIN_INTERVAL_S)
+            interval = max(self._min_interval.get(host, 0.0), self.min_interval)
             wait = last + interval + self._jitter() - self._clock()
             if wait > 0:
                 self._sleep(wait)

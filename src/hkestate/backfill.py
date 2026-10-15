@@ -30,6 +30,15 @@ from hkestate.sources import hse28
 from hkestate.sources.hse28 import EstateRef
 
 COMMAND = "backfill"
+COOLDOWN_S = 600  # pause after the site answers 429/5xx despite the fetcher's back-off
+BUSY_LIMIT = 3  # tries per page before the run stops (it resumes on the next run)
+# Gap between 28Hse requests for backfills. 28Hse answered 429 after ~45 minutes at the
+# 1 s minimum, so long runs go at half that rate.
+BACKFILL_MIN_INTERVAL_S = 2.0
+
+
+class SourceBusy(Exception):
+    """The site keeps answering 'too many requests' or server errors: stop and resume later."""
 
 # Pilot estates (decisions.md). 28Hse lists LOHAS Park as separate developments.
 PILOT_ESTATES: dict[str, list[EstateRef]] = {
@@ -98,7 +107,8 @@ def match_building(location: str, buildings: dict[str, tuple[str, str]]) -> str 
 
 
 class _Loader:
-    def __init__(self, fetcher, db_path, log: Log, run_id: int):
+    def __init__(self, fetcher, db_path, log: Log, run_id: int, pause=time.sleep):
+        self.pause = pause
         self.f = fetcher
         self.db_path = db_path
         self.log = log
@@ -108,15 +118,22 @@ class _Loader:
     # ---- helpers ----------------------------------------------------------------------------
 
     def get(self, url: str) -> str:
-        """Fetch a page; a network error is retried twice after a pause."""
-        for attempt in range(3):
+        """Fetch a page. A network error, or the site still answering 429/5xx after the
+        fetcher's own back-off, gets a long cool-down and another try; after BUSY_LIMIT
+        tries the run stops with SourceBusy (rerun later: it resumes)."""
+        for attempt in range(1, BUSY_LIMIT + 1):
             try:
                 return self.f.get(url, "transaction")
             except httpx.TransportError as e:
-                if attempt == 2:
+                reason = type(e).__name__
+            except FetchError as e:
+                if e.status != 429 and (e.status or 0) < 500:
                     raise
-                self.log(f"network error ({type(e).__name__}), retrying: {url}")
-                time.sleep(30)
+                reason = f"HTTP {e.status}"
+            if attempt == BUSY_LIMIT:
+                raise SourceBusy(f"{reason} {BUSY_LIMIT} times in a row: {url}")
+            self.log(f"  site busy ({reason}); pausing {COOLDOWN_S // 60} min: {url}")
+            self.pause(COOLDOWN_S)
         raise AssertionError("unreachable")
 
     def done(self, key: str) -> bool:
@@ -321,11 +338,14 @@ class _Loader:
                 """,
                 [estate_id(ref)],
             ).fetchall()
+            # flats an older run gave up on because the site was busy are tried again
             done = {
                 r[0]
                 for r in con.execute(
                     "SELECT step_key FROM run_progress "
-                    "WHERE command = ? AND starts_with(step_key, ?)",
+                    "WHERE command = ? AND starts_with(step_key, ?) "
+                    "AND NOT (coalesce(detail, '') LIKE 'error 429%' "
+                    "         OR coalesce(detail, '') LIKE 'error 5%')",
                     [COMMAND, f"hse28:{ref.id}:flat:"],
                 ).fetchall()
             }
@@ -335,7 +355,7 @@ class _Loader:
             step = f"hse28:{ref.id}:flat:{ukey}"
             try:
                 page = hse28.parse_unit_page(self.get(url))
-            except FetchError as e:
+            except FetchError as e:  # a lasting error (e.g. 404); busy answers raise instead
                 self.log(f"  flat page failed ({e.status}): {url}")
                 self.mark(step, f"error {e.status}")
                 continue
@@ -398,6 +418,7 @@ def backfill_estates(
     log: Log = print,
     refresh: bool = False,
     skip_flats: bool = False,
+    pause=time.sleep,
 ) -> int:
     """Load every estate in `estates` (group name -> 28Hse estates). Returns rows added."""
     with db.session(db_path) as con:
@@ -413,8 +434,8 @@ def backfill_estates(
                     db.clear_steps(con, COMMAND, f"hse28:{ref.id}:")
         run_id = db.start_run(con, COMMAND, json.dumps(sorted(estates), ensure_ascii=False))
     own_fetcher = fetcher is None
-    fetcher = fetcher or Fetcher()
-    loader = _Loader(fetcher, db_path, log, run_id)
+    fetcher = fetcher or Fetcher(min_interval=BACKFILL_MIN_INTERVAL_S)
+    loader = _Loader(fetcher, db_path, log, run_id, pause=pause)
     status, message = "ok", ""
     try:
         for group, refs in estates.items():

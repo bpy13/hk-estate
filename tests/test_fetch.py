@@ -221,6 +221,30 @@ def test_at_least_one_second_plus_jitter_between_requests_to_same_host(tmp_path,
     assert all(g >= 1.0 + jitter - 1e-9 for g in gaps)
 
 
+def test_min_interval_can_be_raised_for_long_runs(tmp_path):
+    clock = FakeClock()
+    times = []
+
+    def dispatch(request):
+        if request.url.path == "/robots.txt":
+            return httpx.Response(200, text=ROBOTS)
+        times.append(clock.now)
+        return ok(request)
+
+    fetcher = Fetcher(
+        cache_dir=tmp_path,
+        transport=httpx.MockTransport(dispatch),
+        sleep=clock.sleep,
+        clock=clock.time,
+        today=lambda: date(2026, 10, 16),
+        jitter=lambda: 0.0,
+        min_interval=2.5,
+    )
+    fetcher.get("https://example.com/a", "static")
+    fetcher.get("https://example.com/b", "static")
+    assert times[1] - times[0] >= 2.5
+
+
 def test_default_jitter_is_between_zero_and_half_a_second(tmp_path):
     fetcher = Fetcher(cache_dir=tmp_path)
     samples = [fetcher._jitter() for _ in range(200)]

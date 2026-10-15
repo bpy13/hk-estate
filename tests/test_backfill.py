@@ -36,18 +36,27 @@ def site():
 
 
 class FakeFetcher:
-    def __init__(self, pages, fail_after=None):
+    def __init__(self, pages, fail_after=None, busy=()):
         self.pages = pages
         self.requests = []
         self.fail_after = fail_after
+        self.busy = dict.fromkeys(busy, 1)  # url -> times to answer 429 first
 
     def get(self, url, page_type):
         if self.fail_after is not None and len(self.requests) >= self.fail_after:
             raise KeyboardInterrupt  # simulates the run being stopped
         self.requests.append(url)
+        if self.busy.get(url):
+            self.busy[url] -= 1
+            raise FetchError(url, 429)
         if url not in self.pages:
             raise FetchError(url, 404)
         return self.pages[url]
+
+
+UNIT_URL = hse28.canonical_url(
+    "https://www.28hse.com/estate/detail/太古城-1140/history/stateno-1/blockno-18/unitid-172141"
+)
 
 
 @pytest.fixture
@@ -172,3 +181,50 @@ def test_market_deal_building_matched_by_block_name():
     multi = {"x1": ("首都 第1座", "1座"), "x2": ("領都 第1座", "1座")}
     assert backfill.match_building("領都 1座", multi) == "x2"
     assert backfill.match_building("不知名閣", buildings) is None
+
+
+def test_rate_limited_flat_page_is_retried_not_marked_done(dbpath):
+    pauses = []
+    backfill.backfill_estates(
+        {"test": [EST]}, fetcher=FakeFetcher(site(), busy=[UNIT_URL]), db_path=dbpath,
+        log=lambda *a: None, pause=pauses.append,
+    )
+    assert pauses  # it cooled down after the 429
+    with db.session(dbpath) as con:
+        ids = {r[0] for r in con.execute("SELECT source_id FROM txn_raw").fetchall()}
+    assert "u172141:2019-04-02" in ids  # the retry after the pause got the page
+
+
+def test_repeated_rate_limits_stop_the_run_for_a_later_resume(dbpath):
+    f = FakeFetcher(site(), busy=[UNIT_URL])
+    f.busy[UNIT_URL] = 99
+    with pytest.raises(backfill.SourceBusy):
+        backfill.backfill_estates(
+            {"test": [EST]}, fetcher=f, db_path=dbpath, log=lambda *a: None,
+            pause=lambda s: None,
+        )
+    with db.session(dbpath) as con:
+        assert con.execute(
+            "SELECT count(*) FROM run_progress WHERE step_key LIKE '%:flat:%'"
+        ).fetchone()[0] == 0
+        assert con.execute("SELECT status FROM run_log").fetchone()[0] == "failed"
+    run(dbpath, FakeFetcher(site()))  # a later run picks the flat up
+    with db.session(dbpath) as con:
+        assert con.execute(
+            "SELECT count(*) FROM txn_raw WHERE source_id = 'u172141:2019-04-02'"
+        ).fetchone()[0] == 1
+
+
+def test_flats_marked_with_a_rate_limit_error_by_older_runs_are_retried(dbpath):
+    run(dbpath, FakeFetcher(site()))
+    with db.session(dbpath) as con:
+        con.execute("DELETE FROM txn_raw WHERE source_id LIKE 'u172141:%'")
+        con.execute(
+            "UPDATE run_progress SET detail = 'error 429' WHERE step_key LIKE '%:flat:172141'"
+        )
+        db.clear_steps(con, "backfill", "hse28:1140:flats")
+    run(dbpath, FakeFetcher(site()))
+    with db.session(dbpath) as con:
+        assert con.execute(
+            "SELECT count(*) FROM txn_raw WHERE source_id LIKE 'u172141:%'"
+        ).fetchone()[0] == 2
