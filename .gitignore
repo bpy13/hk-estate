@@ -1,0 +1,14 @@
+# Scraped data, database, raw-page cache, reports: never committed (public repo)
+data/
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+*.egg-info/
+
+# Local settings and secrets
+.env
+.claude/settings.local.json

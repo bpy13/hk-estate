@@ -1,0 +1,178 @@
+# Decisions
+
+What was decided, why, and when. Change these only with a reason, and note the change here
+(mark reversed decisions as reversed rather than deleting them).
+
+## Scope
+- **Purpose: the owner's own investment research** (2026-10-16). Not a product, no clients,
+  single user. Keeps scraping in personal-use territory and polish modest.
+- **Coverage: whole territory, private residential flats only** (2026-10-16). Excludes HOS /
+  subsidised flats (resale restrictions distort prices), houses/villas, commercial. Build is
+  proven on a few pilot estates first, then scaled to the whole territory within the plan.
+- **History from 2000** (2026-10-16). Covers several cycles (2003 trough, 2008, 2021 peak,
+  2021–24 fall, 2025–26 recovery).
+- **Two goals:**
+  1. Under-market listings: score every current listing by its discount to a modelled fair
+     price (after allowing for the usual asking-vs-deal gap) and **rank them; no fixed cut-off**
+     (2026-10-16, user: "all is relative"). Each listing shows risk flags (haunted, illegal
+     works, tenanted, short lease, poor view…).
+  2. Attribute growth study: which flat attributes are linked to better growth, measured as
+     **both price growth and total return (growth + rental yield)**, over holding periods of
+     3+ years, with risk (drawdown) shown and out-of-sample checks (2026-10-16).
+- **Transaction costs** (stamp duty, agent fees, legal) are modelled from the IRD's own pages,
+  since secondary sources disagree on 2026 rules. (Claude's call.)
+
+## Platform and hosting
+- **Runs on the owner's Windows laptop** (2026-10-16). Listings refreshed daily by Windows
+  Task Scheduler from the listings phase on.
+- Python in a conda env (python-env skill). (Claude's call.)
+
+## Data and secrets
+- **Collection method: slow, polite scraping** (2026-10-16): obey robots.txt, ≤1 request/s per
+  site, raw-page cache so nothing is fetched twice, resumable runs. Never call disallowed
+  paths (e.g. centanet `/centanetapi/api/`).
+- **Data budget: HK$0** (2026-10-16). No paid APIs (e.g. Anysite) and no IRIS searches unless
+  the owner approves a specific spend.
+- **Storage: DuckDB file on the laptop + raw-page cache in `data/`, nothing in the cloud**
+  (2026-10-16). Shape: estate → building → unit → transactions, plus dated listing snapshots.
+- No personal data of owners/buyers stored (PDPO). (Claude's call.)
+
+## Behaviour and rules
+- **AI: keyword rules first** for reading listing text (sea view, renovated, haunted…). A
+  Claude model only later, with a cost quote before any run (2026-10-16).
+
+## UI
+- **Deliverables: analysis notebooks, a local Streamlit dashboard listing ranked deals, and a
+  written findings report** (2026-10-16).
+- **Language: English reports, Chinese estate/building names kept alongside** (2026-10-16).
+
+## Claude's calls from the builder check (2026-10-16)
+Minor gaps decided by Claude; change any with a reason.
+
+**Phases.** Phase order lives in the plan file. Phase 0 (source spike) gates the rest: a source
+that blocks scrapers, or whose robots.txt forbids what we need, is dropped and recorded here,
+with no need to ask. Each phase gets acceptance criteria in the plan.
+
+**Pilot estates.** Taikoo Shing (Island, large, 1970s–80s), Mei Foo Sun Chuen (Kowloon, oldest),
+City One Sha Tin (NT, large), LOHAS Park (new, NT East), plus one single-block building chosen in
+Phase 0. Spot-check: 50 random rows against the source website, all must match.
+
+**Coverage filter.** HOS, TPS (Tenants Purchase Scheme) and other subsidised flats are excluded,
+including ex-HOS with premium paid (different buyer pool). Villas and village houses are
+excluded; duplexes and penthouses are kept but flagged. First-hand (developer) sales are
+stored and flagged: they are left out of fair-price comparables and reported as a separate
+group in the growth study (developer incentives distort prices).
+
+**Source roles.**
+- Transactions: Centadata (master estate/building list). 28Hse transactions are used to
+  cross-check and fill gaps. History starts at whatever the free sources hold, aiming for 2000.
+  Coverage is reported per estate rather than assumed.
+- Listings: 28Hse, Centanet, Squarefoot, Spacious, house730 (Midland only if it stops
+  blocking).
+- First-hand sales: SRPE.
+- Indices: RVD monthly price and rent indices by class, popular developments, completions and
+  stock.
+- Location: the government Address Lookup Service (free API) for coordinates; CSDI for MTR
+  stations and building footprints, with 3D view scoring in a later phase.
+- Rents: RVD rent indices for history, rental listings for current yields.
+
+**Risk flags.**
+- From listing text: haunted, tenanted, renovated, sea view.
+- Squarefoot's haunted-flat list, if its robots.txt allows.
+- Illegal works (Buildings Department orders) and land-lease expiry are deferred. Most leases
+  were extended, so lease expiry adds little.
+
+**Personal data.** No agent names or phone numbers are stored, only the listing URL.
+
+**Scraping.**
+- At most 1 request per second per site, with random jitter and back-off on 429 and 5xx
+  errors. On 403 or a CAPTCHA, that source stops for the run and the failure is logged.
+- Plain HTTP first; a Playwright headless browser only for pages that need JavaScript, and
+  never on paths robots.txt disallows.
+- The cache is keyed by URL and fetch date, with a lifetime per page type: listings 1 day,
+  transaction pages 7 days, static pages 30 days. Cached pages are compressed.
+
+**Schema.**
+- Tables run estate → phase → building → unit, plus transactions, listing snapshots, rents,
+  index series, attributes and risk flags. Every row records its source and fetch time.
+  Raw records are append-only, and clean views are built on top.
+- A unit is identified by building + floor label + flat. Floor labels are kept as text and
+  also mapped to a number, so skipped floors (4, 13, 14, 24) and ground/podium labels are
+  handled.
+- Saleable area is the standard. Gross-only rows are converted using the building's own
+  saleable-to-gross ratio where known, and otherwise flagged.
+- Deal dates use the agreement (instrument) date, with the registration date kept as well.
+- Excluded from analysis but kept in storage: deals under HK$500k, price per sq ft more than
+  5 median absolute deviations from the same building's yearly median, bulk or same-day
+  multi-unit deals, and non-market transfers.
+- Listings get one snapshot per day (HK time). A listing is treated as delisted after 3
+  missed days. A relisting at a new price becomes a new snapshot of the same listing.
+- Growth is shown in nominal HK$, with CPI-adjusted figures alongside.
+
+**Matching.**
+- Centadata's estate/building list is the master. Other sources are mapped to it by Chinese
+  name plus address, with fuzzy matching and a manual mapping CSV for leftovers.
+- Chinese name is the primary key text; English is optional.
+- Listings without a flat letter are matched to the building and a floor band (low, mid or
+  high), and their fair price is estimated for that band.
+- Cross-site duplicate listings are merged on building + floor band + saleable area (±2%).
+
+**Fair price (goal 1).**
+- Model: LightGBM (a tree model) on attributes + location + time, with SHAP (a method that
+  shows which inputs drove each estimate) to explain each value. A check against recent
+  deals in the same building runs alongside.
+- Uncertainty uses conformal intervals (a statistical way to put a range around each
+  estimate).
+- The asking-vs-deal gap is estimated per district from listings that disappear and match a
+  recorded deal on the same unit within 90 days. Until enough pairs exist, a default of 5%
+  is used and marked as an assumption.
+- Sort key: percentage discount to fair price. Confidence and flags are shown but don't
+  change the rank. Listings with few comparable deals are marked low-confidence, not hidden.
+
+**Growth study (goal 2).**
+- Uses repeat-sales pairs of the same unit, all pairs held 3 years or more. Annualised
+  growth is regressed on attributes, controlling for district, building age, start period
+  and starting price.
+- Drawdown: peak-to-trough of a monthly repeat-sales index per attribute group.
+- Out-of-sample checks:
+  - fit on pairs ending by 2018 and test on later pairs
+  - a by-district holdout
+  - an attribute counts only if its effect holds in both and is statistically significant.
+- Total return is net of round-trip costs and gross of holding costs, with no leverage.
+- Costs:
+  - buyer is an HK permanent resident, not a first-time buyer
+  - agent fee 1% on each side, legal fees 0.3%
+  - stamp duty follows the rules in force at each deal date (a dated table of schedules).
+
+**Operations.**
+- Listings refresh daily at 08:00 via Task Scheduler, with "run as soon as possible after a
+  missed start".
+- Transactions refresh weekly.
+- Failures go to a log file and a banner on the dashboard; no email.
+
+**Tooling.**
+- Python 3.12 conda env `hk-estate`, pytest, ruff.
+- Tests run offline against trimmed or synthetic fixture pages committed to the repo. Real
+  pages stay in the local cache.
+- Schema is documented in `docs/architecture.md`.
+- Notebooks are committed with outputs stripped (nbstripout).
+- No hooks for a future AI listing reader until one is approved.
+- Dashboard: ranked list with filters, a listing detail page (comparables, price history,
+  SHAP reasons), and a map in a later phase.
+
+## Answers to builder check (2026-10-16)
+- **Data folder stays in the repo (`data/`, git-ignored).** OneDrive isn't syncing on this
+  machine (user). The path is still a single config setting, so it can move if sync is
+  turned back on.
+- **Findings report and ranked deals are written to the data folder, never committed** (repo
+  is public).
+- **First territory-wide backfill of roughly 1–3 days of resumable run time is acceptable.**
+  The daily listing refresh fetches only new or changed listings.
+
+## Repository
+- **Public GitHub repo `hk-estate` on account `bpy13`** (2026-10-16). Because it is public:
+  scraped data, the database and raw-page cache are never committed (`data/` ignored), and no
+  credentials or personal data appear in code or docs.
+- **Phase 1 acceptance** (2026-10-16): complete transaction histories for the pilot estates
+  loaded and spot-checked against the website; RVD indices loaded; scraper can stop and rerun
+  without duplicating rows; schema documented; tests pass.
