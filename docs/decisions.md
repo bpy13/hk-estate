@@ -65,10 +65,11 @@ group in the growth study (developer incentives distort prices).
 
 **Source roles.**
 - Transactions: Centadata (master estate/building list). 28Hse transactions are used to
-  cross-check and fill gaps. History starts at whatever the free sources hold, aiming for 2000.
+  cross-check and fill gaps. *(Changed 2026-10-16 by the Phase 0 spike: 28Hse is the
+  transaction master; see "Phase 0 source spike" below.)* History starts at whatever the free sources hold, aiming for 2000.
   Coverage is reported per estate rather than assumed.
 - Listings: 28Hse, Centanet, Squarefoot, Spacious, house730 (Midland only if it stops
-  blocking).
+  blocking). *(Changed 2026-10-16: Squarefoot and house730 dropped as blocked.)*
 - First-hand sales: SRPE.
 - Indices: RVD monthly price and rent indices by class, popular developments, completions and
   stock.
@@ -168,6 +169,31 @@ group in the growth study (developer incentives distort prices).
   is public).
 - **First territory-wide backfill of roughly 1–3 days of resumable run time is acceptable.**
   The daily listing refresh fetches only new or changed listings.
+
+## Phase 0 source spike (2026-10-16)
+Details and measurements in `docs/sources.md`. Supersedes parts of "Source roles" above.
+- **Transaction master: 28Hse, not Centadata.** Centadata's allowed pages show only the latest
+  deal per flat; full flat histories and paged deal lists come from
+  `/centanetapi/api/`, which is disallowed, so we never use it. 28Hse gives every deal
+  per flat, but free data starts in **2018** (its estate deal lists reach back to March 2021;
+  2018–2021 needs per-flat pages).
+- **Centadata kept as the building master list** (estate → block → flat, completion date,
+  floors) and for the one latest deal per flat, which reaches back to 1995. Its pages are
+  served from `hk.centanet.com/findproperty/centadata-details/...`.
+- **Dropped, blocked:** Squarefoot (and its haunted-flat list), house730 and Midland all answer
+  HTTP 403 to our user agent, even for robots.txt. We do not try to get round it.
+- **Dropped, robots.txt:** CSDI's data API (`api.csdi.gov.hk` disallows everything). MTR
+  station locations come instead from MTR open data (station list) plus ALS geocoding of
+  station names. Distance is to the station, not the nearest exit. Building footprints and
+  3D view scoring are deferred.
+- **Kept:** Centanet listings (all live listings are in its sitemap), 28Hse listings and rents,
+  Spacious (secondary: no floor/flat), RVD, ALS, MTR open data.
+- **SRPE kept but deferred to Phase 3:** it is now a JavaScript app with a disclaimer and
+  session-token API and a 30 s crawl-delay. The way to drive it is decided at Phase 3.
+- **Pilot single-block building: 高雲臺 Goldwin Heights** (Mid-Levels West, 1994, 328 flats,
+  one tower; 281 flats with a recorded deal on Centadata).
+- **Fetcher:** robots.txt parsed with `protego` (wildcards), robots `Crawl-delay` honoured,
+  robots.txt answering 401/403/5xx means stay away.
 
 ## Repository
 - **Public GitHub repo `hk-estate` on account `bpy13`** (2026-10-16). Because it is public:

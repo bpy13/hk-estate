@@ -24,6 +24,7 @@ dependencies = [
     "pydeck>=0.9",
     "rapidfuzz>=3.9",
     "opencc-python-reimplemented>=0.1.7",
+    "xlrd>=2.0",  # RVD publishes legacy .xls files
 ]
 
 [project.optional-dependencies]

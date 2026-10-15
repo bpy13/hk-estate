@@ -80,7 +80,7 @@ Lint: `ruff check .`.
     ignores `*`/`$` wildcards, which Centanet, 28Hse and Spacious use), and a robots.txt
     `Crawl-delay` longer than 1 s is honoured per host (SRPE asks for 30 s). robots.txt
     answering 401/403/5xx means disallow-all; 404 means allow-all.
-- [ ] **Task 0.3: Source spike**
+- [x] **Task 0.3: Source spike**
   - Files: `scripts/spike/<source>.py` (throwaway probes), `docs/sources.md`.
   - Done when: `docs/sources.md` has a row per source with all the fields named in the P0
     acceptance criterion. Sources: Centadata, Centanet listings, 28Hse (transactions,
@@ -90,6 +90,30 @@ Lint: `ruff check .`.
     robots.txt forbids what we need, and record it in decisions.md. If Centadata is
     unusable, 28Hse becomes the transaction master; record that too. Pick the single-block
     pilot building (a 1990s single tower in Kowloon or Island with ≥100 deals).
+  - Result (see `docs/sources.md`, decisions.md "Phase 0 source spike"):
+    - Transaction master is **28Hse** (free data from 2018). Centadata only shows the latest
+      deal per flat (full history is behind the disallowed API) and becomes the building
+      master list + one older deal per flat.
+    - Dropped: Squarefoot (+ haunted list), house730, Midland (all 403); CSDI API (robots).
+      MTR distance uses station centres (MTR open data + ALS).
+    - SRPE is a JS app with a token API and 30 s crawl-delay: deferred to Task 3.4.
+    - Pilot single-block building: **高雲臺 Goldwin Heights** (1994, 328 flats).
+    - "History from 2000" is not reachable for free: open item for the user.
+
+### Plan changes from the Phase 0 spike
+- Task 1.2: RVD files are legacy `.xls` (read with `xlrd`, now a dependency).
+- Task 1.3: `<master>` = `hse28` (28Hse). Backfill uses the estate deal lists (to March 2021)
+  plus per-flat pages for 2018–2021. P1 "full transaction histories" means everything 28Hse
+  holds (2018 on) plus Centadata's latest deal per flat.
+- Task 1.5: spot-check against the 28Hse site.
+- Task 1.6: becomes the **Centadata cross-check** (latest deal per flat, block pages) instead
+  of a 28Hse cross-check; Centadata-only deals go to `txn_raw` with `source='centadata'`.
+- Task 2.1: kept listing sites are 28Hse, Centanet (enumerated from its listing sitemap) and
+  Spacious. Task 2.4: no Squarefoot haunted list.
+- Task 3.1: the master estate/building list comes from Centadata block pages (via the
+  Centanet estate sitemap).
+- Task 3.3: distance to the nearest MTR **station** (not exit) unless the user supplies the
+  CSDI exits file.
 
 ## Phase 1 – Data foundation (pilot)
 

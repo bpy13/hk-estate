@@ -24,6 +24,7 @@ dependencies:
       - pydeck==0.9.3
       - rapidfuzz==3.14.6
       - opencc-python-reimplemented==0.1.7
+      - xlrd==2.0.2
       - nbstripout==0.9.1
       - pytest==9.1.1
       - ruff==0.17.1
