@@ -76,6 +76,10 @@ Lint: `ruff check .`.
     - 403 or a CAPTCHA marker raises `SourceBlocked`
     - cache stored gzip under `DATA_DIR/cache/<host>/<date>/<sha1>.html.gz`
   - Notes: user agent `hk-estate-research/0.1 (personal, non-commercial)`.
+  - Added during the spike: robots.txt is parsed with `protego` (stdlib `urllib.robotparser`
+    ignores `*`/`$` wildcards, which Centanet, 28Hse and Spacious use), and a robots.txt
+    `Crawl-delay` longer than 1 s is honoured per host (SRPE asks for 30 s). robots.txt
+    answering 401/403/5xx means disallow-all; 404 means allow-all.
 - [ ] **Task 0.3: Source spike**
   - Files: `scripts/spike/<source>.py` (throwaway probes), `docs/sources.md`.
   - Done when: `docs/sources.md` has a row per source with all the fields named in the P0

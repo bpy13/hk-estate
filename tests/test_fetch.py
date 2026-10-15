@@ -27,14 +27,23 @@ class FakeClock:
         self.now += seconds
 
 
-def make_fetcher(tmp_path, handler, *, today=date(2026, 10, 16), jitter=0.0, clock=None):
+def make_fetcher(
+    tmp_path,
+    handler,
+    *,
+    today=date(2026, 10, 16),
+    jitter=0.0,
+    clock=None,
+    robots=ROBOTS,
+    robots_status=200,
+):
     """Fetcher with a mock transport; `handler(request)` answers everything but robots.txt."""
     requests = []
 
     def dispatch(request):
         requests.append(request)
         if request.url.path == "/robots.txt":
-            return httpx.Response(200, text=ROBOTS)
+            return httpx.Response(robots_status, text=robots)
         return handler(request)
 
     clock = clock or FakeClock()
@@ -69,6 +78,54 @@ def test_allowed_path_is_fetched_with_our_user_agent(tmp_path):
     assert fetcher.get("https://example.com/ok", "static") == "<html>ok</html>"
     assert all(r.headers["user-agent"] == USER_AGENT for r in requests)
     assert USER_AGENT == "hk-estate-research/0.1 (personal, non-commercial)"
+
+
+@pytest.mark.parametrize(
+    ("path", "allowed"),
+    [
+        ("/centanetapi/api/x", False),
+        ("/fooTest", False),  # Disallow: /*Test (wildcard)
+        ("/list?a=1&search_words_thing=x", False),  # Disallow: /*search_words_thing=
+        ("/for-rent/page/1", True),  # Allow: /for-rent/page/1$ (end anchor, longest match)
+        ("/for-rent/page/10", False),
+        ("/estate/123", True),
+    ],
+)
+def test_robots_wildcards_and_end_anchors_are_honoured(tmp_path, path, allowed):
+    robots = (
+        "User-agent: *\n"
+        "Disallow: /centanetapi/api/\n"
+        "Disallow: /*Test\n"
+        "Disallow: /*search_words_thing=\n"
+        "Allow: /for-rent/page/1$\n"
+        "Disallow: /for-rent/page/\n"
+    )
+    fetcher, _, _ = make_fetcher(tmp_path, ok, robots=robots)
+    assert fetcher.allowed("https://example.com" + path) is allowed
+
+
+def test_crawl_delay_longer_than_one_second_is_honoured(tmp_path):
+    clock = FakeClock()
+    times = []
+
+    def handler(request):
+        times.append(clock.now)
+        return ok(request)
+
+    robots = "User-agent: *\nDisallow:\nCrawl-delay: 30\n"
+    fetcher, _, _ = make_fetcher(tmp_path, handler, clock=clock, robots=robots)
+    fetcher.get("https://example.com/a", "static")
+    fetcher.get("https://example.com/b", "static")
+    assert times[1] - times[0] >= 30.0
+
+
+@pytest.mark.parametrize("status", [401, 403, 500, 503])
+def test_robots_txt_forbidden_or_server_error_means_disallow_all(tmp_path, status):
+    fetcher, requests, _ = make_fetcher(tmp_path, ok, robots="", robots_status=status)
+    with pytest.raises(RobotsDisallowed):
+        fetcher.get("https://example.com/anything", "static")
+    assert page_requests(requests) == []
+    assert fetcher.robots_status("https://example.com/") == status
 
 
 def test_missing_robots_txt_allows_everything(tmp_path):

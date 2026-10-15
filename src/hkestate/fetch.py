@@ -2,7 +2,8 @@
 
 Every page the project reads goes through `Fetcher.get`. It:
 - refuses any URL the site's robots.txt disallows for our user agent (`RobotsDisallowed`);
-- waits at least 1 s plus 0-0.5 s random jitter between requests to the same host;
+- waits at least 1 s (or the site's robots.txt Crawl-delay, if longer) plus 0-0.5 s random
+  jitter between requests to the same host;
 - returns a cached copy if one is younger than the page type's lifetime (no request made);
 - retries 429 and 5xx up to 3 times with exponential back-off (2 s, 4 s, 8 s);
 - raises `SourceBlocked` on 403 or a CAPTCHA/challenge page, and refuses that host for the
@@ -18,7 +19,6 @@ import hashlib
 import random
 import re
 import time
-import urllib.robotparser
 from collections.abc import Callable
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -26,6 +26,7 @@ from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 
 import httpx
+from protego import Protego
 
 from hkestate.config import USER_AGENT, get_data_dir
 
@@ -119,8 +120,10 @@ class Fetcher:
         self._today = today
         self._jitter = jitter or (lambda: random.uniform(0.0, MAX_JITTER_S))
         self._last_request: dict[str, float] = {}
-        self._robots: dict[str, urllib.robotparser.RobotFileParser] = {}
+        self._robots: dict[str, Protego] = {}
         self._robots_text: dict[str, str] = {}
+        self._robots_status: dict[str, int] = {}
+        self._min_interval: dict[str, float] = {}  # per host, raised by robots Crawl-delay
         self._blocked: set[str] = set()
         self.requests_made = 0
 
@@ -146,12 +149,17 @@ class Fetcher:
         return response.content
 
     def allowed(self, url: str) -> bool:
-        return self._robots_for(url).can_fetch(USER_AGENT, url)
+        return self._robots_for(url).can_fetch(url, USER_AGENT)
 
     def robots_txt(self, url: str) -> str:
         """The raw robots.txt text for the URL's host ('' if the site has none)."""
         self._robots_for(url)
         return self._robots_text[self._origin(url)]
+
+    def robots_status(self, url: str) -> int:
+        """HTTP status the host's robots.txt returned."""
+        self._robots_for(url)
+        return self._robots_status[self._origin(url)]
 
     def close(self) -> None:
         self._client.close()
@@ -169,25 +177,36 @@ class Fetcher:
         parts = urlsplit(url)
         return f"{parts.scheme}://{parts.netloc}"
 
-    def _robots_for(self, url: str) -> urllib.robotparser.RobotFileParser:
+    def _robots_for(self, url: str) -> Protego:
+        """Parsed robots.txt for the URL's host, fetched once per run.
+
+        Uses protego, which understands `*` and `$` wildcards and longest-match precedence
+        (Python's urllib.robotparser silently ignores wildcards). A missing robots.txt
+        (404/410) allows everything. We are stricter than RFC 9309 on 401/403 (it would
+        allow): a site that refuses us its robots.txt gets nothing fetched. A server error
+        means disallow-all, as the RFC says.
+        """
         origin = self._origin(url)
         if origin not in self._robots:
-            parser = urllib.robotparser.RobotFileParser()
             host = urlsplit(url).hostname or ""
             self._wait_for_host(host)
             response = self._client.get(origin + "/robots.txt")
             self.requests_made += 1
+            status = response.status_code
             text = ""
-            if response.status_code in (401, 403):
-                # Convention (RFC 9309): an access-restricted robots.txt means disallow all.
-                parser.disallow_all = True
-            elif response.status_code >= 400:
-                parser.allow_all = True
+            if status in (401, 403) or status >= 500:
+                parser = Protego.parse("User-agent: *\nDisallow: /\n")
+            elif status >= 400:
+                parser = Protego.parse("")
             else:
                 text = _decode(response.content)
-                parser.parse(text.splitlines())
+                parser = Protego.parse(text)
+            delay = parser.crawl_delay(USER_AGENT)
+            if delay and delay > MIN_INTERVAL_S:
+                self._min_interval[host] = float(delay)
             self._robots[origin] = parser
             self._robots_text[origin] = text
+            self._robots_status[origin] = status
         return self._robots[origin]
 
     # ---- requests -----------------------------------------------------------------------
@@ -195,7 +214,8 @@ class Fetcher:
     def _wait_for_host(self, host: str) -> None:
         last = self._last_request.get(host)
         if last is not None:
-            wait = last + MIN_INTERVAL_S + self._jitter() - self._clock()
+            interval = self._min_interval.get(host, MIN_INTERVAL_S)
+            wait = last + interval + self._jitter() - self._clock()
             if wait > 0:
                 self._sleep(wait)
         self._last_request[host] = self._clock()

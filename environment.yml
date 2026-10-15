@@ -9,6 +9,7 @@ dependencies:
   - pip
   - pip:
       - httpx==0.28.1
+      - protego==0.7.0
       - selectolax==1.0.0
       - beautifulsoup4==4.15.0
       - playwright==1.64.0
