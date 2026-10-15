@@ -330,6 +330,17 @@ def in_window(d: CdDeal) -> bool:
     return bool(days) and max(days) >= WINDOW_START
 
 
+def _split_flat(flat: str, bids: list[str], buildings) -> tuple[str, list[str]]:
+    """Centadata labels flats on multi-building pages with the street number ('1號A').
+    Returns the plain flat letter and the building(s) it can be in."""
+    m = re.fullmatch(r"(\d+)號(.+)", flat)
+    if not m or len(bids) == 1:
+        return flat, bids
+    num = m.group(1)
+    hits = [b for b in bids if re.search(rf"(?<!\d){num}號$", buildings[b][1])]
+    return m.group(2), (hits or bids)
+
+
 def crosscheck_block(con, blk: BlockPage, buildings: dict[str, tuple[str, str]], url: str):
     """Match one Centadata block's deals to 28Hse deals; store Centadata-only deals."""
     from hkestate import db
@@ -346,12 +357,12 @@ def crosscheck_block(con, blk: BlockPage, buildings: dict[str, tuple[str, str]],
         return res
     marks = ",".join("?" for _ in bids)
     by_unit: dict[tuple, list] = {}
-    for fl, flat, sid, day, price in con.execute(
-        "SELECT floor_label, flat, source_id, deal_date, price_hkd "
+    for b, fl, flat, sid, day, price in con.execute(
+        "SELECT building_id, floor_label, flat, source_id, deal_date, price_hkd "
         f"FROM txn_latest WHERE source = 'hse28' AND building_id IN ({marks})",
         bids,
     ).fetchall():
-        by_unit.setdefault((fl, flat), []).append((sid, day, price))
+        by_unit.setdefault((b, fl, flat), []).append((sid, day, price))
     # which building holds a given floor + flat, when the block spans several
     unit_home: dict[tuple, set] = {}
     for b, fl, flat in con.execute(
@@ -362,7 +373,8 @@ def crosscheck_block(con, blk: BlockPage, buildings: dict[str, tuple[str, str]],
     now = datetime.now()
     for d in blk.deals:
         fl = parse_floor(d.floor_text).label
-        m = match_deal(d, by_unit.get((fl, d.flat), []))
+        flat, targets = _split_flat(d.flat, bids, buildings)
+        m = match_deal(d, [x for b in targets for x in by_unit.get((b, fl, flat), [])])
         if in_window(d):
             res.in_window += 1
             if m:
@@ -372,10 +384,10 @@ def crosscheck_block(con, blk: BlockPage, buildings: dict[str, tuple[str, str]],
                 res.unmatched_in_window.append((fl, d.flat, d.instrument_date, d.price_hkd))
         if m:
             continue
-        if len(bids) == 1:
-            bid = bids[0]
+        if len(targets) == 1:
+            bid = targets[0]
         else:
-            homes = unit_home.get((fl, d.flat), set())
+            homes = unit_home.get((fl, flat), set()) & set(targets)
             if len(homes) != 1:
                 res.unplaced += 1  # can't tell which building: not stored
                 continue
@@ -392,7 +404,7 @@ def crosscheck_block(con, blk: BlockPage, buildings: dict[str, tuple[str, str]],
                 "phase_name": blk.phase,
                 "building_name": blk.block,
                 "floor_label": fl,
-                "flat": d.flat,
+                "flat": flat,
                 "deal_date": d.instrument_date or d.registration_date,
                 "instrument_date": d.instrument_date,
                 "registration_date": d.registration_date,

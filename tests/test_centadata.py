@@ -192,3 +192,27 @@ def test_crosscheck_block_spanning_several_buildings(tmp_path):
         assert con.execute(
             "SELECT building_id FROM txn_raw WHERE source = 'centadata'"
         ).fetchall() == [("b3",)]
+
+
+def test_flat_label_carrying_the_street_number_picks_the_building(tmp_path):
+    # Centadata's Mei Foo flats read "1號A": building 百老匯街1號, flat A.
+    path = tmp_path / "t.duckdb"
+    buildings = {f"b{n}": ("第一期", f"百老匯街{n}號") for n in (1, 2, 3, 11)}
+    with db.session(path) as con:
+        db.init_db(con)
+        db.insert_txn_raw(
+            con,
+            [{"source": "hse28", "source_id": "u1:2019-06-10",
+              "fetched_at": datetime(2026, 10, 16), "building_id": "b2", "floor_label": "30",
+              "flat": "B", "deal_date": date(2019, 6, 10), "deal_type": "registry",
+              "price_hkd": 5_380_000}],
+        )
+        blk = cd.parse_block_page(page())
+        blk.block = "百老匯街1-3號"
+        blk.deals[0].flat = "2號B"
+        blk.deals[1].flat = "1號C"
+        res = cd.crosscheck_block(con, blk, buildings, "https://x")
+        assert (res.in_window, res.matched, res.added, res.unplaced) == (1, 1, 1, 0)
+        assert con.execute(
+            "SELECT building_id, flat FROM txn_raw WHERE source = 'centadata'"
+        ).fetchall() == [("b1", "C")]
