@@ -16,10 +16,12 @@ Read these before substantial changes:
 - `README.md` – user-facing setup and commands
 
 ## Environment
-- Install: <to be set in phase 1 (conda env, python-env skill)>
-- Run: <tbd>
-- Tests: <tbd>
-- Lint: <tbd>
+- Install: `conda env create -f environment.yml`, then
+  `conda run -n hk-estate python -m pip install -e ".[dev]"` (conda env `hk-estate`, Python 3.12)
+- Run: <tbd, CLI arrives in Phase 1>
+- Tests: `conda run -n hk-estate python -m pytest -q`
+- Lint: `conda run -n hk-estate ruff check .`
+- Data folder: `data/` (git-ignored), override with env var `HKESTATE_DATA_DIR`.
 
 ## Project rules
 - Scrape politely: obey robots.txt, at least 1 request/second per site, identify a cache so

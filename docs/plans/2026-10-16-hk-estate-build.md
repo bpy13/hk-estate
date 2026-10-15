@@ -55,7 +55,7 @@ Lint: `ruff check .`.
 
 ## Phase 0 – Setup and source spike
 
-- [ ] **Task 0.1: Environment and skeleton**
+- [x] **Task 0.1: Environment and skeleton**
   - Files: `environment.yml`, `pyproject.toml` (package `hkestate` in `src/hkestate/`, ruff +
     pytest config), `src/hkestate/config.py` (`DATA_DIR`, default `<repo>/data`, overridable
     by env var `HKESTATE_DATA_DIR`), `tests/test_config.py`, `README.md`, CLAUDE.md
