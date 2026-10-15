@@ -65,7 +65,7 @@ Lint: `ruff check .`.
     playwright (installed, used only if needed), duckdb, pandas, pyarrow, lightgbm, shap,
     statsmodels, scikit-learn, streamlit, pydeck, rapidfuzz, opencc (TC/SC normalisation),
     nbstripout, pytest, ruff.
-- [ ] **Task 0.2: Polite fetcher**
+- [x] **Task 0.2: Polite fetcher**
   - Files: `src/hkestate/fetch.py`, `tests/test_fetch.py`.
   - Done when: tests (written first, using a mock transport) show these behaviours, and pass:
     - robots.txt disallow is refused
