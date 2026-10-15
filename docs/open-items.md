@@ -39,4 +39,16 @@ here; a limit or trap we live with goes in `known-issues.md`. Each item in one p
   robots.txt on 5xx or network errors in Phase 1. *(Done in Phase 1: 2 retries with 2 s / 4 s
   back-off; 401/403/404 are not retried.)*
 
+- **Deals that include a parking space (連車位).** 28Hse marks some deals as including a car
+  space; their price per sq ft is inflated. They are stored (flag in `raw_json`) but not yet
+  excluded or adjusted. Proposal: exclude them from fair-price comparables and repeat-sales
+  pairs in Phase 4/5.
+- **First-hand (developer) sales are not flagged yet.** 28Hse's deal lists don't label them,
+  and LOHAS Park's newer phases are full of them. Until SRPE (Task 3.4) supplies the list,
+  proposed rule: a flat's first recorded deal within 24 months of the building's first deal
+  is treated as first-hand. Needed before Phase 4.
+- **Agreement dates for 28Hse deals.** 28Hse shows registration dates; the agreement date is
+  2–6 weeks earlier and known only where Centadata has the deal. Fine for yearly figures;
+  decide in Phase 4 whether to shift 28Hse dates by the typical gap.
+
 ## Later
