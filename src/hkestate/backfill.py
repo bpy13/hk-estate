@@ -87,7 +87,13 @@ def match_building(location: str, buildings: dict[str, tuple[str, str]]) -> str 
     tokens = {t for t in re.split(r"[\s()（）]+", norm_name(location)) if t}
     hits = [b for b, (_, block) in buildings.items() if norm_name(block) in tokens]
     if len(hits) > 1:
-        hits = [b for b in hits if norm_name(buildings[b][0]) in tokens]
+        # the phase text may be several words (e.g. estate + phase); any word can decide
+        hits = [
+            b
+            for b in hits
+            if norm_name(buildings[b][0]) in tokens
+            or any(w in tokens for w in norm_name(buildings[b][0]).split())
+        ]
     return hits[0] if len(hits) == 1 else None
 
 

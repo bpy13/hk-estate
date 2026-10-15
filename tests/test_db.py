@@ -283,5 +283,16 @@ def _setup_building_extra(con, building_id, ratio):
     )
 
 
+def test_hse28_registry_dates_are_registration_dates(con):
+    # The Centadata cross-check showed 28Hse dates Land Registry deals by registration date.
+    _setup_building(con)
+    _txn(con, "r", 8_000_000, date(2024, 1, 5), unit="A", deal_type="registry")
+    _txn(con, "m", 8_000_000, date(2024, 3, 5), unit="B", deal_type="market")
+    rows = dict(
+        con.execute("SELECT source_id, registration_date FROM txn_all").fetchall()
+    )
+    assert rows == {"r": date(2024, 1, 5), "m": None}
+
+
 def test_unit_id_is_building_floor_flat():
     assert db.unit_id("b1", "10", "A") == "b1|10|A"

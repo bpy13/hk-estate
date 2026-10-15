@@ -168,4 +168,7 @@ def test_market_deal_building_matched_by_block_name():
     assert backfill.match_building("星輝台 海星閣 (48座)", buildings) == "h28-1-s3-b48"
     assert backfill.match_building("2期 1座", buildings) == "h28-2-s2-b9"
     assert backfill.match_building("1座", buildings) is None  # ambiguous
+    # phase text may hold several words (estate + phase); any of them can disambiguate
+    multi = {"x1": ("首都 第1座", "1座"), "x2": ("領都 第1座", "1座")}
+    assert backfill.match_building("領都 1座", multi) == "x2"
     assert backfill.match_building("不知名閣", buildings) is None

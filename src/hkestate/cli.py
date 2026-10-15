@@ -78,6 +78,34 @@ def cmd_rvd(args) -> int:
     return 0
 
 
+def cmd_crosscheck(args) -> int:
+    from hkestate.fetch import Fetcher
+    from hkestate.sources import centadata
+
+    groups = list(centadata.PILOT_ENTRIES) if args.estates == "pilot" else args.estates.split(",")
+    log = _logger("crosscheck")
+    with db.session(args.db) as con:
+        db.init_db(con)
+        run_id = db.start_run(con, "crosscheck", ",".join(groups))
+    status, message, added = "failed", "", 0
+    try:
+        with Fetcher() as f:
+            summaries = centadata.run_crosscheck(groups, f, db_path=args.db, log=log)
+        added = sum(s["added"] for s in summaries)
+        path = get_data_dir() / "reports" / f"crosscheck_{datetime.now():%Y%m%d}.md"
+        centadata.write_report(summaries, path)
+        log(f"report: {path}")
+        status = "ok"
+    except Exception as e:
+        message = f"{type(e).__name__}: {e}"
+        log(message)
+        raise
+    finally:
+        with db.session(args.db) as con:
+            db.finish_run(con, run_id, status, added, message)
+    return 0
+
+
 def cmd_status(args) -> int:
     with db.session(args.db) as con:
         db.init_db(con)
@@ -115,6 +143,10 @@ def main(argv: list[str] | None = None) -> int:
 
     r = sub.add_parser("rvd", help="load RVD indices, average prices/rents and stock")
     r.set_defaults(func=cmd_rvd)
+
+    c = sub.add_parser("crosscheck", help="compare 28Hse deals with Centadata block pages")
+    c.add_argument("--estates", required=True, help="comma-separated names, or 'pilot'")
+    c.set_defaults(func=cmd_crosscheck)
 
     s = sub.add_parser("status", help="recent runs and row counts")
     s.set_defaults(func=cmd_status)

@@ -264,7 +264,11 @@ VIEWS_DDL = [
     f"""
     CREATE OR REPLACE VIEW txn_all AS
     WITH base AS (
-        SELECT t.*,
+        -- 28Hse dates Land Registry deals by registration date (Centadata cross-check)
+        SELECT t.* REPLACE (
+                coalesce(t.registration_date,
+                         CASE WHEN t.source = 'hse28' AND t.deal_type = 'registry'
+                              THEN t.deal_date END) AS registration_date),
             t.building_id || '|' || t.floor_label || '|' || t.flat AS unit_id,
             {SOURCE_RANK_SQL} AS source_rank,
             CASE
