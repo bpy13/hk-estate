@@ -54,6 +54,30 @@ def cmd_backfill(args) -> int:
     return 0
 
 
+def cmd_rvd(args) -> int:
+    from hkestate.fetch import Fetcher
+    from hkestate.sources import rvd
+
+    log = _logger("rvd")
+    with db.session(args.db) as con:
+        db.init_db(con)
+        run_id = db.start_run(con, "rvd")
+    status, message, total = "failed", "", 0
+    try:
+        with Fetcher() as f:
+            loaded = rvd.load_all(f, db_path=args.db, log=log)
+        total = sum(loaded.values())
+        status = "ok"
+    except Exception as e:
+        message = f"{type(e).__name__}: {e}"
+        log(message)
+        raise
+    finally:
+        with db.session(args.db) as con:
+            db.finish_run(con, run_id, status, total, message)
+    return 0
+
+
 def cmd_status(args) -> int:
     with db.session(args.db) as con:
         db.init_db(con)
@@ -88,6 +112,9 @@ def main(argv: list[str] | None = None) -> int:
     b.add_argument("--refresh", action="store_true", help="redo finished steps")
     b.add_argument("--skip-flats", action="store_true", help="skip the per-flat pages")
     b.set_defaults(func=cmd_backfill)
+
+    r = sub.add_parser("rvd", help="load RVD indices, average prices/rents and stock")
+    r.set_defaults(func=cmd_rvd)
 
     s = sub.add_parser("status", help="recent runs and row counts")
     s.set_defaults(func=cmd_status)

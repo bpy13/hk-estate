@@ -136,7 +136,13 @@ Lint: `ruff check .`.
       `run_progress` (finished steps, for resuming), views `txn_latest` → `txn_all` (flags)
       → `txn` (clean), and an `excl_duplicate` flag (the same sale from an agency report or
       a second source). Rules in `docs/architecture.md`.
-- [ ] **Task 1.2: RVD loader**
+- [x] **Task 1.2: RVD loader**
+  - Result (2026-10-16): `hkestate rvd` loads 8 series. Monthly: price index 3,232, rent
+    index 3,232, popular developments 3,744, average prices 4,950, average rents 4,973
+    values, all to Aug 2026. Annual (RVD publishes these yearly, so the 3-month test
+    doesn't apply): completions 252 (2026 provisional to date), stock 246 and vacancy 246
+    (to year-end 2025). Take-up is not loaded (different layout, not needed yet). Fixture
+    CSVs are trimmed rows of the real sheets; a moved header column stops the load.
   - Files: `src/hkestate/sources/rvd.py`, `tests/test_rvd.py` (fixture CSV).
   - Done when:
     - parser test passes
