@@ -228,3 +228,22 @@ def test_flats_marked_with_a_rate_limit_error_by_older_runs_are_retried(dbpath):
         assert con.execute(
             "SELECT count(*) FROM txn_raw WHERE source_id LIKE 'u172141:%'"
         ).fetchone()[0] == 2
+
+
+def test_block_name_variants_fold_together():
+    buildings = {"a": ("高山台", "盧山閣"), "b": ("高山台", "龍山閣")}
+    assert backfill.match_building("高山臺 廬山閣 (9座)", buildings) == "a"
+
+
+def test_address_range_block_maps_to_each_numbered_building():
+    buildings = {
+        "s1-b1": ("第一期", "百老匯街1號"),
+        "s1-b2": ("第一期", "百老匯街2號"),
+        "s1-b3": ("第一期", "百老匯街3號"),
+        "s1-b4": ("第一期", "百老匯街4號"),
+    }
+    assert sorted(backfill.match_buildings("1期 百老匯街1-3號", buildings)) == [
+        "s1-b1", "s1-b2", "s1-b3"
+    ]
+    assert backfill.match_buildings("1期 百老匯街4號", buildings) == ["s1-b4"]
+    assert backfill.match_building("1期 百老匯街1-3號", buildings) is None  # several

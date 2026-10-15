@@ -321,6 +321,7 @@ class BlockResult:
     matched: int = 0
     date_kinds: dict = field(default_factory=dict)
     added: int = 0
+    unplaced: int = 0  # Centadata-only deals whose building couldn't be told apart
     unmatched_in_window: list = field(default_factory=list)
 
 
@@ -332,21 +333,31 @@ def in_window(d: CdDeal) -> bool:
 def crosscheck_block(con, blk: BlockPage, buildings: dict[str, tuple[str, str]], url: str):
     """Match one Centadata block's deals to 28Hse deals; store Centadata-only deals."""
     from hkestate import db
-    from hkestate.backfill import match_building
+    from hkestate.backfill import match_buildings
 
-    bid = match_building(f"{blk.phase} {blk.block}", buildings)
-    res = BlockResult(block=f"{blk.estate} {blk.phase} {blk.block}", building_id=bid)
+    # One Centadata block is usually one 28Hse building, but may span several (Mei Foo's
+    # "百老匯街1-3號" covers 28Hse's 1號, 2號 and 3號).
+    bids = match_buildings(f"{blk.phase} {blk.block}", buildings)
+    res = BlockResult(
+        block=f"{blk.estate} {blk.phase} {blk.block}", building_id=",".join(bids) or None
+    )
     res.deals = len(blk.deals)
-    if bid is None:
+    if not bids:
         return res
-    hse_rows = con.execute(
-        "SELECT floor_label, flat, source_id, deal_date, price_hkd FROM txn_latest "
-        "WHERE source = 'hse28' AND building_id = ?",
-        [bid],
-    ).fetchall()
+    marks = ",".join("?" for _ in bids)
     by_unit: dict[tuple, list] = {}
-    for fl, flat, sid, day, price in hse_rows:
+    for fl, flat, sid, day, price in con.execute(
+        "SELECT floor_label, flat, source_id, deal_date, price_hkd "
+        f"FROM txn_latest WHERE source = 'hse28' AND building_id IN ({marks})",
+        bids,
+    ).fetchall():
         by_unit.setdefault((fl, flat), []).append((sid, day, price))
+    # which building holds a given floor + flat, when the block spans several
+    unit_home: dict[tuple, set] = {}
+    for b, fl, flat in con.execute(
+        f"SELECT building_id, floor_label, flat FROM unit WHERE building_id IN ({marks})", bids
+    ).fetchall():
+        unit_home.setdefault((fl, flat), set()).add(b)
     new_rows = []
     now = datetime.now()
     for d in blk.deals:
@@ -361,6 +372,14 @@ def crosscheck_block(con, blk: BlockPage, buildings: dict[str, tuple[str, str]],
                 res.unmatched_in_window.append((fl, d.flat, d.instrument_date, d.price_hkd))
         if m:
             continue
+        if len(bids) == 1:
+            bid = bids[0]
+        else:
+            homes = unit_home.get((fl, d.flat), set())
+            if len(homes) != 1:
+                res.unplaced += 1  # can't tell which building: not stored
+                continue
+            bid = next(iter(homes))
         new_rows.append(
             {
                 "source": SOURCE,
@@ -467,6 +486,7 @@ def run_crosscheck(groups: list[str], fetcher, db_path=None, log=print) -> list[
             s["in_window"] += res.in_window
             s["matched"] += res.matched
             s["added"] += res.added
+            s["unplaced"] = s.get("unplaced", 0) + res.unplaced
             for k, v in res.date_kinds.items():
                 s["date_kinds"][k] = s["date_kinds"].get(k, 0) + v
             s["unmatched_deals"] += [(res.block, *u) for u in res.unmatched_in_window]

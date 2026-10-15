@@ -161,3 +161,34 @@ def test_crawl_visits_each_block_once():
     assert len(pages) == 2
     assert len(f.urls) == 4
     assert f.urls[-1].endswith("_1-GYPBGPYXES")
+
+
+def test_crosscheck_block_spanning_several_buildings(tmp_path):
+    # Centadata's "百老匯街1-3號" covers 28Hse's buildings 1號, 2號 and 3號.
+    path = tmp_path / "t.duckdb"
+    buildings = {f"b{n}": ("第一期", f"百老匯街{n}號") for n in (1, 2, 3, 4)}
+    with db.session(path) as con:
+        db.init_db(con)
+        for bid in buildings:
+            con.execute(
+                "INSERT INTO building (building_id, estate_id, name_zh) VALUES (?, 'e', 'x')",
+                [bid],
+            )
+        con.execute(
+            "INSERT INTO unit (unit_id, building_id, floor_label, flat) "
+            "VALUES ('b3|G|C', 'b3', 'G', 'C')"
+        )
+        db.insert_txn_raw(
+            con,
+            [{"source": "hse28", "source_id": "u1:2019-06-10",
+              "fetched_at": datetime(2026, 10, 16), "building_id": "b2", "floor_label": "30",
+              "flat": "B", "deal_date": date(2019, 6, 10), "deal_type": "registry",
+              "price_hkd": 5_380_000}],
+        )
+        blk = cd.parse_block_page(page())
+        blk.block = "百老匯街1-3號"
+        res = cd.crosscheck_block(con, blk, buildings, "https://x")
+        assert (res.in_window, res.matched, res.added) == (1, 1, 1)
+        assert con.execute(
+            "SELECT building_id FROM txn_raw WHERE source = 'centadata'"
+        ).fetchall() == [("b3",)]

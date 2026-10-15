@@ -88,22 +88,48 @@ def building_id(ref: EstateRef, stateno: int | None, blockno: int | None) -> str
     return f"h28-{ref.id}{state}-b{blockno if blockno is not None else 0}"
 
 
-def match_building(location: str, buildings: dict[str, tuple[str, str]]) -> str | None:
-    """Building for a deal that names its block only in text (agency-reported deals).
-    `buildings` maps building_id -> (phase name, block name). Returns None unless exactly
-    one building fits."""
+# Character variants the sources use for the same name (臺/台 in estate names, 廬/盧 ...).
+_VARIANTS = str.maketrans({"臺": "台", "廬": "盧", "峯": "峰"})
+_RANGE = re.compile(r"^(.*?)(\d+)-(\d+)(號)$")
+
+
+def _key(text: str) -> str:
+    return norm_name(text).translate(_VARIANTS)
+
+
+def match_buildings(location: str, buildings: dict[str, tuple[str, str]]) -> list[str]:
+    """Buildings named in `location` text. `buildings` maps building_id -> (phase text,
+    block name). An address range such as '百老匯街1-3號' (Centadata groups Mei Foo's blocks
+    this way) returns every numbered building in it; otherwise at most one building."""
     if len(buildings) == 1:
-        return next(iter(buildings))
-    tokens = {t for t in re.split(r"[\s()（）]+", norm_name(location)) if t}
-    hits = [b for b, (_, block) in buildings.items() if norm_name(block) in tokens]
+        return [next(iter(buildings))]
+    tokens = {t for t in re.split(r"[\s()（）]+", _key(location)) if t}
+    is_range = False
+    for t in list(tokens):
+        m = _RANGE.match(t)
+        if m and int(m.group(3)) - int(m.group(2)) < 20:
+            is_range = True
+            tokens |= {f"{m.group(1)}{n}{m.group(4)}"
+                       for n in range(int(m.group(2)), int(m.group(3)) + 1)}
+    hits = [b for b, (_, block) in buildings.items() if _key(block) in tokens]
     if len(hits) > 1:
         # the phase text may be several words (e.g. estate + phase); any word can decide
-        hits = [
+        narrowed = [
             b
             for b in hits
-            if norm_name(buildings[b][0]) in tokens
-            or any(w in tokens for w in norm_name(buildings[b][0]).split())
+            if _key(buildings[b][0]) in tokens
+            or any(w in tokens for w in _key(buildings[b][0]).split())
         ]
+        if narrowed:
+            hits = narrowed
+    if is_range or len(hits) == 1:
+        return hits
+    return []
+
+
+def match_building(location: str, buildings: dict[str, tuple[str, str]]) -> str | None:
+    """The one building named in `location` (e.g. an agency-reported deal), else None."""
+    hits = match_buildings(location, buildings)
     return hits[0] if len(hits) == 1 else None
 
 
