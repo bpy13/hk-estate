@@ -128,6 +128,64 @@ def test_robots_txt_forbidden_or_server_error_means_disallow_all(tmp_path, statu
     assert fetcher.robots_status("https://example.com/") == status
 
 
+def _robots_flaky_fetcher(tmp_path, robots_answers):
+    """Fetcher whose robots.txt answers come from `robots_answers` in order (a status or an
+    exception instance); every later robots.txt request gets the last answer."""
+    calls = []
+
+    def dispatch(request):
+        if request.url.path == "/robots.txt":
+            answer = robots_answers[min(len(calls), len(robots_answers) - 1)]
+            calls.append(answer)
+            if isinstance(answer, Exception):
+                raise answer
+            return httpx.Response(answer, text=ROBOTS if answer == 200 else "")
+        return ok(request)
+
+    clock = FakeClock()
+    fetcher = Fetcher(
+        cache_dir=tmp_path,
+        transport=httpx.MockTransport(dispatch),
+        sleep=clock.sleep,
+        clock=clock.time,
+        today=lambda: date(2026, 10, 16),
+        jitter=lambda: 0.0,
+    )
+    return fetcher, calls, clock
+
+
+@pytest.mark.parametrize(
+    "first_failure", [503, 500, httpx.ConnectError("boom"), httpx.ReadTimeout("slow")]
+)
+def test_robots_txt_is_retried_after_server_or_network_error(tmp_path, first_failure):
+    fetcher, calls, _ = _robots_flaky_fetcher(tmp_path, [first_failure, 200])
+    assert fetcher.get("https://example.com/ok", "static") == "<html>ok</html>"
+    assert len(calls) == 2
+    assert fetcher.robots_status("https://example.com/") == 200
+
+
+def test_robots_txt_gives_up_after_two_retries_and_disallows(tmp_path):
+    fetcher, calls, clock = _robots_flaky_fetcher(tmp_path, [503, 503, 503, 200])
+    with pytest.raises(RobotsDisallowed):
+        fetcher.get("https://example.com/ok", "static")
+    assert len(calls) == 3  # first try + 2 retries
+    assert any(s >= 2.0 for s in clock.sleeps)  # backed off between tries
+
+
+def test_robots_txt_network_error_after_retries_disallows(tmp_path):
+    fetcher, calls, _ = _robots_flaky_fetcher(tmp_path, [httpx.ConnectError("down")])
+    with pytest.raises(RobotsDisallowed):
+        fetcher.get("https://example.com/ok", "static")
+    assert len(calls) == 3
+
+
+def test_robots_txt_403_is_not_retried(tmp_path):
+    fetcher, calls, _ = _robots_flaky_fetcher(tmp_path, [403, 200])
+    with pytest.raises(RobotsDisallowed):
+        fetcher.get("https://example.com/ok", "static")
+    assert len(calls) == 1
+
+
 def test_missing_robots_txt_allows_everything(tmp_path):
     def dispatch(request):
         if request.url.path == "/robots.txt":

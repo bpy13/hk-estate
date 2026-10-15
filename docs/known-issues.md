@@ -19,5 +19,6 @@ Bugs that will be fixed go in `open-items.md` instead.
 
 - **robots.txt wildcards.** Python's built-in `urllib.robotparser` ignores `*` patterns, which
   Centanet, 28Hse and Spacious use, so the fetcher uses `protego` instead. Don't swap it back.
-- **A failed robots.txt fetch blocks that host for the run.** This is deliberate (strict), but
-  a single network error can stop a source until retries are added (see open-items).
+- **A failed robots.txt fetch blocks that host for the run.** This is deliberate (strict).
+  The fetcher retries robots.txt twice on a server or network error first, so only a
+  lasting failure stops a source.

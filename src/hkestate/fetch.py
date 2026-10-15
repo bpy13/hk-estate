@@ -45,6 +45,7 @@ PAGE_LIFETIME_DAYS = {"listing": 1, "transaction": 7, "static": 30}
 MIN_INTERVAL_S = 1.0
 MAX_JITTER_S = 0.5
 MAX_RETRIES = 3
+ROBOTS_RETRIES = 2  # robots.txt: retries on 5xx or a network error before staying away
 BACKOFF_BASE_S = 2.0
 MAX_RETRY_AFTER_S = 120.0
 RETRYABLE = {429, 500, 502, 503, 504}
@@ -184,22 +185,20 @@ class Fetcher:
         (Python's urllib.robotparser silently ignores wildcards). A missing robots.txt
         (404/410) allows everything. We are stricter than RFC 9309 on 401/403 (it would
         allow): a site that refuses us its robots.txt gets nothing fetched. A server error
-        means disallow-all, as the RFC says.
+        or network failure that persists after ROBOTS_RETRIES retries means disallow-all, as
+        the RFC says.
         """
         origin = self._origin(url)
         if origin not in self._robots:
             host = urlsplit(url).hostname or ""
-            self._wait_for_host(host)
-            response = self._client.get(origin + "/robots.txt")
-            self.requests_made += 1
-            status = response.status_code
+            status, content = self._fetch_robots(origin, host)
             text = ""
-            if status in (401, 403) or status >= 500:
+            if status in (401, 403) or status >= 500 or status == 0:
                 parser = Protego.parse("User-agent: *\nDisallow: /\n")
             elif status >= 400:
                 parser = Protego.parse("")
             else:
-                text = _decode(response.content)
+                text = _decode(content)
                 parser = Protego.parse(text)
             delay = parser.crawl_delay(USER_AGENT)
             if delay and delay > MIN_INTERVAL_S:
@@ -208,6 +207,29 @@ class Fetcher:
             self._robots_text[origin] = text
             self._robots_status[origin] = status
         return self._robots[origin]
+
+    def _fetch_robots(self, origin: str, host: str) -> tuple[int, bytes]:
+        """GET robots.txt, retrying a server error or network error up to ROBOTS_RETRIES times.
+
+        One transient failure would otherwise shut the host out for the whole run. Returns
+        (status, body); status 0 means the network failed on every try. 401/403/404 are final
+        answers and are not retried.
+        """
+        status, content = 0, b""
+        for attempt in range(ROBOTS_RETRIES + 1):
+            if attempt:
+                self._sleep(BACKOFF_BASE_S * (2 ** (attempt - 1)))
+            self._wait_for_host(host)
+            self.requests_made += 1
+            try:
+                response = self._client.get(origin + "/robots.txt")
+            except httpx.TransportError:
+                status, content = 0, b""
+                continue
+            status, content = response.status_code, response.content
+            if status < 500:
+                break
+        return status, content
 
     # ---- requests -----------------------------------------------------------------------
 

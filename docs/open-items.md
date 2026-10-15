@@ -34,8 +34,9 @@ here; a limit or trap we live with goes in `known-issues.md`. Each item in one p
 - Centanet listings: the sitemap's `lastmod` is always today, so price changes on existing
   listings need a rotating re-read of detail pages (e.g. 1/7 of live listings a day). Design in
   Task 2.1/2.3.
-- Fetcher: a robots.txt fetch has no retry. One run saw Centanet's robots.txt fail once,
+- [x] Fetcher: a robots.txt fetch has no retry. One run saw Centanet's robots.txt fail once,
   which (correctly, but needlessly) blocked the host for that run. Add 1–2 retries for
-  robots.txt on 5xx or network errors in Phase 1.
+  robots.txt on 5xx or network errors in Phase 1. *(Done in Phase 1: 2 retries with 2 s / 4 s
+  back-off; 401/403/404 are not retried.)*
 
 ## Later
