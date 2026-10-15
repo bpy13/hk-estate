@@ -33,4 +33,5 @@ never committed. To keep it elsewhere, set `HKESTATE_DATA_DIR` to another folder
 
 - `docs/decisions.md` – what was decided and why
 - `docs/sources.md` – each data source: what it allows, what it holds, keep or drop
+- `docs/known-issues.md` – limits of the data and traps
 - `docs/plans/` – build plan

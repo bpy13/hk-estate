@@ -12,7 +12,12 @@ here; a limit or trap we live with goes in `known-issues.md`. Each item in one p
    2018–2023 and cover one cycle (2021 peak, 2021–24 fall, recovery). Options: (a) accept
    2018 onward, and use Centadata's older latest deals for the fair-price model only;
    (b) approve a paid source (IRIS or similar); (c) probe other agency sites (e.g. Ricacorp,
-   Hong Kong Property) for older history. **Default: (a)**, noted as a limit in the report.
+   Hong Kong Property) for older history. (d) Claude's suggestion, combinable with (a): pair
+   each flat's pre-2018 latest deal (Centadata) with the fair-price model's estimate of its
+   value today, giving long-horizon "estimated pairs" back to 1995. Model error averages out
+   across an attribute group, and these pairs are reported separately from real pairs.
+   **Default: (a) + (d)**, noted as a limit in the report. Phase 5 only; earlier phases don't
+   depend on it.
 2. **Raw listing pages in the cache contain agent names and phones** (the pages show them;
    parsers will skip them and the database never stores them). Default: delete cached listing
    pages after 7 days with a prune step in the daily job.
