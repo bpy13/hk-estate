@@ -127,8 +127,25 @@ cache pruning.)*
 - **Retrain and re-rank as Phase 3 data lands (Phase 4 follow-up).** `hkestate train` then
   `hkestate rank` after the territory 28Hse backfill, the master pass and the geocoding run
   finish, and compare pilot vs territory error in `data/reports/model_eval.md` (today 5.2% vs
-  5.0%). Proposal: add `hkestate rank` to the daily job after listings (about 1 minute), and
-  `hkestate train` to the weekly job. Not registered yet (changes the scheduled tasks).
+  5.0%). *(Scheduled in Phase 5: `\hk-estate\daily rank` 14:00 and `\hk-estate\weekly train`
+  Sundays 12:00; both started by hand on 2026-10-16, exit code 0.)*
+- **Rerun the findings report when the territory backfill finishes (Phase 5).** `hkestate
+  train`, then `hkestate report`. Today's `data/reports/findings_20261016.md` is preliminary:
+  recorded pairs are 93% pilot, and verdicts near the line moved between runs an hour apart
+  while data was loading.
+- **Long-running jobs may put back the old `txn`/`txn_all` views.** The Phase 5 view (price
+  check, parking, quarantine flags) is in the live database now, but jobs started before it
+  (territory backfill PID 38336, master pass, SRPE, daily listings) still run the old code; if
+  one calls `init_db` again it recreates the old views until any new command runs. The growth
+  study and model are not affected (they run the query from the current code). Nothing to do
+  except restart those jobs normally when they finish.
+- **First-hand result in recorded pairs is LOHAS-Park-heavy.** 1,652 of 2,989 recorded pairs
+  start with a developer sale, most of them LOHAS Park launches 2018-2020; their +1.7 pp a
+  year may reflect those launches' pricing. Recheck with territory pairs.
+- **Jupyter is not in the conda env.** `notebooks/explore.ipynb` was checked by running its
+  cells as code; to open it interactively, `conda install -n hk-estate ipykernel notebook`
+  (not done: it adds compiled packages, and Windows Application Control already blocks one
+  here).
 - **SRPE first-hand deals reach no building yet** (0 of ~8,600 have a `building_id`), so their
   first-hand flag doesn't feed the model; the first-hand rule covers those buildings for now.
   Same root cause as SRPE gap (d) above: rerun the SRPE matching after the master pass.

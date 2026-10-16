@@ -7,8 +7,12 @@
   \hk-estate\weekly deals     every Sunday at 07:00       scripts\daily.ps1 -Command update
   \hk-estate\weekly ricacorp  every Sunday at 10:00       scripts\daily.ps1 -Command ricacorp
                               (a pass takes about 7 hours; the task may run up to 14)
+  \hk-estate\daily rank       every day at 14:00          scripts\daily.ps1 -Command rank
+                              (after the 08:00 listings, which take about 4.5 hours)
+  \hk-estate\weekly train     every Sunday at 12:00       scripts\daily.ps1 -Command train
+                              (after the 07:00 deal update; before that day's rank)
 
-  Both start as soon as possible after a missed start (laptop off or asleep), never run twice
+  All start as soon as possible after a missed start (laptop off or asleep), never run twice
   at once, and run only while the user is logged on. Rerunning this script replaces them.
   Remove with:  Unregister-ScheduledTask -TaskPath '\hk-estate\' -TaskName '<name>'
 #>
@@ -50,6 +54,12 @@ Register-Job 'weekly ricacorp' 'ricacorp' `
     (New-ScheduledTaskTrigger -Weekly -DaysOfWeek Sunday -At '10:00') `
     'HK Estate: Ricacorp estate pages, previous-deal pairs (one pass, resumable within the week).' `
     $longSettings
+
+Register-Job 'daily rank' 'rank' (New-ScheduledTaskTrigger -Daily -At '14:00') `
+    'HK Estate: value active sale listings with the fair-price model (ranked CSV + dashboard data).'
+Register-Job 'weekly train' 'train' `
+    (New-ScheduledTaskTrigger -Weekly -DaysOfWeek Sunday -At '12:00') `
+    'HK Estate: retrain the fair-price model on the newest data (model_eval.md).'
 
 Get-ScheduledTask -TaskPath '\hk-estate\' |
     Select-Object TaskPath, TaskName, State,

@@ -11,8 +11,14 @@ Registered for the current user by `scripts\register_task.ps1` (rerun it to upda
 |---|---|---|
 | `daily listings` | every day 08:00 | `scripts\daily.ps1` → `hkestate daily` |
 | `weekly deals` | Sundays 07:00 | `scripts\daily.ps1 -Command update` → `hkestate update` |
-
 | `weekly ricacorp` | Sundays 10:00 | `scripts\daily.ps1 -Command ricacorp` → `hkestate ricacorp` (a pass is about 7 hours; the task may run 14) |
+| `daily rank` | every day 14:00 | `scripts\daily.ps1 -Command rank` → `hkestate rank` (after the 08:00 listings, ~4.5 h; about 1 minute) |
+| `weekly train` | Sundays 12:00 | `scripts\daily.ps1 -Command train` → `hkestate train` (after the deal update; about 1 minute) |
+
+If the laptop was off at 08:00, the listings start late and the 14:00 rank uses the previous
+day's listings; the next day's rank catches up. The growth study (`hkestate report`) is not
+scheduled: run `hkestate train` then `hkestate report` when
+the territory backfill finishes, or whenever a fresh findings report is wanted.
 
 All are set to **start as soon as possible after a missed start** (laptop off or asleep at
 the time), never to run twice at once, and to run only while you are logged on (so no
