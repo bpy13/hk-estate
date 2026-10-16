@@ -113,4 +113,10 @@ cache pruning.)*
   than one page shows (its paging repeats page 1, so only ~10-14 listings per building are
   seen), and the Centanet run length (about 4.5 h a day at 2 s; lower `--centanet-budget`
   if it clashes with the master pass).
+- **SRPE includes houses (out of scope).** E.g. development 7045 (37 Shouson Hill Rd, a
+  single-house tender sale at HK$2.566bn) is stored as a first-hand deal. Houses and villas
+  are excluded by decision. Before Phase 4, apply the coverage filter to SRPE developments
+  (9-column house registers, or the master list's house flag) so they never enter comparables
+  or growth pairs.
+
 ## Later
