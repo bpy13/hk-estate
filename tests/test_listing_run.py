@@ -123,3 +123,55 @@ def test_hse28_skipped_while_a_backfill_holds_the_lock(env, tmp_path):
     assert fake.asked == []
     res = summary["sources"]["hse28"]["taikoo-shing"]
     assert res["complete"] is False and "skipped" in res["note"]
+
+
+def _hse_listing(i):
+    from types import SimpleNamespace as NS
+    return NS(listing_id=str(i), source_estate_key=None, price_hkd=1, url=f"detail-{i}",
+              kind="sale", estate_name=None, text_for_flags="")
+
+
+class FailingDetails(FakeFetcher):
+    """Search pages work; every detail page fails with a 500 once retries are used up."""
+
+    def get(self, url, page_type):
+        self.asked.append(url)
+        if "detail" in url:
+            raise FetchError(url, 500)
+        return "<html></html>"
+
+
+def test_centanet_stops_after_five_consecutive_fetch_errors(env):
+    locs = "".join(
+        f"<url><loc>https://hk.centanet.com/findproperty/detail/太古城-x_ZZB{i:03d}?theme=buy"
+        "</loc></url>" for i in range(12))
+    fake = FailingDetails({})
+    real_get = fake.get
+
+    def get(url, page_type):
+        if "sitemap" in url:
+            return f'<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">{locs}</urlset>'
+        return real_get(url, page_type)
+
+    fake.get = get
+    summary = listing_run.run_listings(
+        ["taikoo-shing"], ["centanet"], db_path=env, log=lambda m: None, fetcher=fake,
+        hse28_fetcher=fake, now=datetime(2026, 10, 16, 8), today=TODAY)
+    assert len([u for u in fake.asked if "ZZB" in u]) == 5
+    res = summary["sources"]["centanet"]["taikoo-shing"]
+    assert res["complete"] is False and "5 consecutive" in res["note"]
+
+
+def test_hse28_stops_after_five_consecutive_fetch_errors(env, monkeypatch):
+    from types import SimpleNamespace as NS
+    monkeypatch.setattr(listing_run.hse28_listings, "parse_search_page",
+                        lambda text, kind: NS(listings=[_hse_listing(i) for i in range(12)],
+                                              next_url=None))
+    monkeypatch.setattr(listing_run.ListingRun, "_store", lambda *a, **k: None)
+    fake = FailingDetails({})
+    summary = listing_run.run_listings(
+        ["taikoo-shing"], ["hse28"], db_path=env, log=lambda m: None, fetcher=fake,
+        hse28_fetcher=fake, now=datetime(2026, 10, 16, 8), today=TODAY)
+    assert len([u for u in fake.asked if u.startswith("detail-")]) == 5
+    res = summary["sources"]["hse28"]["taikoo-shing"]
+    assert res["complete"] is False and "5 consecutive" in res["note"]

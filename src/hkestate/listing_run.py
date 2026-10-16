@@ -40,6 +40,9 @@ MAX_ERROR_SHARE = 0.05  # more failed pages than this: the run doesn't count for
 # hk.centanet.com also serves the Centadata master crawl (2 s per request, Phase 3). Two
 # processes at 2 s each keep the host at about 1 request a second in total.
 CENTANET_MIN_INTERVAL_S = 2.0
+# Circuit breaker: this many detail pages in a row failing (after the fetcher's own retries)
+# means the site is struggling or has stopped answering us; stop that source for the run.
+MAX_CONSECUTIVE_ERRORS = 5
 
 TERRITORY = "territory"  # every estate outside the pilot groups
 # Detail pages / building pages read per run for the territory (politeness and run length:
@@ -84,6 +87,24 @@ PILOT: dict[str, Target] = {
         ((SP + "35-%E8%A5%BF%E5%8D%8A%E5%B1%B1" + SP_SALE, ("高雲臺", "高雲台")),),
     ),
 }
+
+
+class _Breaker:
+    """Counts consecutive failed fetches; `fail()` is True once the source should stop."""
+
+    def __init__(self) -> None:
+        self.n = 0
+
+    def ok(self) -> None:
+        self.n = 0
+
+    def fail(self) -> bool:
+        self.n += 1
+        return self.n >= MAX_CONSECUTIVE_ERRORS
+
+    @property
+    def message(self) -> str:
+        return f"circuit breaker: {self.n} consecutive fetch errors"
 
 
 @dataclass
@@ -180,6 +201,7 @@ class ListingRun:
                                            TERRITORY if territory else None)
         known = self._known("centanet")
         blocked = False
+        breaker = _Breaker()
         for g in groups:
             res = SourceResult("centanet", g)
             mine = [e for e in entries if e.group == g]  # (entries of unrequested groups: skipped)
@@ -211,12 +233,18 @@ class ListingRun:
                     lst.kind = e.kind
                     batch.append(lst)
                     res.detail_read.add(e.listing_id)
+                    breaker.ok()
                 except FetchError as ex:
                     if ex.status in (404, 410):
                         gone.add(e.listing_id)
+                        breaker.ok()  # the site answered
                     else:
                         res.errors += 1
                         self.log(f"  centanet {e.listing_id}: {ex}")
+                        if breaker.fail():
+                            res.note = breaker.message
+                            self.log(f"centanet stopped for this run: {breaker.message}")
+                            blocked = True
                 except (RobotsDisallowed, httpx.TransportError) as ex:
                     res.errors += 1
                     self.log(f"  centanet {e.listing_id}: {type(ex).__name__}")
@@ -310,6 +338,7 @@ class ListingRun:
         items = list(seen.values())
         self._store(g, items, "search")
         details, pending = [], []
+        breaker = _Breaker()
         for x in items:
             k = known.get(x.listing_id)
             if k is not None and k[1] == x.price_hkd:
@@ -319,7 +348,11 @@ class ListingRun:
             except (FetchError, RobotsDisallowed, httpx.TransportError) as e:
                 res.errors += 1
                 self.log(f"  hse28 detail {x.listing_id}: {e}")
+                if isinstance(e, FetchError) and e.status not in (404, 410) and breaker.fail():
+                    self._store(g, pending, "detail")
+                    raise SourceBlocked(breaker.message) from e
                 continue
+            breaker.ok()
             d.estate_name = d.estate_name or x.estate_name
             d.source_estate_key = x.source_estate_key
             d.text_for_flags = f"{d.text_for_flags} {x.text_for_flags}"
@@ -405,6 +438,7 @@ class ListingRun:
             self.log(f"spacious: {added} buildings in the sitemap")
         pilot_seen = {i for r in self.results if r.source == "spacious" for i in r.seen}
         seen: dict[str, Listing] = {}
+        breaker = _Breaker()
         for k, (bid, url) in enumerate(plan, 1):
             try:
                 count = 0
@@ -428,7 +462,12 @@ class ListingRun:
             except (FetchError, RobotsDisallowed, httpx.TransportError) as e:
                 res.errors += 1
                 self.log(f"  spacious building {bid}: {e}")
+                if isinstance(e, FetchError) and e.status not in (404, 410) and breaker.fail():
+                    res.note = breaker.message
+                    self.log(f"spacious stopped for this run: {breaker.message}")
+                    break
                 continue
+            breaker.ok()
             with db.session(self.db_path) as con:
                 spacious.record_read(con, bid, today, count)
             if k % 200 == 0:
