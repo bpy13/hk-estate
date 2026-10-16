@@ -161,6 +161,10 @@ Lint: `ruff check .`.
     for the same building + flat + price (±1%, 90 days) arrives. Some deals are marked
     連車位 (price includes a parking space); kept in `raw_json` for now (open item).
 - [ ] **Task 1.4: Pilot backfill, idempotent**
+  - Status 2026-10-16 12:30: Taikoo Shing, Mei Foo, City One and Goldwin Heights loaded;
+    LOHAS Park (22 developments on 28Hse) loading, 7 of 22. Tests for rerun/resume pass.
+    28Hse rate-limits (429) long runs: requests now every 4 s with 15-minute cool-downs,
+    which makes the pilot load take ~12 h instead of ~3.
   - Files: `src/hkestate/cli.py` (`hkestate backfill --estates <list>`), `tests/test_backfill.py`.
   - Done when:
     - backfill loads all 5 pilot estates
@@ -171,10 +175,13 @@ Lint: `ruff check .`.
   - Files: `scripts/spot_check.py`, result note in `docs/sources.md`.
   - Done when: 50 random pilot rows match the live site on price, date, floor, flat and area
     (50/50). Mismatches are fixed or explained.
-- [ ] **Task 1.6: Second-source cross-check (28Hse transactions)**
-  - Files: `src/hkestate/sources/hse28.py`, tests.
-  - Done when: for the pilot estates, a report shows the match rate of 28Hse deals to master
-    deals. Deals found only in 28Hse are added to `txn_raw` with `source='28hse'`.
+- [ ] **Task 1.6: Second-source cross-check (Centadata, per the Phase 0 change)**
+  - Files: `src/hkestate/sources/centadata.py`, `tests/test_centadata.py`.
+  - Done when: for the pilot estates, a report (`data/reports/crosscheck_<date>.md`) shows
+    the match rate of Centadata deals (2018 on) to 28Hse deals; Centadata-only deals are in
+    `txn_raw` with `source='centadata'`.
+  - Status: done for 4 of 5 estates (93.8–99.6%, see `docs/sources.md`); LOHAS Park after
+    its load.
 
 ## Phase 2 – Listings (pilot)
 

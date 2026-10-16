@@ -173,6 +173,34 @@ is well over the ≥100 deals the plan asks for. Centadata code
 Also checked: 輝煌臺 Palatial Crest (single tower, 1996, 198 flats, smaller); 光明臺 (two towers);
 嘉兆臺 (several blocks); 嘉薈軒 (single tower but completed 2007).
 
+## Phase 1 results (2026-10-16)
+
+**Centadata cross-check** (`hkestate crosscheck`; latest Centadata deal per flat vs 28Hse;
+"in window" = 2018 on; match = same flat, price ±1%, date ±90 days):
+
+| Estate | Blocks mapped | In window | Found in 28Hse | Rate |
+|---|---|---|---|---|
+| Taikoo Shing | 61/61 | 2,762 | 2,752 | 99.6% |
+| Mei Foo Sun Chuen | 99/99 | 2,980 | 2,794 | 93.8% |
+| City One Sha Tin | 52/52 | 2,971 | 2,945 | 99.1% |
+| Goldwin Heights | 1/1 | 71 | 70 | 98.6% |
+| LOHAS Park | pending (backfill still loading) | | | |
+
+- 28Hse's date equals Centadata's **registration** date in 98% of matches (the rest are
+  within a few days); never the agreement date (1 case).
+- Mei Foo's misses are 2018–2020 deals 28Hse doesn't hold (its own per-flat counts are all
+  loaded); from 2021 on Mei Foo is near-complete. The Goldwin Heights miss is a
+  HK$29.5m deal at 2.3x the building's usual price that 28Hse doesn't list.
+- Naming differences handled: Centadata groups Mei Foo blocks as address ranges
+  (百老匯街1-3號, flats "1號A"), writes 蘭秀道 for 28Hse's 蘭秀街, and 廬山閣 for 盧山閣.
+- Deals only Centadata has are stored in `txn_raw` with `source='centadata'` (with both
+  agreement and registration dates); that includes each flat's latest pre-2018 deal.
+
+**28Hse rate limit:** after ~1,600 requests at 1/s it answered 429 and then allowed little
+for a while; the backfill now runs at one request per 4 s (see known-issues).
+
+**Spot-check:** pending (runs after the LOHAS Park load).
+
 ## Territory-wide backfill estimate (transaction master)
 
 | Pass | Pages | Time |

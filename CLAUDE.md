@@ -18,7 +18,10 @@ Read these before substantial changes:
 ## Environment
 - Install: `conda env create -f environment.yml`, then
   `conda run -n hk-estate python -m pip install -e ".[dev]"` (conda env `hk-estate`, Python 3.12)
-- Run: <tbd, CLI arrives in Phase 1>
+- Run: `conda run -n hk-estate hkestate <command>`: `backfill --estates pilot` (resumable),
+  `rvd`, `crosscheck --estates pilot`, `status`. Spot-check:
+  `conda run -n hk-estate python scripts/spot_check.py`. Logs in `data/logs/`, reports in
+  `data/reports/`.
 - Tests: `conda run -n hk-estate python -m pytest -q`
 - Lint: `conda run -n hk-estate ruff check .`
 - Data folder: `data/` (git-ignored), override with env var `HKESTATE_DATA_DIR`.
