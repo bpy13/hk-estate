@@ -354,14 +354,28 @@ Lint: `ruff check .`.
     fits (calibration, test, final). SHAP via LightGBM's TreeSHAP (the `shap` package can't
     load here, decisions.md). Outputs in `data/model/` (model, meta, test predictions with
     SHAP, a deals table for the dashboard).
-- [ ] **Task 4.3: Asking-vs-deal gap**
+- [x] **Task 4.3: Asking-vs-deal gap**
   - Done when: pairs of a listing and a deal on the same unit within 90 days are counted per
     district. Where a district has ≥30 pairs, its median gap is used. Otherwise 5%, marked
     `assumed` in the output.
-- [ ] **Task 4.4: Ranking output**
+  - Result (2026-10-16): `src/hkestate/gap.py`. Most listings give only a floor band, so a pair
+    is building + flat + exact floor, or building + flat + band + area within 2%; the deal
+    falls between the listing's first sighting and 90 days after its last. Live: 0 pairs
+    (listings started 2026-10-16), so every district is 5% `assumed` (columns `gap_pct`,
+    `gap_basis`; table `data/reports/asking_gap_<date>.csv`). Rerunning `hkestate rank`
+    picks up measured gaps as pairs accumulate.
+- [x] **Task 4.4: Ranking output**
   - Done when: `hkestate rank` writes `data/reports/ranked_listings_<date>.csv` sorted by %
     discount, with fair price, interval, confidence (low if <10 comparables in the last 24
     months), flags and the top 3 SHAP reasons.
+  - Result (2026-10-16): `src/hkestate/rank.py`, `hkestate rank [--from-snapshot]` (~40 s).
+    Live: 2,324 active sale listings, 1,939 ranked (382 without a building match, 1 under
+    HK$500k, 2 cross-site duplicates merged); 392 low confidence. Median discount -3% pilot,
+    -7% territory (asking prices above modelled value, as expected). Also written:
+    `data/model/ranked_latest.parquet` (with SHAP) for the dashboard. Found while checking the
+    output: part-share-like deals in one Mei Foo block distorted it; fixed by a price check
+    and by valuing listings at the last well-populated month (decisions.md). Out-of-time error
+    after the fix: 5.1% (pilot 5.2%, territory 5.0%), 80% intervals held 84%.
 - [ ] **Task 4.5: Dashboard**
   - Files: `app/dashboard.py`.
   - Done when: launched with `streamlit run`; the ranked list, filters (district, price,

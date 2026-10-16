@@ -21,6 +21,7 @@ Rows left out of training (column `exclude_reason`, docs/decisions.md "Phase 4")
 - houses, villas and subsidised estates (master list coverage filter, SRPE house registers)
 - Ricacorp previous deals derived from days held and % gain (not a recorded price)
 - the quarantined LOHAS Park rows (db.QUARANTINE_SQL), dropped before the flags are computed
+- deals at under half or over double their building's median price per sq ft (`price_check`)
 """
 
 from __future__ import annotations
@@ -158,6 +159,50 @@ def rvd_class(area_sqft) -> str:
 def is_special_unit(text) -> bool:
     """Roof, duplex, top-floor or 'special' units (天台, 複式, 頂層, 特色): kept but marked."""
     return bool(text) and not _missing(text) and bool(_SPECIAL.search(str(text)))
+
+
+def index_wide(index_df: pd.DataFrame) -> pd.DataFrame:
+    """RVD price index by month (rows, every month) and size class (columns)."""
+    wide = index_df.assign(period=pd.to_datetime(index_df["period"])).pivot_table(
+        index="period", columns="class", values="value", aggfunc="last")
+    months = pd.date_range(wide.index.min(), wide.index.max(), freq="MS")
+    return wide.reindex(months).ffill()
+
+
+def deflator(index_df: pd.DataFrame, classes, dates,
+             known_until: pd.Timestamp | None = None) -> np.ndarray:
+    """Index(class, month) / index(class, reference month). The reference is the last month
+    known (`known_until`, or the last published month); later months carry it, so a deal
+    after the reference month gets 1. NaN before the index starts (1993)."""
+    wide = index_wide(index_df)
+    last = wide.index.max()
+    ref = last if known_until is None else min(
+        pd.Timestamp(known_until).to_period("M").to_timestamp(), last)
+    classes = pd.Series(classes).reset_index(drop=True)
+    classes = classes.where(classes.isin(wide.columns), "ALL")
+    months = pd.to_datetime(pd.Series(dates)).reset_index(drop=True)
+    months = months.dt.to_period("M").dt.to_timestamp().clip(upper=ref)
+    stacked = wide.stack()
+    vals = stacked.reindex(pd.MultiIndex.from_arrays([months, classes])).to_numpy(dtype=float)
+    refs = wide.loc[ref].reindex(classes).to_numpy(dtype=float)
+    return vals / refs
+
+
+# Price check: a deal at under half or over double its building's median price per sq ft
+# (index-adjusted, all years) is not a normal sale of a whole flat: part-share transfers
+# (one co-owner buying out another) are registered like sales and 28Hse doesn't mark them.
+# Unlike the yearly MAD rule in txn_all, this holds when such deals cluster in one building.
+PRICE_CHECK_LOW, PRICE_CHECK_HIGH, PRICE_CHECK_MIN_DEALS = 0.5, 2.0, 5
+
+
+def price_check(adj_psf: pd.Series, building: pd.Series) -> pd.Series:
+    """True for deals outside [0.5, 2] x their building's median adjusted price per sq ft
+    (buildings with 5+ priced deals only)."""
+    med = adj_psf.groupby(building).transform("median")
+    n = adj_psf.groupby(building).transform("count")
+    ratio = adj_psf / med
+    out = (n >= PRICE_CHECK_MIN_DEALS) & ((ratio < PRICE_CHECK_LOW) | (ratio > PRICE_CHECK_HIGH))
+    return out.fillna(False).astype(bool)
 
 
 def agreement_dates(df: pd.DataFrame, lag_days: int) -> pd.Series:
@@ -412,6 +457,7 @@ def _attach(df: pd.DataFrame, raw: dict, buildings: pd.DataFrame) -> pd.DataFram
 EXCLUDE_ORDER = [
     "no_building", "house", "duplicate", "first_hand", "first_hand_rule", "parking",
     "non_market", "low_price", "bulk", "outlier", "derived", "no_area", "too_old",
+    "price_check",  # applied last, against the deals left (see price_check)
 ]
 
 
@@ -470,7 +516,15 @@ def deal_features(raw: dict) -> pd.DataFrame:
     }
     reason = pd.Series([None] * len(d), index=d.index, dtype=object)
     for name in reversed(EXCLUDE_ORDER):  # the first reason in EXCLUDE_ORDER wins
-        reason = reason.mask(conditions[name].fillna(False).astype(bool), name)
+        if name in conditions:
+            reason = reason.mask(conditions[name].fillna(False).astype(bool), name)
+    # the price check judges each deal against the building's otherwise-clean deals
+    clean = reason.isna()
+    if clean.any() and not raw["index"].empty:
+        adj = d.loc[clean, "psf_hkd"].to_numpy(dtype=float) / deflator(
+            raw["index"], d.loc[clean, "rvd_class"], d.loc[clean, "agreement_date"])
+        flagged = price_check(pd.Series(adj, index=d.index[clean]), d.loc[clean, "building_id"])
+        reason = reason.mask(flagged.reindex(d.index, fill_value=False), "price_check")
     d["exclude_reason"] = reason
     d = d.drop(columns=["anchor_date", "building_flats"])
     return d.reset_index(drop=True)

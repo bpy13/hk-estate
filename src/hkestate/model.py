@@ -119,30 +119,8 @@ def time_split(df: pd.DataFrame, test_months: int = TEST_MONTHS) -> Split:
                  df[ad > test_start], cal_start, test_start, end)
 
 
-def _index_wide(index_df: pd.DataFrame) -> pd.DataFrame:
-    wide = index_df.assign(period=pd.to_datetime(index_df["period"])).pivot_table(
-        index="period", columns="class", values="value", aggfunc="last")
-    months = pd.date_range(wide.index.min(), wide.index.max(), freq="MS")
-    return wide.reindex(months).ffill()
-
-
-def deflator(index_df: pd.DataFrame, classes: pd.Series, dates: pd.Series,
-             known_until: pd.Timestamp | None = None) -> np.ndarray:
-    """Index(class, month) / index(class, reference month). The reference is the last month
-    known (`known_until`, or the last published month); later months carry it, so a deal
-    after the reference month gets 1. NaN before the index starts (1993)."""
-    wide = _index_wide(index_df)
-    last = wide.index.max()
-    ref = last if known_until is None else min(
-        pd.Timestamp(known_until).to_period("M").to_timestamp(), last)
-    classes = pd.Series(classes).reset_index(drop=True)
-    classes = classes.where(classes.isin(wide.columns), "ALL")
-    months = pd.to_datetime(pd.Series(dates)).reset_index(drop=True)
-    months = months.dt.to_period("M").dt.to_timestamp().clip(upper=ref)
-    stacked = wide.stack()
-    vals = stacked.reindex(pd.MultiIndex.from_arrays([months, classes])).to_numpy(dtype=float)
-    refs = wide.loc[ref].reindex(classes).to_numpy(dtype=float)
-    return vals / refs
+_index_wide = features.index_wide
+deflator = features.deflator
 
 
 def _target(df: pd.DataFrame, index_df: pd.DataFrame, known_until) -> tuple[np.ndarray,
@@ -162,6 +140,8 @@ def matrix(df: pd.DataFrame, categories: dict[str, list[str]]) -> pd.DataFrame:
     for c in CAT_FEATURES:
         vals = df[c].astype(object).where(df[c].notna(), None)
         vals = vals.map(lambda v: None if v is None else str(v))
+        # a value the model never saw (e.g. a new building) is missing to it
+        vals = vals.where(vals.isin(categories[c]), None)
         X[c] = pd.Categorical(vals, categories=categories[c])
     return X
 
@@ -380,6 +360,20 @@ def coverage_table(train: pd.DataFrame, listings: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+VALUATION_MIN_DEALS = 200
+
+
+def valuation_month(tr: pd.DataFrame) -> int:
+    """The month index listings are valued at: the newest month with at least 200 trainable
+    deals (or half the recent monthly median, for small data). The current month has only a
+    few deals so far, and a tree would let that handful set the date effect for every
+    listing; the RVD index carries the market level forward anyway."""
+    counts = tr.groupby("month_idx").size().sort_index()
+    need = min(VALUATION_MIN_DEALS, 0.5 * counts.tail(12).median())
+    ok = counts[counts >= need]
+    return int(ok.index.max() if not ok.empty else counts.index.max())
+
+
 def train(raw: dict, rounds: int = ROUNDS, today: date | None = None, log=print) -> dict:
     """Evaluate, fit the final model, save it with its intervals, write model_eval.md."""
     today = today or date.today()
@@ -403,6 +397,7 @@ def train(raw: dict, rounds: int = ROUNDS, today: date | None = None, log=print)
         "trained_at": datetime.now().isoformat(timespec="seconds"),
         "features": FEATURES, "categories": cats, "rounds": rounds, "params": PARAMS,
         "q": q_final, "coverage": COVERAGE, "index_reference_month": index_last,
+        "valuation_month_idx": valuation_month(tr),
         "n_train": len(tr), "n_train_pilot": int(tr["is_pilot"].sum()),
         "eval": ev.summary.to_dict("records"), "split": ev.split, "data": raw["meta"],
     }

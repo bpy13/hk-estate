@@ -142,6 +142,19 @@ def test_first_hand_rule_skips_buildings_srpe_covers_and_data_start():
     assert not features.first_hand_rule(df).any()
 
 
+def test_price_check_flags_deals_far_from_the_building_median_even_in_clusters():
+    # 10 ordinary deals around HK$10,000/sq ft and 4 part-share-like deals at 10-43% of it:
+    # too many for a MAD rule, but each is under half the building's index-adjusted median
+    psf = [10000, 10200, 9800, 10100, 9900, 10050, 9950, 10300, 9700, 10000,
+           1100, 2200, 4300, 1700, 21000]
+    adj = pd.Series(psf, dtype=float)
+    building = pd.Series(["b"] * len(psf))
+    got = features.price_check(adj, building)
+    assert list(got) == [False] * 10 + [True] * 5  # 21,000 is over double: flagged too
+    # a building with fewer than 5 deals is not judged
+    assert not features.price_check(pd.Series([10000.0, 1000.0]), pd.Series(["c", "c"])).any()
+
+
 # ---- the feature tables from a database ----------------------------------------------------
 
 
@@ -152,6 +165,8 @@ def snap(tmp_path):
     # parking deal, SRPE first-hand deal, house deal, a quarantined LOHAS Park row
     add_deal(con, "park", "h28-1-b1", 12, "A", date(2025, 5, 1), 9_000_000,
              raw={"with_parking": True})
+    # a part-share-like transfer at a fifth of the building's price per sq ft
+    add_deal(con, "share", "h28-1-b1", 14, "B", date(2025, 7, 1), 2_000_000, area=520.0)
     add_deal(con, "srpe1", "cd-1-AAA", 20, "C", date(2025, 6, 1), 6_000_000, source="srpe",
              first_hand=True, raw={"has_parking": False})
     add_deal(con, "house", "cd-1-HHH", 1, "H1", date(2025, 6, 1), 30_000_000,
@@ -184,6 +199,9 @@ def test_one_row_per_deal_with_exclusion_reasons(snap):
     assert reasons["park"] == "parking"
     assert reasons["srpe1"] == "first_hand"
     assert reasons["house"] == "house"
+    # a lone one is caught by the yearly MAD rule already; clusters by the price check
+    # (test_price_check_flags_deals_far_from_the_building_median_even_in_clusters)
+    assert reasons["share"] in ("outlier", "price_check")
     assert "good-lohas" in reasons.index  # fetched by the fixed run: kept
     assert "bad-lohas" not in reasons.index  # quarantined before the flags are computed
     assert snap["meta"]["quarantined_rows"] == 1

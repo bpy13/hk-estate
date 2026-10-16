@@ -330,6 +330,25 @@ def cmd_train(args) -> int:
     return _logged(args, "train", work)
 
 
+def cmd_rank(args) -> int:
+    """Value every active sale listing and write the ranked CSV (needs `hkestate train`)."""
+    from hkestate import features, model, rank
+
+    if not (model.model_dir() / "fair_price.txt").exists():
+        print("no trained model: run `hkestate train` first", file=sys.stderr)
+        return 1
+
+    def work(log):
+        raw = features.load_snapshot() if args.from_snapshot else features.snapshot(args.db)
+        r = rank.rank(raw, model.load())
+        paths = rank.write(r)
+        log(f"ranked {len(r.table)} listings: {paths['csv']}")
+        log(f"counts: {r.counts}")
+        return len(r.table), {**r.counts, "csv": str(paths["csv"])}
+
+    return _logged(args, "rank", work)
+
+
 def cmd_status(args) -> int:
     with db.session(args.db) as con:
         db.init_db(con)
@@ -414,6 +433,10 @@ def main(argv: list[str] | None = None) -> int:
                    help="reuse data/model/snapshot instead of reading the database")
     t.add_argument("--rounds", type=int, default=800, help="boosting rounds")
     t.set_defaults(func=cmd_train)
+    rk = sub.add_parser("rank", help="rank active sale listings by discount to fair price")
+    rk.add_argument("--from-snapshot", action="store_true",
+                    help="reuse data/model/snapshot instead of reading the database")
+    rk.set_defaults(func=cmd_rank)
     s = sub.add_parser("status", help="recent runs and row counts")
     s.set_defaults(func=cmd_status)
 

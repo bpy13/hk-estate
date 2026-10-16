@@ -289,6 +289,16 @@ Details and measurements in `docs/sources.md`. Supersedes parts of "Source roles
     filtered read-only by fetch time (`db.QUARANTINE_SQL`; 8,954 are still the newest copy)
     before the duplicate/bulk/outlier tests, so they can't distort them. Deleting them still
     waits for the owner (open-items).
+- **Price check** (added after the first ranking): deals under half or over double their
+  building's median index-adjusted price per sq ft (5+ deals) are left out. One Mei Foo block
+  had several 2026 "sales" at HK$1-4m for 908 sq ft flats (likely part-share transfers;
+  28Hse doesn't mark them); so many that the yearly 5-MAD rule widened and kept them, and the
+  model learnt that block as 30%+ cheap. The stored `txn_all` rules are unchanged.
+- **Target divided by the RVD index; listings valued at the last well-populated month.** Trees
+  can't extrapolate in time, so the model learns prices on a common market level (the RVD
+  price index of the flat's size class) and the out-of-time test freezes the index at the
+  cut-off. Listings are valued at the newest month with 200+ deals (the current month has a
+  handful, which would otherwise set the date effect for every listing).
 - **Facing and sea view are flat-level**: a listing stating them lends them to every deal on
   the same building + flat letter. Listings without a floor are valued at their band's middle
   (1/6, 1/2, 5/6 of the building) or, with no band, at mid-height (marked `imputed`).
