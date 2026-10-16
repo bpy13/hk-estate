@@ -450,6 +450,11 @@ Lint: `ruff check .`.
     - the robust/not-robust verdicts
     - first-hand vs second-hand results
     - data coverage and limits.
-- [ ] **Task 5.5: Notebook**
+- [x] **Task 5.5: Notebook**
+  - Result (2026-10-16): `notebooks/explore.ipynb` (database read, or `FROM_SNAPSHOT`); its
+    code ran against the live database (all tables produced) and runs in
+    `tests/test_study.py` on the test snapshot. nbstripout is installed as the git filter
+    (`.gitattributes`, `filter.nbstripout` in `.git/config`). Jupyter itself (ipykernel,
+    nbclient) is not in the env, so the notebook was checked by running its cells as code.
   - Done when: `notebooks/explore.ipynb` reproduces the key tables from the DB, and
     nbstripout is installed as a git filter (outputs stripped on commit).

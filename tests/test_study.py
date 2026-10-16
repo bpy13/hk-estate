@@ -95,3 +95,20 @@ def test_hkestate_report_writes_the_findings_file(data):
         status = con.execute("SELECT status FROM run_log WHERE command = 'report'").fetchone()[0]
     assert status == "ok"
 
+
+
+def test_explore_notebook_runs_and_has_no_outputs(data):
+    """Task 5.5: the notebook's code reproduces the study (here from the test snapshot) and
+    is stored without outputs."""
+    import json
+    from pathlib import Path
+
+    nb = json.loads((Path(__file__).parents[1] / "notebooks" / "explore.ipynb").read_text(
+        "utf-8"))
+    code = [c for c in nb["cells"] if c["cell_type"] == "code"]
+    assert all(not c.get("outputs") and c.get("execution_count") is None for c in code)
+    src = "\n".join("".join(c["source"]) for c in code)
+    src = src.replace("FROM_SNAPSHOT = False", "FROM_SNAPSHOT = True")
+    scope: dict = {}
+    exec(compile(src, "explore.ipynb", "exec"), scope)  # noqa: S102 - our own notebook
+    assert "robust" in scope["s"].verdicts["recorded"].columns
