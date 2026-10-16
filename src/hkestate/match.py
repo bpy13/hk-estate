@@ -66,7 +66,9 @@ def _tokens(text: str) -> tuple[set[str], set[str]]:
         lo, hi = int(m.group(2)), int(m.group(3))
         if 0 < hi - lo < 20:
             ranged |= {f"{m.group(1)}{n}{m.group(4)}" for n in range(lo, hi + 1)}
-    return toks | ranged, ranged
+    # '2座 (2A)': tower 2, wing A, which 28Hse calls 第2A座
+    wings = {f"{m.group(2)}座" for m in re.finditer(r"(\d+)座\s*\((\1[a-z])\)", base)}
+    return toks | ranged | wings, ranged
 
 
 def _compact(text: str) -> str:

@@ -60,6 +60,16 @@ def test_same_block_name_in_several_estates_needs_the_estate():
     assert m("日出康城 1座", LOHAS) == (None, "ambiguous")
 
 
+def test_tower_with_wing_in_brackets():
+    # Centanet: '7期A Montara 2座 (2A)'; 28Hse block: '第2A座'
+    blds = [
+        Building("m2a", "MONTARA", "", "第2A座", 50),
+        Building("m2b", "MONTARA", "", "第2B座", 50),
+        Building("x2a", "MALIBU", "", "第2A座", 50),
+    ]
+    assert m("日出康城 7期A Montara 2座 (2A)", blds) == ("m2a", "exact")
+
+
 MEI_FOO = [
     Building("mf-19", "美孚新邨", "第一期", "百老匯街19號", 14),
     Building("mf-21", "美孚新邨", "第一期", "百老匯街21號", 14),
