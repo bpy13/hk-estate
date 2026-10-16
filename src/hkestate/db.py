@@ -37,6 +37,7 @@ DUP_DAYS = 90  # ... and dates within 90 days
 # Which copy of a sale wins when it is reported more than once (lower = preferred).
 SOURCE_RANK_SQL = """
     CASE
+        WHEN source = 'srpe' THEN 0  -- the developer's own register: the flagged first-hand copy
         WHEN source = 'hse28' AND deal_type = 'registry' THEN 1
         WHEN source = 'hse28' THEN 2
         WHEN source = 'centadata' THEN 3

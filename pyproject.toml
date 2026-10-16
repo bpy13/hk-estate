@@ -26,6 +26,7 @@ dependencies = [
     "opencc-python-reimplemented>=0.1.7",
     "xlrd>=2.0",  # RVD publishes legacy .xls files
     "pyyaml>=6.0",  # keyword list for listing flags
+    "pdfplumber>=0.11",  # SRPE registers of transactions are PDFs
 ]
 
 [project.scripts]
