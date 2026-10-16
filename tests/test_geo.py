@@ -83,3 +83,46 @@ def test_mtr_distance_needs_every_station(con):
     assert geo.assign_mtr(con) == 1
     st, m = con.execute("SELECT mtr_station, mtr_m FROM master_building").fetchone()
     assert st == "旺角" and 0 < m < 300
+
+
+WIKI_LIST = """<table>
+<a href="https://en.wikipedia.org/wiki/Admiralty_station_(MTR)">Admiralty</a>
+<a href="https://en.wikipedia.org/wiki/Tsim_Sha_Tsui_station">Tsim Sha Tsui</a>
+<a href="https://en.wikipedia.org/wiki/File:Admiralty_Station_2018.jpg">photo</a>
+<a href="https://en.wikipedia.org/wiki/Hung_Hom_station">Hung Hom</a>
+</table>"""
+
+
+def wiki_page(lat, lon):
+    return (f'<span class="geo-dms"><span class="latitude">22°16′44″N</span></span>'
+            f'<span class="geo">{lat}; {lon}</span>')
+
+
+def test_wiki_station_links_skip_files_and_use_comparable_names():
+    links = geo.wiki_station_links(WIKI_LIST)
+    assert sorted(links) == ["admiralty", "hunghom", "tsimshatsui"]
+
+
+def test_wiki_coords_inside_hong_kong_only():
+    assert geo.wiki_coords(wiki_page("22.27929", "114.16463")) == (22.27929, 114.16463)
+    assert geo.wiki_coords('<span class="geo-dec">22.3°N 114.2°E</span>') == (22.3, 114.2)
+    assert geo.wiki_coords(wiki_page("51.5", "0.1")) is None  # not Hong Kong
+    assert geo.wiki_coords("<p>no coordinates</p>") is None
+
+
+def test_wikipedia_coords_fetches_only_wanted_stations():
+    pages = {
+        geo.WIKI_LIST: WIKI_LIST,
+        "https://en.wikipedia.org/wiki/Admiralty_station_(MTR)": wiki_page("22.2793", "114.1646"),
+        "https://en.wikipedia.org/wiki/Hung_Hom_station": wiki_page("22.3030", "114.1818"),
+    }
+    seen = []
+
+    class F:
+        def get(self, url, page_type):
+            seen.append(url)
+            return pages[url]
+
+    got = geo.wikipedia_coords(F(), {"admiralty", "nowhere"})
+    assert got == {"admiralty": (22.2793, 114.1646)}
+    assert len(seen) == 2  # the list and one station

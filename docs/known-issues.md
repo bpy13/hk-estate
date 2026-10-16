@@ -11,6 +11,9 @@ Bugs that will be fixed go in `open-items.md` instead.
   Long-horizon growth figures are limited by this; see open-items for options.
 - **Blocked sources.** Squarefoot (including its haunted-flat list), house730 and Midland
   return 403 to our user agent, even for robots.txt. They are dropped, not worked around.
+- **MTR station positions come from Wikipedia** (title coordinates of each station's article,
+  about 50 m accuracy; 14 stations from ALS) because no robots-allowed official file has them.
+  Distances are to the station centre, not an exit.
 - **CSDI data API disallowed by robots.txt.** MTR distance uses station centres from MTR open
   data, not station exits.
 - **Spacious listings have no floor or flat.** They match only to a building.

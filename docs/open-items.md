@@ -62,10 +62,14 @@ cache pruning.)*
   continuously in the background with the largest estates first. Keep the 2018–2021 per-flat
   pass.
 
-- **MTR station coordinates (blocks MTR distance, Task 3.3).** ALS resolves only 16 of 98
-  stations by name; Overpass and CSDI are disallowed by robots.txt. Default: you drop a
-  `data/manual/mtr_stations.csv` (code,lat,lon; codes as in table `mtr_station`), then
-  `python -m hkestate.geo` fills `master_building.mtr_station/mtr_m`.
+- [x] **MTR station coordinates (Task 3.3).** *(Done 2026-10-16: ALS names only 14 of 97 stations
+  and returns street addresses for the rest; CSDI, Overpass, api.data.gov.hk and static.data.gov.hk
+  are disallowed by robots.txt or answer 403; MTR open data has no coordinates; Wikipedia's
+  station articles are ordinary pages that robots.txt allows (its API is not), so
+  `python -m hkestate.geo --stations-only` reads their title coordinates for the other 83. All
+  97 stations now have coordinates; distance to the nearest station is set for the 1,313
+  geocoded buildings (median 541 m). Accuracy is about 50 m, enough for station-level distance.
+  Rerun `python -m hkestate.geo` after the building geocoding finishes to cover the rest.)*
 - **SRPE gaps (Task 3.4).** (a) Price-list PDFs (flat facing and size) not parsed. (b)
   Developments whose sales ended over 18 months ago are in a second index
   (`disclaimer_index_for_all_residential_t18m`) that is not read, so older first-hand sales

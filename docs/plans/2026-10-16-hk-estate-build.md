@@ -271,8 +271,10 @@ Lint: `ruff check .`.
       year where a source gives it).
   - Status 2026-10-16 (unticked): `python -m hkestate.geo` (ALS geocoding works, resumable;
     rerun as the master list grows). Deviation: ALS names only 16 of 98 MTR stations and
-    Overpass/CSDI are disallowed by robots.txt, so MTR distance is written only once station
-    coordinates are complete (open item).
+    Overpass/CSDI are disallowed by robots.txt, so the other 83 stations take their
+    coordinates from Wikipedia station articles (allowed pages). All 97 have coordinates and
+    MTR distance is set for every geocoded building (1,313 of 2,553 so far); rerun `python -m
+    hkestate.geo` when the geocoding run ends.
 - [ ] **Task 3.4: SRPE first-hand sales**
   - Done when: first-hand transactions for developments since the portal began are stored
     and flagged `first_hand`, with price-list facing and size attributes attached to units

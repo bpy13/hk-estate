@@ -5,10 +5,11 @@ using the street address Centadata shows. ALS also names the district, which is 
 Centadata's own. Distance is straight-line to the nearest MTR *station centre* (decisions.md:
 the CSDI exit data is behind a disallowed API).
 
-ALS knows few MTR stations by name (16 of 98 resolved exactly), so station coordinates also
-come from an optional hand-made file `data/manual/mtr_stations.csv` (code,lat,lon). Distances
-are only written once every station has coordinates, because a station without them could be
-the true nearest one.
+ALS knows few MTR stations by name (14 of 97 resolved exactly), so the rest come from
+Wikipedia's station articles (title coordinates; ordinary article pages, which robots.txt
+allows). A hand-made file `data/manual/mtr_stations.csv` (code,lat,lon) overrides both.
+Distances are only written once every station has coordinates, because a station without
+them could be the true nearest one.
 """
 
 from __future__ import annotations
@@ -171,6 +172,61 @@ def nearest_station(lat: float, lon: float, stations) -> tuple[str, float]:
                key=lambda x: x[1])
 
 
+WIKI_LIST = "https://en.wikipedia.org/wiki/List_of_MTR_stations"
+HK_BOX = (22.15, 22.60, 113.80, 114.45)  # south, north, west, east: anything else is a mistake
+
+
+def _name_key(text: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", text.lower())
+
+
+def wiki_station_links(html: str) -> dict[str, str]:
+    """Station article addresses in Wikipedia's list of MTR stations, by comparable English
+    name ("Admiralty station (MTR)" -> "admiralty"). Plain article pages only."""
+    from urllib.parse import unquote
+
+    out: dict[str, str] = {}
+    for url in re.findall(r'href="(https://en\.wikipedia\.org/wiki/[^"#?]+)"', html):
+        slug = unquote(url.rsplit("/", 1)[1]).replace("_", " ")
+        if ":" in slug or not re.search(r"station", slug, re.IGNORECASE):
+            continue
+        base = re.sub(r"\s*\(.*?\)", "", slug)
+        base = re.sub(r"\s+station$", "", base, flags=re.IGNORECASE)
+        out.setdefault(_name_key(base), url)
+    return out
+
+
+def wiki_coords(html: str) -> tuple[float, float] | None:
+    """The article's title coordinates (decimal degrees), if inside Hong Kong."""
+    # the machine-readable copy: <span class="geo">22.2788; 114.1646</span> (the visible
+    # degrees-minutes-seconds spans would need converting)
+    m = re.search(r'<span class="geo">\s*(-?[\d.]+)\s*;\s*(-?[\d.]+)', html)
+    if not m:
+        m = re.search(r'class="geo-dec"[^>]*>\s*([\d.]+)°N\s*([\d.]+)°E', html)
+    if not m:
+        return None
+    lat, lon = float(m.group(1)), float(m.group(2))
+    s, n, w, e = HK_BOX
+    return (lat, lon) if s <= lat <= n and w <= lon <= e else None
+
+
+def wikipedia_coords(fetcher, wanted: set[str], log=print) -> dict[str, tuple[float, float]]:
+    """Coordinates for the stations whose comparable names are in `wanted`, from their
+    Wikipedia articles (ordinary article pages; robots.txt allows them, the API it does not).
+    One request for the list and one per station."""
+    links = wiki_station_links(fetcher.get(WIKI_LIST, "static"))
+    out = {}
+    for key in sorted(wanted & links.keys()):
+        try:
+            pos = wiki_coords(fetcher.get(links[key], "static"))
+        except (FetchError, httpx.HTTPError) as e:
+            log(f"  wikipedia {key}: {type(e).__name__} {e}")
+            continue
+        if pos:
+            out[key] = pos
+    return out
+
+
 def load_stations(fetcher, db_path=None, log=print) -> int:
     """MTR station list (open data) with coordinates from ALS where it names the station
     exactly, then from data/manual/mtr_stations.csv. Returns stations still without coordinates."""
@@ -188,6 +244,7 @@ def load_stations(fetcher, db_path=None, log=print) -> int:
         ensure_tables(con)
         have = {r[0] for r in con.execute(
             "SELECT code FROM mtr_station WHERE lat IS NOT NULL").fetchall()}
+    wiki = None
     for code, (zh, en) in stations.items():
         if code in have:
             continue
@@ -198,6 +255,12 @@ def load_stations(fetcher, db_path=None, log=print) -> int:
                 if res and res.name_zh.startswith(f"港鐵{zh}站"):
                     pos = (res.lat, res.lon)
                     break
+        if pos is None:
+            if wiki is None:  # fetched once, only if some station is still without a position
+                wiki = wikipedia_coords(
+                    fetcher, {_name_key(e) for c, (_, e) in stations.items() if c not in have},
+                    log)
+            pos = wiki.get(_name_key(en))
         with db.session(db_path) as con:
             con.execute("INSERT OR REPLACE INTO mtr_station VALUES (?, ?, ?, ?, ?)",
                         [code, zh, en, pos[0] if pos else None, pos[1] if pos else None])
@@ -262,6 +325,8 @@ def main(argv=None) -> int:
     p = argparse.ArgumentParser(prog="python -m hkestate.geo")
     p.add_argument("--db", default=None)
     p.add_argument("--limit", type=int, default=None)
+    p.add_argument("--stations-only", action="store_true",
+                   help="only load MTR stations and set distances (no building geocoding)")
     args = p.parse_args(argv)
     log = _logger("geo")
     with db.session(args.db) as con:
@@ -274,7 +339,7 @@ def main(argv=None) -> int:
     try:
         with Fetcher() as f:
             load_stations(f, args.db, log)
-            stats = geocode_buildings(f, args.db, log, args.limit)
+            stats = {} if args.stations_only else geocode_buildings(f, args.db, log, args.limit)
         with db.session(args.db) as con:
             n = assign_mtr(con)
             set_building_ages(con)
