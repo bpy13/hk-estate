@@ -199,7 +199,17 @@ Also checked: 輝煌臺 Palatial Crest (single tower, 1996, 198 flats, smaller);
 **28Hse rate limit:** after ~1,600 requests at 1/s it answered 429 and then allowed little
 for a while; the backfill now runs at one request per 4 s (see known-issues).
 
-**Spot-check:** pending (runs after the LOHAS Park load).
+**Idempotency (Task 1.4, 2026-10-16 19:27):** a rerun of `backfill --estates pilot` logged
+"0 rows added to txn_raw". Clean `txn` view count went 120,684 to 120,688 (+4). The +4 are
+Centadata rows fetched at 19:27:25 to 19:27:28, while the background `daily` job was still
+running; they are not from the backfill, which wrote none.
+
+**Spot-check (Task 1.5, 2026-10-16 19:35):** 50/50 matches on price, date, floor, flat and
+area (`scripts/spot_check.py`; report `data/reports/spot_check_20261016.md`).
+
+**LOHAS Park cross-check (Task 1.6, 2026-10-16 19:31):** 57/86 blocks mapped; 2,251 of 14,264
+in-window Centadata deals found in 28Hse, 15.8%. This is far below the other four estates and
+is not yet explained; see open-items.
 
 ## Phase 2 results: pilot listings (2026-10-16)
 

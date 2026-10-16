@@ -160,7 +160,7 @@ Lint: `ruff check .`.
     高層). Market deals are stored too and dropped as duplicates once the registry deal
     for the same building + flat + price (±1%, 90 days) arrives. Some deals are marked
     連車位 (price includes a parking space); kept in `raw_json` for now (open item).
-- [ ] **Task 1.4: Pilot backfill, idempotent**
+- [x] **Task 1.4: Pilot backfill, idempotent**
   - Status 2026-10-16 12:30: Taikoo Shing, Mei Foo, City One and Goldwin Heights loaded;
     LOHAS Park (22 developments on 28Hse) loading, 7 of 22. Tests for rerun/resume pass.
     28Hse rate-limits (429) long runs: requests now every 4 s with 15-minute cool-downs,
@@ -171,7 +171,7 @@ Lint: `ruff check .`.
     - a second run adds 0 rows to `txn` (the test proves this on fixtures, the live run
       confirms it)
     - an interrupted run resumes from `run_log`.
-- [ ] **Task 1.5: Spot-check**
+- [x] **Task 1.5: Spot-check**
   - Files: `scripts/spot_check.py`, result note in `docs/sources.md`.
   - Done when: 50 random pilot rows match the live site on price, date, floor, flat and area
     (50/50). Mismatches are fixed or explained.

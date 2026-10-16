@@ -118,5 +118,11 @@ cache pruning.)*
   are excluded by decision. Before Phase 4, apply the coverage filter to SRPE developments
   (9-column house registers, or the master list's house flag) so they never enter comparables
   or growth pairs.
+- **Task 1.6 check failed: LOHAS Park Centadata match rate 15.8%** (2026-10-16 19:31, not
+  ticked). Exact output from `hkestate crosscheck --estates lohas-park`:
+  `lohas-park: 57/86 blocks mapped, 2251/14264 Centadata deals since 2018 found in 28Hse (15.8%), dates {'near': 27, 'registration': 2223, 'instrument': 1}, 14562 Centadata-only rows added`
+  Report: `data/reports/crosscheck_20261016.md` (lists the 29 unmapped Centadata blocks). The
+  other four pilot estates are 93.8-99.6%. Likely cause: 28Hse's LOHAS Park block mapping
+  (57 of 86), not a data error, but unconfirmed. Needs a look before Task 1.6 can be ticked.
 
 ## Later
