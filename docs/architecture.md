@@ -57,6 +57,8 @@ hkestate update (weekly) -> backfill.update_estates: newest 28Hse deal-list page
 | `listings.py` | listing storage, snapshots, delisting, relisting links |
 | `match.py` | listing → building (manual / single / exact / range / contains / fuzzy), floor band, cross-site duplicates |
 | `flags.py`, `keywords.yml` | keyword risk flags with negations |
+| `link.py` | links 28Hse estates/buildings (`h28-`) to master ones (`cd-`) in `source_map` and `hse28_estate`; `txn_all` reads it so both sources' deals share one unit |
+| `hse28_territory.py` | territory 28Hse backfill: estate list (sitemap, CSV, listing cards), largest-first order, resumable run |
 | `locks.py` | job lock files (`hse28`, `listings`) |
 | `maintenance.py` | deletes cached listing pages 7+ days old |
 | `cli.py` | `hkestate` command |

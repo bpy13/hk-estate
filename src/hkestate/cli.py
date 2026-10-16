@@ -4,6 +4,8 @@
     hkestate listings [--sources centanet,hse28,spacious]      listing snapshots
     hkestate daily                                              scheduled: listings + prune
     hkestate update                                             scheduled weekly: new deals
+    hkestate backfill-territory [--discover]   28Hse, whole territory, largest first
+    hkestate link-ids                          match 28Hse ids to master ids
     hkestate status
 
 Every run is logged to data/logs/<command>_<time>.log and to `run_log` in the database.
@@ -223,6 +225,51 @@ def cmd_master(args) -> int:
     return 0
 
 
+def cmd_link_ids(args) -> int:
+    """Match 28Hse ids to master ids (pilot, estate names, buildings already loaded)."""
+    from hkestate import link
+
+    log = _logger("link")
+    with db.session(args.db) as con:
+        res = link.link_all(con)
+    log(f"linked: {res}")
+    return 0
+
+
+def cmd_backfill_territory(args) -> int:
+    """Territory-wide 28Hse backfill, largest estates first, resumable (Task 3.2)."""
+    from hkestate import hse28_territory as ht
+    from hkestate.fetch import Fetcher
+
+    log = _logger("backfill_territory")
+    try:
+        with locks.hold("hse28"):
+            with db.session(args.db) as con:
+                db.init_db(con)
+                from hkestate import link
+                link.ensure_tables(con)
+                added = ht.add_estates(con, ht.read_csv(), "csv")
+                added += ht.add_estates(con, ht.refs_from_listings(con), "listings")
+            if args.discover:
+                with Fetcher(min_interval=4.0) as f:
+                    refs = ht.discover(f, log)
+                with db.session(args.db) as con:
+                    added += ht.add_estates(con, refs, "sitemap")
+            with db.session(args.db) as con:
+                total = con.execute("SELECT count(*) FROM hse28_estate").fetchone()[0]
+            log(f"{added} estates added to the index, {total} in all")
+            if total == 0:
+                log("no 28Hse estates known: rerun with --discover, or put id,name rows in "
+                    "data/manual/hse28_estates.csv")
+                return 1
+            ht.run_territory(db_path=args.db, log=log, order=args.order,
+                             mapped_only=args.mapped_only, skip_flats=args.skip_flats,
+                             max_estates=args.max_estates, max_hours=args.max_hours)
+    except locks.LockBusy as e:
+        log(f"not started: {e}")
+        return 1
+    return 0
+
 def cmd_status(args) -> int:
     with db.session(args.db) as con:
         db.init_db(con)
@@ -270,6 +317,21 @@ def main(argv: list[str] | None = None) -> int:
     m.add_argument("--limit", type=int, default=None, help="only the next N estates (testing)")
     m.set_defaults(func=cmd_master)
 
+    lk = sub.add_parser("link-ids", help="link 28Hse estates/buildings to master ids")
+    lk.set_defaults(func=cmd_link_ids)
+
+    bt = sub.add_parser("backfill-territory",
+                        help="territory-wide 28Hse backfill, largest estates first (resumable)")
+    bt.add_argument("--discover", action="store_true",
+                    help="first read 28Hse's sitemap for the estate list (a few requests)")
+    bt.add_argument("--order", choices=["flats", "deals", "id"], default="flats",
+                    help="largest first by Centadata flats (default) or latest-deal count")
+    bt.add_argument("--mapped-only", action="store_true",
+                    help="only estates matched to the master list")
+    bt.add_argument("--skip-flats", action="store_true", help="skip the 2018-2021 per-flat pass")
+    bt.add_argument("--max-estates", type=int, default=None, help="stop after N estates")
+    bt.add_argument("--max-hours", type=float, default=None, help="stop after N hours")
+    bt.set_defaults(func=cmd_backfill_territory)
     s = sub.add_parser("status", help="recent runs and row counts")
     s.set_defaults(func=cmd_status)
 

@@ -72,9 +72,18 @@ cache pruning.)*
   are missing. (c) SRPE deals dedupe only against rows under the same building id (cd-
   buildings), not pilot 28Hse ids. (d) Rerun `python -m hkestate.sources.srpe` after the
   master pass and geocoding so unmatched developments get buildings.
-- **Master list vs 28Hse ids (for Task 3.2).** Territory buildings carry `cd-` ids, the 28Hse
-  backfill mints `h28-` ids; link them (name/address, via `source_map`) so the duplicate rule
-  can pair their deals.
+- [x] **Master list vs 28Hse ids (for Task 3.2).** *(Done 2026-10-16: `src/hkestate/link.py`,
+  `hkestate link-ids`. `source_map` links each 28Hse building to its master building and
+  `txn_all` uses it, so both sources' deals share a unit. Pilot: 17,917 Centadata deals sit on
+  known pilot units, 399 on flats that also have 28Hse deals.)*
+- **28Hse estate list for the territory is not fetched yet (Task 3.2).** `hkestate
+  backfill-territory --discover` reads 28Hse's sitemap index (named in its robots.txt) and
+  follows only child sitemaps with "estate" in the address; that layout is unverified because no
+  request to www.28hse.com may be made while the LOHAS Park backfill runs. If it finds nothing,
+  the log lists the child sitemaps; fall back to `data/manual/hse28_estates.csv` (`id,name`) or
+  the estates named on 28Hse listing cards. Name matching to Centadata (exact, or a whole-estate
+  name against phases) is untested on real territory data until both lists exist: check the
+  `hse28_estate.match_status` counts after the first `--discover`.
 - **Subsidised estates with no current listing** carry no HOS/TPS flag on Centadata and pass
   the coverage filter; use `data/manual/master_overrides.csv`.
 

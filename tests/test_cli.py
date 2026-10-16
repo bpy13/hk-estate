@@ -36,3 +36,19 @@ def test_status_runs_on_a_small_db(tmp_path, capsys):
     assert cli.cmd_status(SimpleNamespace(db=str(path))) == 0
     out = capsys.readouterr().out
     assert "test-group 1 1" in out
+
+
+def test_link_ids_runs_on_an_empty_db(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("HKESTATE_DATA_DIR", str(tmp_path))
+    path = tmp_path / "t.duckdb"
+    assert cli.cmd_link_ids(SimpleNamespace(db=str(path))) == 0
+    assert "linked:" in capsys.readouterr().out
+
+
+def test_backfill_territory_without_any_estate_asks_for_a_list(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("HKESTATE_DATA_DIR", str(tmp_path))
+    args = SimpleNamespace(db=str(tmp_path / "t.duckdb"), discover=False, order="flats",
+                           mapped_only=False, skip_flats=False, max_estates=None,
+                           max_hours=None)
+    assert cli.cmd_backfill_territory(args) == 1
+    assert "no 28Hse estates known" in capsys.readouterr().out

@@ -257,6 +257,11 @@ Lint: `ruff check .`.
   - Done when: the backfill completes, resuming across runs, and `scripts/coverage.py`
     writes per-estate coverage (first deal year, deal count) to `data/reports/coverage.csv`.
   - Notes: run it in the background in chunks and record elapsed time.
+  - Status 2026-10-16 (unticked, not started): ready to run. `src/hkestate/link.py` (28Hse ids
+    to master ids), `src/hkestate/hse28_territory.py` (estate list, largest-first order,
+    resumable run). Start with `conda run -n hk-estate hkestate backfill-territory --discover`
+    once the LOHAS Park backfill has finished (it holds the `hse28` lock); rerun the same command
+    to resume; `--max-hours 8` runs it in chunks. `scripts/coverage.py` is still to write.
 - [ ] **Task 3.3: Geocoding and location attributes**
   - Done when:
     - each building has coordinates from the Address Lookup Service (≥95%)

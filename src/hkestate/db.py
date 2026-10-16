@@ -305,11 +305,15 @@ VIEWS_DDL = [
     CREATE OR REPLACE VIEW txn_all AS
     WITH base AS (
         -- 28Hse dates Land Registry deals by registration date (Centadata cross-check)
+        -- a 28Hse deal in a building linked to a master (Centadata) building takes that
+        -- building's id, so both sources' deals share one unit (src/hkestate/link.py)
         SELECT t.* REPLACE (
                 coalesce(t.registration_date,
                          CASE WHEN t.source = 'hse28' AND t.deal_type = 'registry'
-                              THEN t.deal_date END) AS registration_date),
-            t.building_id || '|' || t.floor_label || '|' || t.flat AS unit_id,
+                              THEN t.deal_date END) AS registration_date,
+                coalesce(sm.master_id, t.building_id) AS building_id),
+            coalesce(sm.master_id, t.building_id) || '|' || t.floor_label || '|' || t.flat
+                AS unit_id,
             {SOURCE_RANK_SQL} AS source_rank,
             CASE
                 WHEN t.saleable_sqft > 0 THEN t.saleable_sqft
@@ -323,7 +327,10 @@ VIEWS_DDL = [
                 WHEN t.gross_sqft > 0 THEN 'gross_only'
             END AS area_basis
         FROM txn_latest t
-        LEFT JOIN building b USING (building_id)
+        LEFT JOIN building b ON b.building_id = t.building_id
+        LEFT JOIN (SELECT source_key, master_id FROM source_map
+                   WHERE source = 'hse28' AND kind = 'building') sm
+          ON t.source = 'hse28' AND sm.source_key = t.building_id
     ),
     dup AS (  -- the same sale reported again (agency report, other source): keep best copy
         SELECT DISTINCT a.source, a.source_id
