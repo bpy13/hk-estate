@@ -161,6 +161,8 @@ TABLES_DDL = [
         non_market        BOOLEAN DEFAULT false,
         raw_json          VARCHAR             -- every parsed field, as the source gave it
     )""",
+    # Listings. No column ever holds an agent's name, phone, licence or agency (PDPO; a test
+    # checks the column names). Free text (titles, blurbs) is read for keyword flags only.
     """
     CREATE TABLE IF NOT EXISTS listing_raw (
         source        VARCHAR NOT NULL,
@@ -182,6 +184,38 @@ TABLES_DDL = [
         saleable_sqft DOUBLE,
         status        VARCHAR,
         PRIMARY KEY (source, listing_id, snapshot_date)
+    )""",
+    # Current state of each listing (one row per source + id), rebuilt by every run.
+    """
+    CREATE TABLE IF NOT EXISTS listing (
+        source        VARCHAR NOT NULL,
+        listing_id    VARCHAR NOT NULL,
+        kind          VARCHAR,               -- sale, rent
+        group_name    VARCHAR,               -- pilot estate group the run was reading
+        url           VARCHAR,
+        building_text VARCHAR,
+        building_id   VARCHAR,               -- master building, NULL if not matched
+        match_method  VARCHAR,               -- single, exact, fuzzy, manual, ambiguous, none
+        floor_band    VARCHAR,               -- low, mid, high, unknown
+        flat          VARCHAR,
+        price_hkd     BIGINT,
+        saleable_sqft DOUBLE,
+        first_seen    DATE,
+        last_seen     DATE,
+        status        VARCHAR,               -- active, delisted
+        delisted_on   DATE,
+        relist_of     VARCHAR,               -- earlier listing id of the same flat (same source)
+        dup_group     VARCHAR,               -- cross-site duplicates share this key
+        last_detail_at TIMESTAMP,            -- last detail-page read
+        PRIMARY KEY (source, listing_id)
+    )""",
+    # Days on which a source's listing run covered its whole scope (for delisting).
+    """
+    CREATE TABLE IF NOT EXISTS listing_run_day (
+        source      VARCHAR NOT NULL,
+        scope       VARCHAR NOT NULL,        -- estate group
+        run_date    DATE NOT NULL,           -- HK date
+        PRIMARY KEY (source, scope, run_date)
     )""",
     # RVD series share one shape. price_index: price indices, popular developments, average
     # prices. rent_index: rental indices, average rents. market_stat: completions, stock,
@@ -359,9 +393,38 @@ VIEWS_DDL = [
 ]
 
 
+# Parsed listing fields kept as columns of listing_raw (added in Phase 2; ALTERed onto
+# databases created before it). Never an agent name, phone, licence or agency.
+LISTING_RAW_COLUMNS = {
+    "kind": "VARCHAR",
+    "scope": "VARCHAR",
+    "page_type": "VARCHAR",
+    "estate_name": "VARCHAR",
+    "building_text": "VARCHAR",
+    "floor_text": "VARCHAR",
+    "floor_range": "VARCHAR",
+    "flat": "VARCHAR",
+    "price_hkd": "BIGINT",
+    "saleable_sqft": "DOUBLE",
+    "gross_sqft": "DOUBLE",
+    "rooms": "INTEGER",
+    "facing": "VARCHAR",
+    "age_years": "INTEGER",
+    "posted_date": "DATE",
+    "updated_date": "DATE",
+    "features": "VARCHAR",
+    "source_estate_key": "VARCHAR",
+    "source_building_key": "VARCHAR",
+}
+
+
 def init_db(con: duckdb.DuckDBPyConnection) -> None:
     """Create every table and view. Safe to run again: existing data is kept."""
-    for ddl in TABLES_DDL + VIEWS_DDL:
+    for ddl in TABLES_DDL:
+        con.execute(ddl)
+    for col, typ in LISTING_RAW_COLUMNS.items():
+        con.execute(f"ALTER TABLE listing_raw ADD COLUMN IF NOT EXISTS {col} {typ}")
+    for ddl in VIEWS_DDL:
         con.execute(ddl)
 
 

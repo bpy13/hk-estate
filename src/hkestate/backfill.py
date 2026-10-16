@@ -136,8 +136,10 @@ def match_building(location: str, buildings: dict[str, tuple[str, str]]) -> str 
 
 
 class _Loader:
-    def __init__(self, fetcher, db_path, log: Log, run_id: int, pause=time.sleep):
+    def __init__(self, fetcher, db_path, log: Log, run_id: int, pause=time.sleep,
+                 page_type: str = "transaction"):
         self.pause = pause
+        self.page_type = page_type  # cache lifetime: 'listing' (1 day) forces a fresh read
         self.f = fetcher
         self.db_path = db_path
         self.log = log
@@ -152,7 +154,7 @@ class _Loader:
         tries the run stops with SourceBusy (rerun later: it resumes)."""
         for attempt in range(1, BUSY_LIMIT + 1):
             try:
-                return self.f.get(url, "transaction")
+                return self.f.get(url, self.page_type)
             except httpx.TransportError as e:
                 reason = type(e).__name__
             except FetchError as e:
@@ -437,6 +439,64 @@ class _Loader:
                 """,
                 [estate_id(ref)],
             )
+
+
+UPDATE_PAGE_CAP = 50  # a week brings a few pages per estate; this is a safety stop
+
+
+def update_estates(
+    estates: dict[str, list[EstateRef]],
+    *,
+    fetcher=None,
+    db_path: Path | str | None = None,
+    log: Log = print,
+    pause=time.sleep,
+) -> int:
+    """Weekly refresh: read each loaded estate's deal list from page 1 (a fresh copy, not the
+    7-day cache) and stop at the first page that adds nothing new. Estates the backfill has
+    not loaded yet are skipped (the backfill picks them up). Returns rows added."""
+    with db.session(db_path) as con:
+        db.init_db(con)
+        run_id = db.start_run(con, "update", json.dumps(sorted(estates), ensure_ascii=False))
+    own_fetcher = fetcher is None
+    fetcher = fetcher or Fetcher(min_interval=BACKFILL_MIN_INTERVAL_S)
+    loader = _Loader(fetcher, db_path, log, run_id, pause=pause, page_type="listing")
+    status, message = "ok", ""
+    try:
+        for group, refs in estates.items():
+            for ref in refs:
+                buildings = loader._buildings(ref)
+                if not buildings:
+                    log(f"{group}: {ref.name} not loaded yet; skipped (run the backfill)")
+                    continue
+                url: str | None = ref.list_url(1)
+                pages = added = 0
+                while url and pages < UPDATE_PAGE_CAP:
+                    try:
+                        page = hse28.parse_list_page(loader.get(url))
+                    except FetchError as e:
+                        log(f"  {ref.name}: list page failed ({e.status}): {url}")
+                        break
+                    pages += 1
+                    n = loader.insert([loader._list_row(ref, r, url, buildings)
+                                       for r in page.rows])
+                    added += n
+                    if n == 0:
+                        break  # everything on this page is already stored
+                    url = page.next_url
+                log(f"{group}: {ref.name}: {pages} pages, {added} new rows")
+    except SourceBlocked as e:
+        status, message = "failed", f"source blocked: {e}"
+        log(message)
+    except BaseException as e:
+        status, message = "failed", f"{type(e).__name__}: {e}"
+        raise
+    finally:
+        with db.session(db_path) as con:
+            db.finish_run(con, run_id, status, loader.rows_added, message)
+        if own_fetcher:
+            fetcher.close()
+    return loader.rows_added
 
 
 def backfill_estates(

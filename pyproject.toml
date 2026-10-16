@@ -25,6 +25,7 @@ dependencies = [
     "rapidfuzz>=3.9",
     "opencc-python-reimplemented>=0.1.7",
     "xlrd>=2.0",  # RVD publishes legacy .xls files
+    "pyyaml>=6.0",  # keyword list for listing flags
 ]
 
 [project.scripts]
@@ -35,6 +36,9 @@ dev = ["pytest>=8", "ruff>=0.5", "nbstripout>=0.7"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+hkestate = ["keywords.yml"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

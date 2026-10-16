@@ -1,0 +1,30 @@
+# Risk and feature flags read from listing text (titles, blurbs, feature tags).
+# A flag is set when a term appears outside every negation phrase; a negated mention
+# ("非凶宅") does not hide another, real mention in the same text. English is matched
+# without regard to case. Evidence stored with a flag is the matched term only.
+# Plan Task 2.4 seed terms; add terms here, no code change needed.
+
+haunted:
+  terms: [凶宅, 兇宅, haunted]
+  negations: [非凶宅, 非兇宅, 不是凶宅, 不是兇宅, 並非凶宅, 並非兇宅, 絕非凶宅, 無凶宅, 冇凶宅,
+              沒有凶宅, not haunted, non-haunted]
+
+tenanted:
+  terms: [連租約, 連租, 連約, tenanted, with tenancy, with tenant]
+  negations: [不連租約, 不連租, 唔連租, 非連租, not tenanted]
+
+sea_view:
+  terms: [海景, sea view, seaview, harbour view, harbor view]
+  negations: [無海景, 沒有海景, 冇海景, 非海景, no sea view]
+
+renovated:
+  terms: [全新裝修, 新裝修, 靚裝, 豪華裝修, renovated, newly decorated]
+  negations: [需裝修, 要裝修, 未裝修, not renovated]
+
+illegal_structure:
+  terms: [僭建, illegal structure, unauthorised structure, unauthorized structure]
+  negations: [無僭建, 沒有僭建, 冇僭建, 非僭建, 不涉僭建, no illegal structure]
+
+studio:
+  terms: [開放式, studio]
+  negations: [開放式廚房, 開放式廚, 開放式設計, open kitchen]

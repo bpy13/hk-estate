@@ -1,6 +1,9 @@
 """`hkestate` command line.
 
     hkestate backfill --estates taikoo-shing,goldwin-heights   (or --estates pilot)
+    hkestate listings [--sources centanet,hse28,spacious]      listing snapshots
+    hkestate daily                                              scheduled: listings + prune
+    hkestate update                                             scheduled weekly: new deals
     hkestate status
 
 Every run is logged to data/logs/<command>_<time>.log and to `run_log` in the database.
@@ -12,7 +15,7 @@ import argparse
 import sys
 from datetime import datetime
 
-from hkestate import db
+from hkestate import db, locks
 from hkestate.config import get_data_dir
 
 
@@ -43,14 +46,116 @@ def cmd_backfill(args) -> int:
         print(f"unknown estates {unknown}; known: {', '.join(PILOT_ESTATES)}", file=sys.stderr)
         return 2
     log = _logger("backfill")
-    added = backfill_estates(
-        {n: PILOT_ESTATES[n] for n in names},
-        db_path=args.db,
-        log=log,
-        refresh=args.refresh,
-        skip_flats=args.skip_flats,
-    )
+    try:
+        # the lock tells the daily listing job to leave 28Hse alone while this runs
+        with locks.hold("hse28"):
+            added = backfill_estates(
+                {n: PILOT_ESTATES[n] for n in names},
+                db_path=args.db,
+                log=log,
+                refresh=args.refresh,
+                skip_flats=args.skip_flats,
+            )
+    except locks.LockBusy as e:
+        log(f"not started: {e}")
+        return 1
     log(f"done: {added} rows added to txn_raw")
+    return 0
+
+
+def cmd_update(args) -> int:
+    """Weekly transaction refresh (newest 28Hse deal-list pages)."""
+    from hkestate.backfill import PILOT_ESTATES, update_estates
+
+    names = list(PILOT_ESTATES) if args.estates == "pilot" else args.estates.split(",")
+    log = _logger("update")
+    try:
+        with locks.hold("hse28"):
+            added = update_estates({n: PILOT_ESTATES[n] for n in names}, db_path=args.db,
+                                   log=log)
+    except locks.LockBusy as e:
+        # a backfill is reading 28Hse: it will pick up the newest deals itself
+        log(f"skipped: {e}")
+        with db.session(args.db) as con:
+            db.init_db(con)
+            run_id = db.start_run(con, "update", ",".join(names))
+            db.finish_run(con, run_id, "skipped", 0, str(e))
+        return 0
+    log(f"done: {added} rows added to txn_raw")
+    return 0
+
+
+def _listings(args, command: str, sources: list[str], prune: bool) -> int:
+    """Shared by `listings` and `daily`: one listing run, logged to run_log and a log file."""
+    import json
+
+    from hkestate import listing_run, maintenance
+    from hkestate.fetch import _hk_today
+
+    groups = list(listing_run.PILOT) if args.estates == "pilot" else args.estates.split(",")
+    unknown = [g for g in groups if g not in listing_run.PILOT]
+    if unknown:
+        print(f"unknown estates {unknown}; known: {', '.join(listing_run.PILOT)}",
+              file=sys.stderr)
+        return 2
+    log = _logger(command)
+    with db.session(args.db) as con:
+        db.init_db(con)
+        run_id = db.start_run(con, command, f"{','.join(groups)} / {','.join(sources)}")
+    status, message, rows = "failed", "", 0
+    try:
+        with locks.hold("listings"):
+            summary = listing_run.run_listings(groups, sources, db_path=args.db, log=log)
+        for src, per_group in summary["sources"].items():
+            for g, s in per_group.items():
+                log(f"{src} {g}: {s}")
+        for g, mres in summary["match"].items():
+            rate = mres["matched"] / mres["listings"] if mres["listings"] else 0
+            log(f"match {g}: {mres['matched']}/{mres['listings']} ({rate:.0%}) {mres['methods']}")
+        if prune:
+            removed = maintenance.prune_listing_cache(
+                get_data_dir() / "cache", today=_hk_today()
+            )
+            log(f"cache: {removed} listing pages older than "
+                f"{maintenance.KEEP_DAYS} days deleted")
+        rows = sum(s["new"] for pg in summary["sources"].values() for s in pg.values())
+        skipped = [f"{src}/{g}: {s['note']}" for src, pg in summary["sources"].items()
+                   for g, s in pg.items() if s.get("note")]
+        status = "ok" if not skipped else "partial"
+        message = json.dumps({"elapsed_s": summary["elapsed_s"], "notes": skipped[:5],
+                              "match": {g: [m["matched"], m["listings"]]
+                                        for g, m in summary["match"].items()}},
+                             ensure_ascii=False)
+    except locks.LockBusy as e:
+        status, message = "skipped", str(e)
+        log(f"skipped: {e}")
+    except Exception as e:
+        message = f"{type(e).__name__}: {e}"
+        log(message)
+        raise
+    finally:
+        with db.session(args.db) as con:
+            db.finish_run(con, run_id, status, rows, message)
+    log(f"{command}: {status}")
+    return 0 if status in ("ok", "partial", "skipped") else 1
+
+
+def cmd_listings(args) -> int:
+    return _listings(args, "listings", args.sources.split(","), prune=False)
+
+
+def cmd_daily(args) -> int:
+    """The scheduled daily job: every listing source, then prune old cached listing pages."""
+    return _listings(args, "daily", ["centanet", "hse28", "spacious"], prune=True)
+
+
+def cmd_prune(args) -> int:
+    from hkestate import maintenance
+    from hkestate.fetch import _hk_today
+
+    removed = maintenance.prune_listing_cache(get_data_dir() / "cache", today=_hk_today(),
+                                              keep_days=args.days)
+    print(f"{removed} cached listing pages deleted")
     return 0
 
 
@@ -167,6 +272,23 @@ def main(argv: list[str] | None = None) -> int:
 
     s = sub.add_parser("status", help="recent runs and row counts")
     s.set_defaults(func=cmd_status)
+
+    li = sub.add_parser("listings", help="snapshot listings (Centanet, 28Hse, Spacious)")
+    li.add_argument("--estates", default="pilot", help="comma-separated groups, or 'pilot'")
+    li.add_argument("--sources", default="centanet,hse28,spacious")
+    li.set_defaults(func=cmd_listings)
+
+    d = sub.add_parser("daily", help="scheduled daily job: all listing sources + cache prune")
+    d.add_argument("--estates", default="pilot", help="comma-separated groups, or 'pilot'")
+    d.set_defaults(func=cmd_daily)
+
+    u = sub.add_parser("update", help="weekly refresh of the newest 28Hse deals")
+    u.add_argument("--estates", default="pilot", help="comma-separated names, or 'pilot'")
+    u.set_defaults(func=cmd_update)
+
+    pr = sub.add_parser("prune-cache", help="delete cached listing pages older than N days")
+    pr.add_argument("--days", type=int, default=7)
+    pr.set_defaults(func=cmd_prune)
 
     args = p.parse_args(argv)
     return args.func(args)
