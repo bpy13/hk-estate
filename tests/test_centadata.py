@@ -216,3 +216,10 @@ def test_flat_label_carrying_the_street_number_picks_the_building(tmp_path):
         assert con.execute(
             "SELECT building_id, flat FROM txn_raw WHERE source = 'centadata'"
         ).fetchall() == [("b1", "C")]
+
+
+def test_placeholder_1900_dates_are_treated_as_missing():
+    html = page().replace('insDate:"2019-05-17T00:00:00"', 'insDate:"1900-01-01T00:00:00"')
+    d = cd.parse_block_page(html).deals[0]
+    assert d.instrument_date is None
+    assert d.registration_date == date(2019, 6, 10)

@@ -232,7 +232,8 @@ class BlockPage:
 def _d(text) -> date | None:
     if not text:
         return None
-    return datetime.fromisoformat(str(text)[:10]).date()
+    d = datetime.fromisoformat(str(text)[:10]).date()
+    return d if d.year >= 1950 else None  # Centadata uses 1900-01-01 for "unknown"
 
 
 def _area(v) -> float | None:
