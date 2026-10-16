@@ -95,10 +95,13 @@ def _listings(args, command: str, sources: list[str], prune: bool) -> int:
     from hkestate import listing_run, maintenance
     from hkestate.fetch import _hk_today
 
-    groups = list(listing_run.PILOT) if args.estates == "pilot" else args.estates.split(",")
-    unknown = [g for g in groups if g not in listing_run.PILOT]
+    pilot = list(listing_run.PILOT)
+    groups = {"pilot": pilot, "all": [*pilot, listing_run.TERRITORY],
+              "territory": [listing_run.TERRITORY]}.get(args.estates) or args.estates.split(",")
+    known = [*pilot, listing_run.TERRITORY]
+    unknown = [g for g in groups if g not in known]
     if unknown:
-        print(f"unknown estates {unknown}; known: {', '.join(listing_run.PILOT)}",
+        print(f"unknown estates {unknown}; known: pilot, all, territory, {', '.join(known)}",
               file=sys.stderr)
         return 2
     log = _logger(command)
@@ -108,7 +111,9 @@ def _listings(args, command: str, sources: list[str], prune: bool) -> int:
     status, message, rows = "failed", "", 0
     try:
         with locks.hold("listings"):
-            summary = listing_run.run_listings(groups, sources, db_path=args.db, log=log)
+            summary = listing_run.run_listings(
+                groups, sources, db_path=args.db, log=log,
+                centanet_budget=args.centanet_budget, spacious_budget=args.spacious_budget)
         for src, per_group in summary["sources"].items():
             for g, s in per_group.items():
                 log(f"{src} {g}: {s}")
@@ -312,6 +317,17 @@ def cmd_status(args) -> int:
     return 0
 
 
+def _budgets(parser) -> None:
+    from hkestate import listing_run
+
+    parser.add_argument("--centanet-budget", type=int,
+                        default=listing_run.CENTANET_TERRITORY_BUDGET,
+                        help="territory detail pages read per run (new listings first)")
+    parser.add_argument("--spacious-budget", type=int,
+                        default=listing_run.SPACIOUS_TERRITORY_BUDGET,
+                        help="territory Spacious building pages read per run")
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="hkestate")
     p.add_argument("--db", default=None, help="database file (default data/hkestate.duckdb)")
@@ -359,12 +375,16 @@ def main(argv: list[str] | None = None) -> int:
     s.set_defaults(func=cmd_status)
 
     li = sub.add_parser("listings", help="snapshot listings (Centanet, 28Hse, Spacious)")
-    li.add_argument("--estates", default="pilot", help="comma-separated groups, or 'pilot'")
+    li.add_argument("--estates", default="pilot",
+                    help="comma-separated groups, or pilot / territory / all")
+    _budgets(li)
     li.add_argument("--sources", default="centanet,hse28,spacious")
     li.set_defaults(func=cmd_listings)
 
     d = sub.add_parser("daily", help="scheduled daily job: all listing sources + cache prune")
-    d.add_argument("--estates", default="pilot", help="comma-separated groups, or 'pilot'")
+    d.add_argument("--estates", default="all",
+                   help="comma-separated groups, or pilot / territory / all (default)")
+    _budgets(d)
     d.set_defaults(func=cmd_daily)
 
     u = sub.add_parser("update", help="weekly refresh of the newest 28Hse deals")

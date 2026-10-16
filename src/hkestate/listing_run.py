@@ -41,6 +41,12 @@ MAX_ERROR_SHARE = 0.05  # more failed pages than this: the run doesn't count for
 # processes at 2 s each keep the host at about 1 request a second in total.
 CENTANET_MIN_INTERVAL_S = 2.0
 
+TERRITORY = "territory"  # every estate outside the pilot groups
+# Detail pages / building pages read per run for the territory (politeness and run length:
+# Centanet at 2 s is ~4.5 h for 8,000 pages; Spacious at 1 s is ~1.7 h for 6,000).
+CENTANET_TERRITORY_BUDGET = 8000
+SPACIOUS_TERRITORY_BUDGET = 6000
+
 SP = "https://www.spacious.hk/zh-tw/%E9%A6%99%E6%B8%AF/n/"
 SP_SALE = "/%E8%B2%B7%E6%A8%93"  # 買樓
 
@@ -101,7 +107,11 @@ def match_text(lst_estate: str | None, building_text: str | None) -> str | None:
 
 class ListingRun:
     def __init__(self, *, db_path=None, log: Log = print, fetcher=None, hse28_fetcher=None,
-                 now: datetime | None = None, today: date | None = None):
+                 now: datetime | None = None, today: date | None = None,
+                 centanet_budget: int = CENTANET_TERRITORY_BUDGET,
+                 spacious_budget: int = SPACIOUS_TERRITORY_BUDGET):
+        self.centanet_budget = centanet_budget
+        self.spacious_budget = spacious_budget
         self.db_path = db_path
         self.log = log
         self.now = now or datetime.now()
@@ -156,7 +166,9 @@ class ListingRun:
     # ---- Centanet --------------------------------------------------------------------------
 
     def centanet(self, groups: list[str]) -> None:
-        prefixes = {name: g for g in groups for name in PILOT[g].centanet}
+        # every pilot estate name is recognised, so the territory never takes a pilot listing
+        prefixes = {name: g for g, t in PILOT.items() for name in t.centanet}
+        territory = TERRITORY in groups
         try:
             xml = self.centanet_fetcher.get(centanet.SITEMAP_URL, "listing")
         except (FetchError, SourceBlocked, RobotsDisallowed, httpx.TransportError) as e:
@@ -164,12 +176,13 @@ class ListingRun:
             for g in groups:
                 self.results.append(SourceResult("centanet", g, complete=False, note=str(e)))
             return
-        entries = centanet.sitemap_entries(xml, prefixes)
+        entries = centanet.sitemap_entries(xml, prefixes,
+                                           TERRITORY if territory else None)
         known = self._known("centanet")
         blocked = False
         for g in groups:
             res = SourceResult("centanet", g)
-            mine = [e for e in entries if e.group == g]
+            mine = [e for e in entries if e.group == g]  # (entries of unrequested groups: skipped)
             new = [e for e in mine if e.listing_id not in known or known[e.listing_id][0] is None]
             new_ids = {e.listing_id for e in new}
             old = sorted(
@@ -182,6 +195,8 @@ class ListingRun:
             stale = [e for e in old[quota:]
                      if (self.now - known[e.listing_id][0]).days >= ROTATE_DAYS]
             todo = new + old[:quota] + stale
+            if g == TERRITORY:  # new listings first, then the oldest-read; the rest tomorrow
+                todo = todo[: self.centanet_budget]
             self.log(f"centanet {g}: {len(mine)} live, {len(new)} new, "
                      f"{len(todo) - len(new)} re-read")
             batch: list[Listing] = []
@@ -239,6 +254,11 @@ class ListingRun:
     # ---- 28Hse ------------------------------------------------------------------------------
 
     def hse28(self, groups: list[str]) -> None:
+        if TERRITORY in groups:
+            self.log("hse28: territory listings are not read yet (pilot estates only)")
+            groups = [g for g in groups if g in PILOT]
+        if not groups:
+            return
         holder = locks.held_by("hse28")
         if holder is not None:
             note = f"skipped: another 28Hse job (process {holder}, e.g. a backfill) is running"
@@ -319,7 +339,10 @@ class ListingRun:
     # ---- Spacious --------------------------------------------------------------------------
 
     def spacious(self, groups: list[str]) -> None:
-        for g in groups:
+        for g in sorted(groups, key=lambda x: x == TERRITORY):  # pilot first, territory last
+            if g == TERRITORY:
+                self._spacious_territory()
+                continue
             res = SourceResult("spacious", g)
             seen: dict[str, Listing] = {}
             try:
@@ -357,13 +380,88 @@ class ListingRun:
             self.log(f"spacious {g}: {len(items)} listings from {res.pages} pages")
             self.results.append(res)
 
+    def _spacious_territory(self) -> None:
+        """Building sale pages (a neighbourhood page shows only its first ~14 listings).
+        Budgeted per run: buildings that had listings first, then never-read ones."""
+        res = SourceResult("spacious", TERRITORY, complete=False)  # own delisting rule
+        today = self.today
+        with db.session(self.db_path) as con:
+            spacious.ensure_tables(con)
+            n = con.execute("SELECT count(*) FROM spacious_building").fetchone()[0]
+            plan = spacious.plan_reads(con, self.spacious_budget) if n else []
+            claimed = {r[0] for r in con.execute(
+                "SELECT listing_id FROM listing WHERE source = 'spacious' AND "
+                "group_name <> ?", [TERRITORY]).fetchall()}
+        if not n:
+            try:
+                pages = self._spacious_building_index()
+            except (FetchError, SourceBlocked, RobotsDisallowed, httpx.TransportError) as e:
+                self.log(f"spacious: building index failed ({type(e).__name__}: {e})")
+                self.results.append(res)
+                return
+            with db.session(self.db_path) as con:
+                added = spacious.add_buildings(con, pages, today)
+                plan = spacious.plan_reads(con, self.spacious_budget)
+            self.log(f"spacious: {added} buildings in the sitemap")
+        pilot_seen = {i for r in self.results if r.source == "spacious" for i in r.seen}
+        seen: dict[str, Listing] = {}
+        for k, (bid, url) in enumerate(plan, 1):
+            try:
+                count = 0
+                for _ in range(3):
+                    page = spacious.parse_search_page(self.fetcher.get(url, "listing"),
+                                                      "sale", url)
+                    mine = [x for x in page.listings if x.source_building_key == str(bid)]
+                    new = [x for x in mine if x.listing_id not in seen]
+                    for x in mine:
+                        if x.listing_id not in claimed and x.listing_id not in pilot_seen:
+                            seen[x.listing_id] = x
+                    count += len(new)
+                    res.pages += 1
+                    if not page.next_url or not new:
+                        break
+                    url = page.next_url
+            except SourceBlocked as e:
+                res.note = f"blocked: {e}"
+                self.log(f"spacious blocked: {e}")
+                break
+            except (FetchError, RobotsDisallowed, httpx.TransportError) as e:
+                res.errors += 1
+                self.log(f"  spacious building {bid}: {e}")
+                continue
+            with db.session(self.db_path) as con:
+                spacious.record_read(con, bid, today, count)
+            if k % 200 == 0:
+                self.log(f"  spacious territory: {k}/{len(plan)} buildings, {len(seen)} listings")
+        items = list(seen.values())
+        for i in range(0, len(items), 500):
+            self._store(TERRITORY, items[i:i + 500], "search")
+        res.parsed = items
+        res.seen = [x.listing_id for x in items]
+        self.log(f"spacious territory: {len(items)} listings from {res.pages} pages")
+        self.results.append(res)
+
+    def _spacious_building_index(self) -> list:
+        f = self.fetcher
+        pages = []
+        for child in spacious.sitemap_children(spacious.gunzip_text(
+                f.get_bytes(spacious.SITEMAP_INDEX, "static"))):
+            pages += spacious.building_sale_pages(
+                spacious.gunzip_text(f.get_bytes(child, "static")))
+        return pages
+
     # ---- bookkeeping -------------------------------------------------------------------------
 
     def finish(self) -> dict:
         """Record what each source saw, delist, match, dedupe, link relistings, flag."""
         summary: dict = {"sources": {}, "match": {}}
+        for res in self.results:
+            if res.group == TERRITORY:
+                self._finish_territory(res, summary)
         with db.session(self.db_path) as con:
             for res in self.results:
+                if res.group == TERRITORY:
+                    continue
                 latest = listings.latest_rows(con, res.source, res.seen)
                 items = [
                     {"listing_id": lid, "kind": r.get("kind"), "url": r.get("url"),
@@ -387,9 +485,52 @@ class ListingRun:
                     **counts, "delisted": delisted, "pages": res.pages, "errors": res.errors,
                     "complete": res.complete, "flags": n_flags, "note": res.note,
                 }
-            groups = sorted({r.group for r in self.results})
+            groups = sorted({r.group for r in self.results if r.group != TERRITORY})
             summary["match"] = match_listings(con, groups, self.today)
+        if any(r.group == TERRITORY for r in self.results):
+            summary["match"][TERRITORY] = match_territory(self.db_path, self.today, self.log)
         return summary
+
+    def _finish_territory(self, res: SourceResult, summary: dict) -> None:
+        """Like `finish` for one source, but in short database sessions of 1,000 listings
+        (a territory is ~60,000 listings; one long session would lock out the other jobs)."""
+        counts = {"new": 0, "seen": 0, "price_change": 0, "relisted": 0}
+        for i in range(0, len(res.seen), 1000):
+            ids = res.seen[i:i + 1000]
+            with db.session(self.db_path) as con:
+                latest = listings.latest_rows(con, res.source, ids)
+                items = [
+                    {"listing_id": lid, "kind": r.get("kind"), "url": r.get("url"),
+                     "price_hkd": r.get("price_hkd"), "saleable_sqft": r.get("saleable_sqft"),
+                     "flat": r.get("flat"),
+                     "building_text": match_text(r.get("estate_name"), r.get("building_text"))}
+                    for lid, r in latest.items()
+                ]
+                for k, v in listings.record_seen(con, res.source, res.group, items, self.today,
+                                                 complete=False).items():
+                    counts[k] += v
+        delisted = 0
+        with db.session(self.db_path) as con:
+            if res.source == "spacious":
+                delisted = spacious.mark_delisted(con, self.today)
+            elif res.complete:
+                con.execute("INSERT OR IGNORE INTO listing_run_day VALUES (?, ?, ?)",
+                            [res.source, res.group, self.today])
+                delisted = listings.mark_delisted(con, res.source, res.group, self.today)
+        read = sorted(res.detail_read)
+        for i in range(0, len(read), 1000):
+            with db.session(self.db_path) as con:
+                con.execute("UPDATE listing SET last_detail_at = ? WHERE source = ? "
+                            "AND listing_id IN (SELECT unnest(?))",
+                            [self.now, res.source, read[i:i + 1000]])
+        n_flags = 0
+        for i in range(0, len(res.parsed), 500):
+            with db.session(self.db_path) as con:
+                n_flags += flags.apply_flags(con, res.parsed[i:i + 500], self.now)
+        summary["sources"].setdefault(res.source, {})[res.group] = {
+            **counts, "delisted": delisted, "pages": res.pages, "errors": res.errors,
+            "complete": res.complete, "flags": n_flags, "note": res.note,
+        }
 
 
 def match_listings(con, groups: list[str], today: date) -> dict:
@@ -461,3 +602,66 @@ def run_listings(groups: list[str], sources: list[str], *, db_path=None, log: Lo
         run.close()
     summary["elapsed_s"] = round(time.monotonic() - t0)
     return summary
+
+
+def match_territory(db_path, today: date, log: Log = print) -> dict:
+    """Match territory listings that have no building yet (new ones, and earlier misses now
+    that the master list has grown), group cross-site duplicates, link relistings. Short
+    sessions of 1,000 listings."""
+    with db.session(db_path) as con:
+        matcher = match.TerritoryMatcher(con)
+        manual = match.load_manual_map()
+        rows = con.execute(
+            """
+            SELECT l.source, l.listing_id, l.building_text, r.estate_name, r.source_building_key,
+                   r.floor_text, r.floor_range
+            FROM listing l LEFT JOIN (
+                SELECT source, listing_id, arg_max(estate_name, fetched_at) AS estate_name,
+                       arg_max(source_building_key, fetched_at) AS source_building_key,
+                       arg_max(floor_text, fetched_at) AS floor_text,
+                       arg_max(floor_range, fetched_at) AS floor_range
+                FROM listing_raw GROUP BY source, listing_id) r USING (source, listing_id)
+            WHERE l.group_name = ? AND l.building_id IS NULL
+            """, [TERRITORY]).fetchall()
+    methods: dict[str, int] = {}
+    matched = 0
+    for i in range(0, len(rows), 1000):
+        updates = []
+        with db.session(db_path) as con:
+            matcher.con = con
+            for src, lid, text, estate, bkey, floor_text, floor_range in rows[i:i + 1000]:
+                bid, how = matcher.match(text, block_key=bkey, estate=estate, source=src,
+                                         manual=manual)
+                band = match.floor_band(floor_text, matcher.top_floor(bid),
+                                        floor_range=floor_range)
+                updates.append([bid, how, band, src, lid])
+                methods[how] = methods.get(how, 0) + 1
+                matched += bid is not None
+            con.executemany("UPDATE listing SET building_id = ?, match_method = ?, "
+                            "floor_band = ? WHERE source = ? AND listing_id = ?", updates)
+    with db.session(db_path) as con:
+        total = con.execute("SELECT count(*), count(building_id) FROM listing "
+                            "WHERE group_name = ?", [TERRITORY]).fetchone()
+        dd = [{"source": s, "listing_id": lid, "kind": k, "building_id": b, "floor_band": fb,
+               "saleable_sqft": a}
+              for s, lid, k, b, fb, a in con.execute(
+                  "SELECT source, listing_id, kind, building_id, floor_band, saleable_sqft "
+                  "FROM listing WHERE group_name = ? AND status = 'active' "
+                  "AND building_id IS NOT NULL", [TERRITORY]).fetchall()]
+    groups_of = match.dedupe(dd)
+    items = list(groups_of.items())
+    for i in range(0, len(items), 2000):
+        with db.session(db_path) as con:
+            con.executemany("UPDATE listing SET dup_group = ? WHERE source = ? AND "
+                            "listing_id = ?", [[k, s, lid] for (s, lid), k in items[i:i + 2000]])
+    with db.session(db_path) as con:
+        for src in ("centanet", "spacious"):
+            listings.relink_relistings(con, src, today)
+        con.execute(
+            "UPDATE listing_snapshot s SET building_id = l.building_id, floor_band = l.floor_band "
+            "FROM listing l WHERE s.source = l.source AND s.listing_id = l.listing_id "
+            "AND s.snapshot_date = ? AND l.group_name = ?", [today, TERRITORY])
+    log(f"territory match: {matched}/{len(rows)} newly matched; "
+        f"{total[1]}/{total[0]} all; {methods}")
+    return {"listings": total[0], "matched": total[1], "methods": methods,
+            "dup_groups": len(set(groups_of.values()))}
