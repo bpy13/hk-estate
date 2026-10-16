@@ -248,3 +248,24 @@ def test_crawl_stops_after_max_hours(tmp_path):
     with db.session(path) as con:
         assert con.execute("SELECT status FROM run_log WHERE command = 'ricacorp'"
                            ).fetchone() == ("partial",)
+
+
+def test_timeout_on_one_page_is_counted_and_the_pass_goes_on(tmp_path):
+    path = tmp_path / "t.duckdb"
+    with db.session(path) as con:
+        db.init_db(con)
+
+    def handler(request):
+        p = request.url.path
+        if p == "/robots.txt":
+            return httpx.Response(200, text="User-agent: *\nDisallow: /api/\n")
+        if p.endswith("sitemap-0.xml"):
+            return httpx.Response(200, text=SITEMAP)
+        if "%E7%A9%BA" in str(request.url):
+            raise httpx.ReadTimeout("slow", request=request)
+        return httpx.Response(200, text=PAGE)
+
+    f = Fetcher(cache_dir=tmp_path / "cache", transport=httpx.MockTransport(handler),
+                sleep=lambda s: None, jitter=lambda: 0.0)
+    stats = rc.run_ricacorp(f, path, log=lambda *a: None, today=date(2026, 10, 16))
+    assert stats["pages"] == 1 and stats["errors"] == 1

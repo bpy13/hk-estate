@@ -26,6 +26,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from urllib.parse import unquote
 
+import httpx
 from selectolax.lexbor import LexborHTMLParser
 
 from hkestate import db, link
@@ -460,10 +461,10 @@ def run_ricacorp(fetcher, db_path=None, log=print, *, limit: int | None = None,
                 deals = parse_estate_page(html, page.slug)
             except SourceBlocked:
                 raise
-            except FetchError as e:
+            except (FetchError, httpx.TransportError) as e:
                 stats["errors"] += 1
                 streak += 1
-                log(f"  {page.slug}: {e}")
+                log(f"  {page.slug}: {type(e).__name__} {e}")
                 if streak >= MAX_CONSECUTIVE_ERRORS:
                     raise RuntimeError(f"{streak} errors in a row; stopping (rerun)") from e
                 continue

@@ -49,11 +49,14 @@ def detail_url(slug: str, listing_id: str, kind: str) -> str:
     return f"{BASE}/findproperty/detail/{quote(slug)}_{listing_id}?theme={theme}"
 
 
-def sitemap_entries(xml: str, prefixes: dict[str, str]) -> list[SitemapEntry]:
+def sitemap_entries(xml: str, prefixes: dict[str, str],
+                    default_group: str | None = None) -> list[SitemapEntry]:
     """Listings whose slug names one of `prefixes` (estate name -> group) as its estate.
 
     The estate name must be the whole first slug part ('太古城-...' or '太古城'), so
-    '太古城中心' does not count as 太古城. The sitemap is parsed with a regex on <loc> only:
+    '太古城中心' does not count as 太古城. Every other listing goes to
+    `default_group` (the territory) if one is given, else it is skipped. The sitemap is
+    parsed with a regex on <loc> only:
     it is plain text from the site and nothing in it is executed.
     """
     out: list[SitemapEntry] = []
@@ -63,7 +66,7 @@ def sitemap_entries(xml: str, prefixes: dict[str, str]) -> list[SitemapEntry]:
             continue
         slug = m.group("slug")
         first = slug.split("-")[0]
-        group = prefixes.get(first)
+        group = prefixes.get(first) or default_group
         if group is None:
             continue
         kind = "sale" if m.group("theme") == "buy" else "rent"

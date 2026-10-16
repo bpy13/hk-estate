@@ -188,13 +188,12 @@ def dedupe(rows: list[dict]) -> dict[tuple[str, str], str]:
     """Group the same flat listed on different sites: same building, kind and floor band,
     saleable area within 2%. A listing without a band (Spacious) joins a group only when
     exactly one fits. Two listings from the same site are never merged. Returns
-    (source, listing_id) -> group key."""
-    groups: list[dict] = []
+    (source, listing_id) -> group key. Groups are bucketed by (building, kind), so a
+    territory-sized list stays fast."""
+    buckets: dict[tuple, list[dict]] = {}
     out: dict[tuple[str, str], str] = {}
 
     def fits(g, r, any_band: bool) -> bool:
-        if g["building_id"] != r["building_id"] or g["kind"] != r["kind"]:
-            return False
         if r["source"] in g["sources"]:
             return False
         if not any_band and g["band"] != r["floor_band"]:
@@ -204,13 +203,16 @@ def dedupe(rows: list[dict]) -> dict[tuple[str, str], str]:
 
     known = [r for r in rows if r.get("floor_band") not in (None, "unknown")]
     unknown = [r for r in rows if r.get("floor_band") in (None, "unknown")]
+    unknown_ids = {id(r) for r in unknown}
     order = lambda r: (SOURCE_ORDER.get(r["source"], 9), str(r["listing_id"]))  # noqa: E731
     for r in sorted(known, key=order) + sorted(unknown, key=order):
         key = (r["source"], str(r["listing_id"]))
+        bucket_key = (r.get("building_id"), r.get("kind"))
+        bucket = buckets.setdefault(bucket_key, [])
         cands = []
         if r.get("building_id"):
-            cands = [g for g in groups if fits(g, r, r in unknown)]
-        if r in known and len(cands) > 1:
+            cands = [g for g in bucket if fits(g, r, id(r) in unknown_ids)]
+        if id(r) not in unknown_ids and len(cands) > 1:
             cands = [min(cands, key=lambda g: abs(g["area"] - r["saleable_sqft"]))]
         if len(cands) == 1:
             g = cands[0]
@@ -219,10 +221,9 @@ def dedupe(rows: list[dict]) -> dict[tuple[str, str], str]:
             g = {"key": f"{key[0]}:{key[1]}", "building_id": r.get("building_id"),
                  "kind": r.get("kind"), "band": r.get("floor_band"),
                  "area": r.get("saleable_sqft"), "sources": {r["source"]}}
-            groups.append(g)
+            bucket.append(g)
         out[key] = g["key"]
     return out
-
 
 # ---- data access ------------------------------------------------------------------------------
 
@@ -259,3 +260,82 @@ def load_buildings(con, group: str) -> list[Building]:
         [group],
     ).fetchall()
     return [Building(r[0], r[1], r[2], r[3], r[4]) for r in rows]
+
+
+# ---- territory matching ------------------------------------------------------------------------
+
+
+class TerritoryMatcher:
+    """Match listings outside the pilot estates to master (Centadata) buildings.
+
+    1. A Centanet detail page names the Centadata block it belongs to (`1-` code): that is
+       the building (`cd-<code>`), no guessing.
+    2. Otherwise the estate is found by name in the master list (the longest leading part of
+       the text that is an estate or the whole name of its phases), and the text is matched
+       to that estate's buildings with the same rules as the pilot (`match_building`).
+    Estates that are excluded from the study (subsidised, villages) are not matched."""
+
+    def __init__(self, con):
+        from hkestate.link import est_key
+
+        self._est_key = est_key
+        self.con = con
+        self.masters = sorted(
+            ({"code": c, "parent_code": p, "key": est_key(n)}
+             for c, p, n in con.execute(
+                "SELECT code, parent_code, name_zh FROM master_estate "
+                "WHERE NOT coalesce(pilot, false) AND NOT coalesce(excluded, false)").fetchall()
+             if est_key(n)),
+            key=lambda m: m["key"])
+        self.keys = [m["key"] for m in self.masters]
+        self.block_ids = {r[0] for r in con.execute(
+            "SELECT building_id FROM master_building WHERE building_id LIKE 'cd-%'").fetchall()}
+        self._buildings: dict[str, list[Building]] = {}
+
+    def _estate_hits(self, text: str) -> list[dict]:
+        from hkestate.link import match_estate
+
+        key = self._est_key(text)
+        for n in range(len(key), 1, -1):
+            status, hits = match_estate(key[:n], self.masters, self.keys)
+            if hits:
+                return hits
+            if status == "ambiguous":
+                return []
+        return []
+
+    def _buildings_of(self, codes: list[str]) -> list[Building]:
+        out: list[Building] = []
+        for code in codes:
+            if code not in self._buildings:
+                self._buildings[code] = [
+                    Building(r[0], r[1] or "", r[2] or "", r[3] or "", r[4])
+                    for r in self.con.execute(
+                        "SELECT building_id, estate_name, phase_name, block_name, floors "
+                        "FROM master_building WHERE estate_code = ?", [code]).fetchall()]
+            out += self._buildings[code]
+        return out
+
+    def top_floor(self, building_id: str | None) -> int | None:
+        if building_id is None:
+            return None
+        row = self.con.execute("SELECT floors FROM master_building WHERE building_id = ?",
+                               [building_id]).fetchone()
+        return row[0] if row else None
+
+    def match(self, text: str | None, *, block_key: str | None = None,
+              estate: str | None = None, source: str | None = None,
+              manual: dict | None = None) -> tuple[str | None, str]:
+        if block_key and f"cd-{block_key}" in self.block_ids:
+            return f"cd-{block_key}", "block_code"
+        if manual and text:
+            hit = manual.get((source, norm_key(text))) or manual.get(("*", norm_key(text)))
+            if hit:
+                return hit, "manual"
+        hits = self._estate_hits(estate) if estate else []
+        if not hits and text:
+            hits = self._estate_hits(text)
+        if not hits:
+            return None, "none"
+        return match_building(text, self._buildings_of([h["code"] for h in hits]),
+                              source=source)
