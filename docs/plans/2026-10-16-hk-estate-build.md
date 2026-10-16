@@ -407,7 +407,14 @@ Lint: `ruff check .`.
     pairs (1,646 first-hand starts, 94% pilot; starts 1995-2023, mostly 2018-2020), 39
     Ricacorp, 68,639 gain pairs (the % change agrees with the recorded previous price within
     2% on 96% of 2,691 overlaps), 96,702 estimated candidates (32,107 first-hand starts).
-- [ ] **Task 5.2: Costs and rents**
+- [x] **Task 5.2: Costs and rents**
+  - Result (2026-10-16): `src/hkestate/costs.py`, `tests/test_costs.py` (17 known amounts
+    1998-2026, band continuity, costs, yields, anchor). Stamp duty tables from the IRD's own
+    PDF of rates 1988-2026, the AVD FAQ (from 26 Feb 2026: residential over HK$100m at 6.5%),
+    SOIPN 8 (Scale 1, Part 1 15%) and the demand-side FAQ (7.5%, abolished 28 Feb 2024);
+    each cited in the code. Yields: RVD average rent / average price by class and region
+    (1999 on, carried back to 1993 with the indices), anchored to current rental listings
+    (live: factor 1.12 from 138 pilot buildings, listing yield 3.9% vs RVD 3.4%).
   - Files: `src/hkestate/costs.py` (dated stamp-duty table from IRD pages, with sources
     cited in code comments), tests for known amounts at several dates.
   - Done when:

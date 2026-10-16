@@ -11,7 +11,13 @@ estimated pairs, Ricacorp pairs as Task 3.6, Centadata % change); MTR station ce
 cache pruning.)*
 
 ## Pending work
-- Verify current (Feb 2026) stamp duty rules on IRD pages before modelling round-trip costs.
+- [x] Verify current (Feb 2026) stamp duty rules on IRD pages before modelling round-trip costs.
+  *(Done in Phase 5, `src/hkestate/costs.py`: the 2026-27 Budget raised residential over
+  HK$100m from 4.25% to 6.5% for agreements from 26 Feb 2026 (IRD AVD FAQ, government press
+  release 25 Feb 2026); the HK$100 band up to HK$4m dates from 26 Feb 2025. One detail not
+  confirmed: IRD pages give two gazettal dates for the 2026 amendment ordinance (6 March and
+  29 May 2026). It doesn't change any figure here (the rate is backdated to 26 Feb 2026 and
+  no pair in the study is above HK$100m in 2026), so the IRD FAQ table is used.)*
 - SRPE (Phase 3, Task 3.4): the site is now a JavaScript app with a disclaimer and session-token
   API and a 30 s crawl-delay. Decide how to drive it (Playwright for the disclaimer, then the
   API at 30 s per request) before Task 3.4. A full backfill is about 30 hours.
