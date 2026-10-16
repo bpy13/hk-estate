@@ -169,3 +169,21 @@ def test_estimated_pairs_carry_model_error():
     assert row["end_price"] == 6_000_000
     assert row["log_growth"] == pytest.approx(np.log(2))
     assert row["ann_sd_model"] == pytest.approx(0.08 / row["years"])
+
+
+def test_ricacorp_pair_repeating_a_real_pair_end_is_dropped():
+    # the stored sale at 2026-05-01 already ends a real pair; the derived Ricacorp price is
+    # about 1% off so it was not matched as a stored previous deal
+    d = frame(deal("b|1|A", "2006-05-01", 4_000_000, sid="s0"),
+              deal("b|1|A", "2026-05-01", 10_000_000, source="centadata", sid="c1"),
+              deal("b|2|A", "2026-05-01", 10_000_000, source="centadata", sid="c2"))
+    dp = pd.DataFrame([
+        {"cur_source": "centadata", "cur_id": cid, "unit_id": u,
+         "cur_date": pd.Timestamp("2026-05-01"), "cur_price_hkd": 10_000_000,
+         "prev_date": pd.Timestamp("2006-05-01"), "prev_price_hkd": 4_040_000,
+         "hold_days": 7305, "gain_pct": 147.0, "prev_derived": True}
+        for cid, u in (("c1", "b|1|A"), ("c2", "b|2|A"))])
+    real = pairs.real_pairs(d)
+    assert len(real) == 1
+    p = pairs.ricacorp_pairs(dp, d, real=real)
+    assert list(p["unit_id"]) == ["b|2|A"]

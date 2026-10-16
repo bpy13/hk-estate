@@ -101,9 +101,12 @@ def real_pairs(deals: pd.DataFrame, min_years: float = MIN_HOLD_YEARS) -> pd.Dat
 
 
 def ricacorp_pairs(deal_pairs: pd.DataFrame, deals: pd.DataFrame,
-                   min_years: float = MIN_HOLD_YEARS) -> pd.DataFrame:
+                   min_years: float = MIN_HOLD_YEARS,
+                   real: pd.DataFrame | None = None) -> pd.DataFrame:
     """Ricacorp previous deals (derived from days held and % gain) against the clean current
-    deal they belong to. Pairs whose previous deal is a stored sale are real pairs already."""
+    deal they belong to. Pairs whose previous deal is a stored sale are real pairs already.
+    The 1% price match can miss on a derived price, so when `real` is given, pairs ending on
+    the same unit within 90 days of a real pair's end are dropped (the same sale twice)."""
     if deal_pairs is None or deal_pairs.empty:
         return pd.DataFrame(columns=PAIR_COLUMNS)
     dp = deal_pairs[_bool(deal_pairs["prev_derived"])].copy()
@@ -129,8 +132,11 @@ def ricacorp_pairs(deal_pairs: pd.DataFrame, deals: pd.DataFrame,
     out = pd.concat([out, _attrs(c)], axis=1)
     out = out.drop_duplicates(["unit_id", "start_date", "end_date"])
     out = _finish(out)
-    return out[(out["years"] >= min_years) & (out["start_date"] >= MIN_START)].reset_index(
+    out = out[(out["years"] >= min_years) & (out["start_date"] >= MIN_START)].reset_index(
         drop=True)
+    if real is not None and not real.empty and not out.empty:
+        out = out[~_matches_end(out, real)].reset_index(drop=True)
+    return out
 
 
 def gain_pairs(deals: pd.DataFrame, exclude: pd.DataFrame | None = None) -> pd.DataFrame:

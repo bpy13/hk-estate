@@ -180,7 +180,7 @@ def run(raw: dict, m: model.FairPrice | None = None, test_predictions: pd.DataFr
     log(f"deals {len(deals)}, clean {deals['exclude_reason'].isna().sum()}")
 
     real = pairs.real_pairs(deals)
-    rica = pairs.ricacorp_pairs(raw.get("deal_pairs"), deals)
+    rica = pairs.ricacorp_pairs(raw.get("deal_pairs"), deals, real=real)
     recorded = pd.concat([x for x in (real, rica) if not x.empty] or [real], ignore_index=True)
     gain_all = pairs.gain_pairs(deals)
     chk = pairs.gain_check(gain_all, real)
