@@ -27,6 +27,8 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from urllib.parse import unquote
 
+import httpx
+
 from hkestate import db
 from hkestate.config import get_data_dir
 from hkestate.fetch import FetchError, SourceBlocked
@@ -388,7 +390,7 @@ def run_master(fetcher, db_path=None, log=print, limit: int | None = None) -> di
                     fetcher, db_path, code, name, pilot=code in pilot, overrides=overrides)
             except SourceBlocked:
                 raise
-            except (FetchError, cd.NotData, KeyError, ValueError) as e:
+            except (FetchError, httpx.HTTPError, cd.NotData, KeyError, ValueError) as e:
                 stats["errors"] += 1
                 streak += 1
                 log(f"  {code} {name}: {type(e).__name__} {e}")
