@@ -173,31 +173,58 @@ def _cell(row, i) -> str:
     return re.sub(r"\s+", " ", str(row[i] or "")).strip() if i < len(row) else ""
 
 
-def parse_register_rows(rows) -> list[RegisterDeal]:
+def _parse_row(row) -> RegisterDeal | None:
+    pasp, asp = _date(_cell(row, 0)), _date(_cell(row, 1))
+    if not (pasp or asp) or _date(_cell(row, 2)):  # no date, or the sale was terminated
+        return None
+    if len(row) == _HOUSE_COLUMNS:
+        # House sales: one description cell (house number/name), parking, price, revision,
+        # payment terms, related party. No block/floor/unit, so the house is the "flat".
+        house = _cell(row, 3)
+        block, floor, flat, parking, price, related = house, "H", house, _cell(row, 4), 5, 8
+        has_parking = parking not in ("", "-")
+    else:
+        block, floor, flat = _cell(row, 3), _cell(row, 4), _cell(row, 5)
+        has_parking, price, related = bool(_cell(row, 6)), 7, 10
+    digits = re.sub(r"[^\d.]", "", _cell(row, price))
+    if not floor or not flat or not digits:
+        return None
+    return RegisterDeal(
+        pasp, asp, block, floor, flat.upper(), has_parking, int(round(float(digits))),
+        _cell(row, related).lower().startswith(("y", "是")))
+
+
+# The house-sale register has 9 columns instead of the usual 11.
+_HOUSE_COLUMNS = 9
+
+
+def parse_register_rows(rows, skipped: list[str] | None = None) -> list[RegisterDeal]:
     """Sales from the Part 2 table rows. Columns: PASP date, ASP date, termination date,
-    block, floor, unit, parking, price, revision, payment terms, related party."""
+    block, floor, unit, parking, price, revision, payment terms, related party.
+    A row that cannot be parsed is left out; its raw text is appended to `skipped`."""
     deals = []
     for row in rows:
-        pasp, asp = _date(_cell(row, 0)), _date(_cell(row, 1))
-        if not (pasp or asp) or _date(_cell(row, 2)):  # no date, or the sale was terminated
+        try:
+            deal = _parse_row(row)
+        except (ValueError, OverflowError):
+            if skipped is not None:
+                skipped.append(" | ".join(_cell(row, i) for i in range(len(row))))
             continue
-        floor, flat = _cell(row, 4), _cell(row, 5)
-        digits = re.sub(r"[^\d.]", "", _cell(row, 7))
-        if not floor or not flat or not digits:
-            continue
-        related = _cell(row, 10).lower()
-        deals.append(RegisterDeal(
-            pasp, asp, _cell(row, 3), floor, flat.upper(), bool(_cell(row, 6)),
-            int(round(float(digits))), related.startswith(("y", "是"))))
+        if deal:
+            deals.append(deal)
     return deals
 
 
-def register_deals(pdf) -> list[RegisterDeal]:
-    """All sales in an opened pdfplumber PDF (the table is repeated on every page)."""
+def register_deals(pdf, skipped: list[tuple[int, str]] | None = None) -> list[RegisterDeal]:
+    """All sales in an opened pdfplumber PDF (the table is repeated on every page).
+    Unparseable rows are added to `skipped` as (page number, raw row text)."""
     deals = []
-    for page in pdf.pages:
+    for n, page in enumerate(pdf.pages, 1):
         for table in page.extract_tables():
-            deals += parse_register_rows(table)
+            bad: list[str] = []
+            deals += parse_register_rows(table, bad)
+            if skipped is not None:
+                skipped += [(n, text) for text in bad]
     return deals
 
 
@@ -346,7 +373,8 @@ def run_srpe(client: SrpeClient, db_path=None, log=print, limit: int | None = No
         cd_master.ensure_tables(con)
         ensure_tables(con)
         run_id = db.start_run(con, COMMAND, f"limit={limit}" if limit else "")
-    stats = {"developments": 0, "registers": 0, "deals": 0, "unmatched": 0}
+    stats = {"developments": 0, "registers": 0, "deals": 0, "unmatched": 0,
+             "skipped_rows": 0}
     status, message = "ok", ""
     pdf_dir = get_data_dir() / "cache" / HOST / "pdf"
     pdf_dir.mkdir(parents=True, exist_ok=True)
@@ -374,8 +402,13 @@ def run_srpe(client: SrpeClient, db_path=None, log=print, limit: int | None = No
                 pdf_path = pdf_dir / f"{dev.dev_id}_{detail.register_file}"
                 if not pdf_path.exists():
                     pdf_path.write_bytes(client.download(detail.download_path))
+                bad_rows: list[tuple[int, str]] = []
                 with pdfplumber.open(pdf_path) as pdf:
-                    deals = register_deals(pdf)
+                    deals = register_deals(pdf, bad_rows)
+                for page_no, text in bad_rows:
+                    log(f"skipped row: development {dev.dev_id} {dev.name} page {page_no}: "
+                        f"{text[:300]!r}")
+                stats["skipped_rows"] += len(bad_rows)
                 with db.session(db_path) as con:
                     added = store_deals(con, dev.dev_id, dev.name, bids, deals,
                                         f"https://{HOST}{detail.download_path.split('?')[0]}")

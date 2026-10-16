@@ -71,6 +71,43 @@ def test_register_rows():
     assert b.has_parking
 
 
+# House-sale registers have 9 columns (one description cell, no block/floor/unit split), so the
+# price sits in column 5 and column 7 holds payment terms full of other amounts and dates.
+HOUSE_ROWS = [
+    ["(A)", "(B)", "(C)", "(D)", "", "(E)", "(F)", "(G)", "(H)"],
+    ["-", "09-09-2020", "-", "1 EXAMPLE ROAD\n1 EXAMPLE ROAD", "-", "$2,566,000,000.00", "-",
+     "Deposit HK$100,000,000.00 payable on 16 September 2020\n90%: 30 December 2020",
+     "No"],
+]
+
+
+def test_house_register_layout_is_read_by_column_count():
+    (deal,) = srpe.parse_register_rows(HOUSE_ROWS)
+    assert deal.price_hkd == 2_566_000_000 and deal.asp_date == date(2020, 9, 9)
+    assert deal.block.startswith("1 EXAMPLE ROAD") and not deal.related_party
+
+
+def test_unparseable_row_is_skipped_and_reported_not_fatal():
+    bad = ["01/02/2016", "", "", "L1", "5", "C", "", "$1.2.3", "", "", ""]
+    skipped = []
+    deals = srpe.parse_register_rows([bad, ROWS[2]], skipped)
+    assert len(deals) == 1 and deals[0].price_hkd == 3_723_048
+    assert len(skipped) == 1 and "$1.2.3" in skipped[0]
+
+
+def test_register_deals_reports_skipped_rows_with_page_number():
+    class Page:
+        def extract_tables(self):
+            return [[["01/02/2016", "", "", "L1", "5", "C", "", "$1.2.3", "", "", ""]]]
+
+    class Pdf:
+        pages = [Page()]
+
+    skipped = []
+    assert srpe.register_deals(Pdf(), skipped) == []
+    assert skipped and skipped[0][0] == 1 and "$1.2.3" in skipped[0][1]
+
+
 def test_pdf_rows_are_read_from_every_page_table(tmp_path):
     # the reader only needs page.extract_tables(); a stand-in keeps the test free of PDFs
     class Page:
