@@ -12,7 +12,9 @@ Registered for the current user by `scripts\register_task.ps1` (rerun it to upda
 | `daily listings` | every day 08:00 | `scripts\daily.ps1` → `hkestate daily` |
 | `weekly deals` | Sundays 07:00 | `scripts\daily.ps1 -Command update` → `hkestate update` |
 
-Both are set to **start as soon as possible after a missed start** (laptop off or asleep at
+| `weekly ricacorp` | Sundays 10:00 | `scripts\daily.ps1 -Command ricacorp` → `hkestate ricacorp` (a pass is about 7 hours; the task may run 14) |
+
+All are set to **start as soon as possible after a missed start** (laptop off or asleep at
 the time), never to run twice at once, and to run only while you are logged on (so no
 password is stored). Check them with:
 

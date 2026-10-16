@@ -5,6 +5,7 @@
     hkestate daily                                              scheduled: listings + prune
     hkestate update                                             scheduled weekly: new deals
     hkestate backfill-territory [--discover]   28Hse, whole territory, largest first
+    hkestate ricacorp [--max-hours N]          Ricacorp previous-deal pairs (weekly)
     hkestate link-ids                          match 28Hse ids to master ids
     hkestate status
 
@@ -270,6 +271,22 @@ def cmd_backfill_territory(args) -> int:
         return 1
     return 0
 
+def cmd_ricacorp(args) -> int:
+    """Ricacorp estate pages: previous-deal pairs (Task 3.6); resumable within the week."""
+    from hkestate.fetch import Fetcher
+    from hkestate.sources import ricacorp
+
+    log = _logger("ricacorp")
+    if args.place_only:
+        with db.session(args.db) as con:
+            db.init_db(con)
+            ricacorp.place_deals(con, log=log)
+        return 0
+    with Fetcher(min_interval=ricacorp.MIN_INTERVAL_S) as f:
+        ricacorp.run_ricacorp(f, db_path=args.db, log=log, limit=args.limit,
+                              max_hours=args.max_hours)
+    return 0
+
 def cmd_status(args) -> int:
     with db.session(args.db) as con:
         db.init_db(con)
@@ -332,6 +349,12 @@ def main(argv: list[str] | None = None) -> int:
     bt.add_argument("--max-estates", type=int, default=None, help="stop after N estates")
     bt.add_argument("--max-hours", type=float, default=None, help="stop after N hours")
     bt.set_defaults(func=cmd_backfill_territory)
+    rp = sub.add_parser("ricacorp", help="Ricacorp estate pages: previous-deal pairs (weekly)")
+    rp.add_argument("--limit", type=int, default=None, help="only the next N estate pages")
+    rp.add_argument("--max-hours", type=float, default=None, help="stop after N hours")
+    rp.add_argument("--place-only", action="store_true",
+                    help="no requests: place stored deals in buildings and write pairs")
+    rp.set_defaults(func=cmd_ricacorp)
     s = sub.add_parser("status", help="recent runs and row counts")
     s.set_defaults(func=cmd_status)
 

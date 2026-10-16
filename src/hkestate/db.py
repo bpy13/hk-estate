@@ -581,3 +581,4 @@ def clear_steps(con: duckdb.DuckDBPyConnection, command: str, prefix: str = "") 
         "DELETE FROM run_progress WHERE command = ? AND starts_with(step_key, ?)",
         [command, prefix],
     )
+

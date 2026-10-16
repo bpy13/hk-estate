@@ -166,6 +166,19 @@ class Fetcher:
         self._robots_for(url)
         return self._robots_status[self._origin(url)]
 
+    def forget(self, url: str) -> int:
+        """Delete the cached copies of a URL (for pages too big or too personal to keep once
+        parsed). Returns the number of files removed."""
+        host = urlsplit(url).hostname or ""
+        removed = 0
+        today = self._today()
+        for age in range(max(PAGE_LIFETIME_DAYS.values())):
+            path = self._cache_path(host, url, today - timedelta(days=age))
+            if path.exists():
+                path.unlink()
+                removed += 1
+        return removed
+
     def close(self) -> None:
         self._client.close()
 

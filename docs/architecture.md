@@ -57,6 +57,7 @@ hkestate update (weekly) -> backfill.update_estates: newest 28Hse deal-list page
 | `listings.py` | listing storage, snapshots, delisting, relisting links |
 | `match.py` | listing → building (manual / single / exact / range / contains / fuzzy), floor band, cross-site duplicates |
 | `flags.py`, `keywords.yml` | keyword risk flags with negations |
+| `sources/ricacorp.py` | Ricacorp estate pages (robots-allowed, never `/api/`): parsed deals in `ricacorp_deal`, placement in buildings, `txn_raw` rows (source `ricacorp`) and `deal_pair` previous-deal links; cached pages deleted after parsing |
 | `link.py` | links 28Hse estates/buildings (`h28-`) to master ones (`cd-`) in `source_map` and `hse28_estate`; `txn_all` reads it so both sources' deals share one unit |
 | `hse28_territory.py` | territory 28Hse backfill: estate list (sitemap, CSV, listing cards), largest-first order, resumable run |
 | `locks.py` | job lock files (`hse28`, `listings`) |
@@ -85,6 +86,8 @@ the same ids: estate `h28-<id>`, phase `h28-<id>-s<n>`, building `h28-<id>-b<n>`
 | `listing_run_day` | days a source's run covered an estate group (delisting counts these) | (source, scope, run_date) |
 | `risk_flag` | keyword flags per listing (haunted, tenanted, sea_view, renovated, illegal_structure, studio) with the matched term | |
 | `attribute` | flat attributes (later phases) | |
+| `ricacorp_deal` | parsed Ricacorp rows (address, price, days held, % gain), placed in a building once the master list has the estate | `deal_id` |
+| `deal_pair` | a resale and its previous deal (matched stored deal or derived from days held and % gain), with `prev_derived` | (`cur_source`, `cur_id`) |
 | `source_map` | other sources' estate/building/unit codes → master ids | (source, kind, source_key) |
 | `run_log` | one row per command run: status, rows added, message | `run_id` |
 | `run_progress` | finished steps of a resumable command; a rerun skips them | (command, step_key) |

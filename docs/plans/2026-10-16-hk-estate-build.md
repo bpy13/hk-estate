@@ -295,6 +295,16 @@ Lint: `ruff check .`.
     - the weekly job re-crawls, so pairs accumulate.
   - Notes: about 6 hours per pass. Keep only parsed rows: prune cached Ricacorp pages after
     parsing (about 18 GB per pass otherwise).
+  - Status 2026-10-16 (unticked, first live pass running): `src/hkestate/sources/ricacorp.py`,
+    `hkestate ricacorp [--limit N] [--max-hours H] [--place-only]`; tests pass. A 10-page live
+    check read 96 deals; 20 placed (the master list does not yet hold the other estates), and 17
+    of those 20 sales were already held by 28Hse/Centadata, so only 3 were added plus 15
+    previous-deal rows and pairs. The first full pass started 18:25 as PID 38836 (log
+    `data/logs/ricacorp_*.log`; rerun `hkestate ricacorp` to resume within the ISO week).
+    Weekly task `\hk-estate\weekly ricacorp` (Sundays 10:00) is in `register_task.ps1`. Deals in
+    estates the master list lacks stay unplaced until `hkestate ricacorp --place-only` runs
+    after the master pass. Tick when the pass completes and the placement counts are recorded
+    in `docs/sources.md`.
 
 ## Phase 4 – Fair price and dashboard (opus)
 

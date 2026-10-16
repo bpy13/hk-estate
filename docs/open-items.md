@@ -87,4 +87,13 @@ cache pruning.)*
 - **Subsidised estates with no current listing** carry no HOS/TPS flag on Centadata and pass
   the coverage filter; use `data/manual/master_overrides.csv`.
 
+- **Ricacorp: place deals after the master pass.** Run `hkestate ricacorp --place-only` once
+  the Centadata master pass has finished (it also runs at the end of every `hkestate
+  ricacorp`), then check how many `ricacorp_deal` rows are still unplaced
+  (`building_id IS NULL`): estate-name or block-name mismatches go in a new alias list.
+  Ricacorp also has ~16,400 per-building pages (`/transaction/building/...`, in the
+  `transaction-detail` sitemap) that probably list more recent deals per building than the
+  estate page's ~10; not read, since the plan names estate pages only. Decide after the first
+  pass whether the extra ~7 hours per pass is worth it.
+
 ## Later

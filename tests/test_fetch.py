@@ -379,3 +379,14 @@ def test_unknown_page_type_is_rejected(tmp_path):
     fetcher, _, _ = make_fetcher(tmp_path, ok)
     with pytest.raises(ValueError):
         fetcher.get("https://example.com/x", "weekly")
+
+
+def test_forget_deletes_the_cached_copy(tmp_path):
+    fetcher, requests, _ = make_fetcher(tmp_path, ok)
+    fetcher.get("https://example.com/big", "transaction")
+    assert list((tmp_path / "cache").rglob("*.html.gz"))
+    assert fetcher.forget("https://example.com/big") == 1
+    assert not list((tmp_path / "cache").rglob("*.html.gz"))
+    assert fetcher.forget("https://example.com/big") == 0
+    fetcher.get("https://example.com/big", "transaction")  # nothing cached: fetched again
+    assert len(page_requests(requests)) == 2
