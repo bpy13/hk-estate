@@ -231,6 +231,24 @@ def test_crosscheck_block_spanning_several_buildings(tmp_path):
         ).fetchall() == [("b3",)]
 
 
+def test_wing_page_flats_match_28hse_flats_with_a_wing_letter(tmp_path):
+    # Centadata's page "1座 (左翼)" lists flat B; 28Hse's one building 1座 calls it "LB".
+    path = tmp_path / "t.duckdb"
+    with db.session(path) as con:
+        db.init_db(con)
+        db.insert_txn_raw(
+            con,
+            [{"source": "hse28", "source_id": "u1:2019-06-10",
+              "fetched_at": datetime(2026, 10, 16), "building_id": "b1", "floor_label": "30",
+              "flat": "LB", "deal_date": date(2019, 6, 10), "deal_type": "registry",
+              "price_hkd": 5_380_000}],
+        )
+        blk = cd.parse_block_page(page())
+        blk.block = "班芙 (1座-左翼)"
+        res = cd.crosscheck_block(con, blk, {"b1": ("首都 ", "1座")}, "https://x")
+        assert (res.in_window, res.matched) == (1, 1)
+
+
 def test_flat_label_carrying_the_street_number_picks_the_building(tmp_path):
     # Centadata's Mei Foo flats read "1號A": building 百老匯街1號, flat A.
     path = tmp_path / "t.duckdb"

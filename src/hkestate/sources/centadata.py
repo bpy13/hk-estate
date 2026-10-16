@@ -412,12 +412,18 @@ def crosscheck_block(con, blk: BlockPage, buildings: dict[str, tuple[str, str]],
         f"SELECT building_id, floor_label, flat FROM unit WHERE building_id IN ({marks})", bids
     ).fetchall():
         unit_home.setdefault((fl, flat), set()).add(b)
+    # 首都 and 領都 have a page per wing ("1座 (左翼)", flats A-D); 28Hse has one building with
+    # flats LA-LD and RA-RD.
+    wing = "L" if "左翼" in blk.block else "R" if "右翼" in blk.block else ""
     new_rows = []
     now = datetime.now()
     for d in blk.deals:
         fl = parse_floor(d.floor_text).label
         flat, targets = _split_flat(d.flat, bids, buildings)
-        m = match_deal(d, [x for b in targets for x in by_unit.get((b, fl, flat), [])])
+        if wing and any((b, fl, wing + flat) in by_unit or (fl, wing + flat) in unit_home
+                        for b in targets):
+            flat = wing + flat  # 28Hse calls the left-wing flat B "LB"
+        m =match_deal(d, [x for b in targets for x in by_unit.get((b, fl, flat), [])])
         if in_window(d):
             res.in_window += 1
             if m:
