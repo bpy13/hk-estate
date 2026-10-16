@@ -53,7 +53,7 @@ hkestate update (weekly) -> backfill.update_estates: newest 28Hse deal-list page
 | `backfill.py` | crawl plan per estate, resumable steps, loading; `update_estates` (weekly) |
 | `listing_types.py` | the `Listing` record every listing parser returns |
 | `sources/centanet.py`, `sources/hse28_listings.py`, `sources/spacious.py` | listing parsers and URLs (agent details never read) |
-| `listing_run.py` | the daily listing run: pilot targets per site, fetch, store, finish |
+| `listing_run.py` | the daily listing run: pilot targets per site plus the territory group (Centanet sitemap, Spacious building pages), fetch, store, finish in short sessions |
 | `listings.py` | listing storage, snapshots, delisting, relisting links |
 | `match.py` | listing → building (manual / single / exact / range / contains / fuzzy), floor band, cross-site duplicates |
 | `flags.py`, `keywords.yml` | keyword risk flags with negations |

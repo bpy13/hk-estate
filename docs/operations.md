@@ -46,6 +46,16 @@ For each pilot estate group (`listing_run.PILOT`):
 A first run reads every pilot listing's detail page (about 2,500 on Centanet: ~1.5 hours).
 Later runs read only new and rotating pages (minutes).
 
+## Territory listings (from 2026-10-16)
+
+`hkestate daily` now runs `--estates all`: the pilot groups plus a `territory` group. Per run:
+Centanet reads the whole sitemap but at most 8,000 detail pages (`--centanet-budget`; new
+listings first, then the oldest read) at 2 s: about 4.5 h, and about 6 days for the first full
+pass. Spacious reads up to 6,000 building sale pages (`--spacious-budget`) at 1 s: about 2 h.
+28Hse is pilot only. Territory listings are matched to master (`cd-`) buildings from the
+Centanet block code, else by estate then block name; the rest stay unmatched until the master
+list covers their estate. Use `--estates pilot` for the quick pilot-only run.
+
 ## Locks: jobs that must not overlap
 
 Lock files live in `data\locks\` and hold the process id of the job that owns them; a lock

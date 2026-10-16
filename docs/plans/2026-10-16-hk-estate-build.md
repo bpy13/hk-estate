@@ -286,6 +286,16 @@ Lint: `ruff check .`.
 - [ ] **Task 3.5: Territory-wide listings**
   - Done when: the daily job covers all estates. One run's elapsed time is under 1 hour, or
     the split across the day is documented.
+  - Status 2026-10-16 (unticked, first territory run in progress): `hkestate daily` now covers
+    pilot + territory (`--estates all`, default). Centanet: the whole sitemap (43.7k), at most
+    8,000 detail pages a run (new first, then oldest read; `--centanet-budget`), 2 s apart. A
+    run is therefore about 4.5 h, not under 1 h, and the first full pass takes about 6 days;
+    after that it is the rotating seventh plus new listings (~7-8k pages, still ~4.5 h).
+    Spacious: building sale pages from the site's sitemap (33.5k buildings), 6,000 a run
+    (`--spacious-budget`, about 2 h at 1 s; buildings that had listings first). Matching: the
+    Centanet block code gives the master building directly, else estate name then block name.
+    **28Hse territory listings are not built** (28Hse is busy with the backfill; do it after
+    Task 3.2). Run started 18:48 as PID 20500 (log `data/logs/daily_*.log`).
 - [ ] **Task 3.6: Ricacorp previous-deal pairs (added 2026-10-17)**
   - Files: `src/hkestate/sources/ricacorp.py`, tests with trimmed fixtures, weekly job entry.
   - Done when:
@@ -301,8 +311,10 @@ Lint: `ruff check .`.
     `hkestate ricacorp [--limit N] [--max-hours H] [--place-only]`; tests pass. A 10-page live
     check read 96 deals; 20 placed (the master list does not yet hold the other estates), and 17
     of those 20 sales were already held by 28Hse/Centadata, so only 3 were added plus 15
-    previous-deal rows and pairs. The first full pass started 18:25 as PID 38836 (log
-    `data/logs/ricacorp_*.log`; rerun `hkestate ricacorp` to resume within the ISO week).
+    previous-deal rows and pairs. The first full pass stopped at 18:42 after 24 estate pages: Ricacorp answered **403**
+    (blocked; the fetcher stops the host for the run and we do not retry or work around it). The
+    request gap is now 3 s. The Sunday task will try again; if it is still 403 the source is
+    dropped (decide with the user). Resume with `hkestate ricacorp` (same ISO week).
     Weekly task `\hk-estate\weekly ricacorp` (Sundays 10:00) is in `register_task.ps1`. Deals in
     estates the master list lacks stay unplaced until `hkestate ricacorp --place-only` runs
     after the master pass. Tick when the pass completes and the placement counts are recorded

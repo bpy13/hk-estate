@@ -100,4 +100,17 @@ cache pruning.)*
   estate page's ~10; not read, since the plan names estate pages only. Decide after the first
   pass whether the extra ~7 hours per pass is worth it.
 
+- **Ricacorp answered 403 (2026-10-16 18:42)** after 24 estate pages at 1.5 s per request; the
+  fetcher stopped and nothing was retried. The gap is now 3 s and the Sunday task will try once
+  more. If it is still 403, Ricacorp is dropped like Midland and Squarefoot and Task 3.6 closes
+  with the pairs already stored (Centadata `gain_pct` stays the fallback). Your call whether to
+  contact them or accept the loss.
+- **28Hse territory listings (Task 3.5) are not built.** The daily job reads 28Hse for the pilot
+  estates only; add the territory after the 28Hse backfill (same lock, same 4 s pace, estate
+  search pages from the `hse28_estate` list).
+- **Territory listing quality to check after the first full pass:** the match rate by method
+  (`listing.match_method` for `group_name = 'territory'`), Spacious buildings with more listings
+  than one page shows (its paging repeats page 1, so only ~10-14 listings per building are
+  seen), and the Centanet run length (about 4.5 h a day at 2 s; lower `--centanet-budget`
+  if it clashes with the master pass).
 ## Later
