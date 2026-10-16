@@ -255,7 +255,7 @@ wall-clock time for 28Hse, which is the limit. History before 2018 exists only a
 deal per flat (Centadata), so the plan's "history from 2000" can't be met with free
 sources (see open-items).
 
-## Pre-2018 history probe (2026-10-17)
+## Pre-2018 history probe (2026-10-16)
 
 Goal: free per-flat or per-building residential history from before 2018. About 10 pages from
 Ricacorp, about 35 requests to the Wayback Machine (CDX index queries plus 9 archived pages),

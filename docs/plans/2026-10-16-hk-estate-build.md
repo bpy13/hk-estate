@@ -242,6 +242,11 @@ Lint: `ruff check .`.
 
 ## Phase 3 – Territory-wide scale and enrichment (sonnet)
 
+*Status at the end of the run (2026-10-16): the code for 3.1–3.5 is built and tested; the
+boxes stay open because their "done when" checks need the long loads to finish (master pass
+~26 h, 28Hse backfill ~9 days, SRPE ~9 h, first full Centanet listing pass ~6 days). 3.6 is
+blocked by Ricacorp's 403. Follow-ups are in `docs/open-items.md`.*
+
 - [ ] **Task 3.1: Master estate/building list**
   - Done when: territory-wide estate and building lists load (count recorded in
     `docs/sources.md`), with HOS, TPS, villas and village houses excluded by rule, and a
@@ -296,7 +301,7 @@ Lint: `ruff check .`.
     Centanet block code gives the master building directly, else estate name then block name.
     **28Hse territory listings are not built** (28Hse is busy with the backfill; do it after
     Task 3.2). Run started 18:48 as PID 20500 (log `data/logs/daily_*.log`).
-- [ ] **Task 3.6: Ricacorp previous-deal pairs (added 2026-10-17)**
+- [ ] **Task 3.6: Ricacorp previous-deal pairs (added 2026-10-16)**
   - Files: `src/hkestate/sources/ricacorp.py`, tests with trimmed fixtures, weekly job entry.
   - Done when:
     - parser tests pass

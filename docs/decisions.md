@@ -241,7 +241,7 @@ Details and measurements in `docs/sources.md`. Supersedes parts of "Source roles
 - **Weekly transaction refresh** (`hkestate update`) reads each estate's deal list from page 1
   and stops at the first page that adds nothing.
 
-## After Phase 2 (2026-10-17)
+## After Phase 2 (2026-10-16)
 - **Pre-2018 history is a priority, not optional** (user). Long-term growth depends on it.
   Use every free pre-2018 data point:
   - Centadata latest deals back to 1995, in the price model and as one end of growth pairs.
