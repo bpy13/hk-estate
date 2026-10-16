@@ -434,7 +434,16 @@ Lint: `ruff check .`.
     - out-of-sample checks: pairs ending ≤2018 vs later, and a district holdout
     - an attribute is marked "robust" only if significant (p<0.05) and the same sign in both
       checks.
-- [ ] **Task 5.4: Findings report**
+- [x] **Task 5.4: Findings report**
+  - Result (2026-10-16): `src/hkestate/study.py`, `report.py`, `charts.py` (SVG), `hkestate
+    report [--from-snapshot]` (~1.5 min), `tests/test_study.py`. Live run 21:19 (PRELIMINARY,
+    territory backfill ~9 days to go): 2,973 real + 39 Ricacorp recorded pairs (93% pilot),
+    111,890 estimated pairs, 68,602 % change pairs (check only). Robust in both recorded and
+    estimated pairs: small flats faster (+1.2 / +0.3 pp a year), low floors slower (-0.2 /
+    -0.1). Recorded only: first-hand starts +1.7. Estimated only: high floors +0.1, very large
+    -0.2, special units -0.3. The recorded index tracks RVD from 2018 (-32% 2021-11 to
+    2024-10); the estimated index tracks RVD through 1997-2003. Estimated pairs use only
+    buildings the model was trained on (retrain first).
   - Done when: `hkestate report` writes `data/reports/findings_<date>.md`. It contains:
     - a plain-language summary
     - per-attribute growth, total return and drawdown tables with charts

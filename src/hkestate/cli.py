@@ -9,6 +9,7 @@
     hkestate link-ids                          match 28Hse ids to master ids
     hkestate train [--from-snapshot]           fair-price model + data/reports/model_eval.md
     hkestate rank                              ranked listings CSV in data/reports/
+    hkestate report [--from-snapshot]          growth study, findings_<date>.md
     hkestate status
 
 Every run is logged to data/logs/<command>_<time>.log and to `run_log` in the database.
@@ -349,6 +350,30 @@ def cmd_rank(args) -> int:
     return _logged(args, "rank", work)
 
 
+def cmd_report(args) -> int:
+    """Growth study and findings report (Phase 5): data/reports/findings_<date>.md."""
+    import pandas as pd
+
+    from hkestate import features, model, report, study
+
+    def work(log):
+        raw = features.load_snapshot() if args.from_snapshot else features.snapshot(args.db)
+        m, tp = None, None
+        if (model.model_dir() / "fair_price.txt").exists():
+            m = model.load()
+            tp_path = model.model_dir() / "test_predictions.parquet"
+            tp = pd.read_parquet(tp_path) if tp_path.exists() else None
+        s = study.run(raw, m, tp, log=log)
+        path = report.write(s)
+        log(f"report: {path}")
+        counts = {k: len(v) for k, v in s.pairs.items()}
+        robust = {k: [a for a in v.index if v.loc[a, "robust"]] for k, v in s.verdicts.items()}
+        return counts.get("recorded", 0), {"pairs": counts, "robust": robust,
+                                          "report": str(path)}
+
+    return _logged(args, "report", work)
+
+
 def cmd_status(args) -> int:
     with db.session(args.db) as con:
         db.init_db(con)
@@ -437,6 +462,10 @@ def main(argv: list[str] | None = None) -> int:
     rk.add_argument("--from-snapshot", action="store_true",
                     help="reuse data/model/snapshot instead of reading the database")
     rk.set_defaults(func=cmd_rank)
+    rpt = sub.add_parser("report", help="growth study + findings report in data/reports/")
+    rpt.add_argument("--from-snapshot", action="store_true",
+                     help="reuse data/model/snapshot instead of reading the database")
+    rpt.set_defaults(func=cmd_report)
     s = sub.add_parser("status", help="recent runs and row counts")
     s.set_defaults(func=cmd_status)
 

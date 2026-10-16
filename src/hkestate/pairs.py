@@ -160,8 +160,9 @@ def gain_pairs(deals: pd.DataFrame, exclude: pd.DataFrame | None = None) -> pd.D
 
 def _matches_end(g: pd.DataFrame, real: pd.DataFrame, days: int = 90) -> pd.Series:
     """True where a real pair ends on the same unit within `days` of the gain pair's end."""
-    m = g.reset_index().merge(real[["unit_id", "end_date"]], on="unit_id", suffixes=("", "_r"))
-    hit = (m["end_date"] - m["end_date_r"]).dt.days.abs() <= days
+    r = real[["unit_id", "end_date"]].assign(end_date=lambda x: pd.to_datetime(x["end_date"]))
+    m = g.reset_index().merge(r, on="unit_id", suffixes=("", "_r"))
+    hit = (pd.to_datetime(m["end_date"]) - m["end_date_r"]).dt.days.abs() <= days
     idx = set(m.loc[hit, "index"])
     return pd.Series([i in idx for i in g.index], index=g.index)
 

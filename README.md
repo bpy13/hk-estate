@@ -31,15 +31,18 @@ conda run -n hk-estate python scripts/spot_check.py         # 50 deals vs the li
 
 conda run -n hk-estate hkestate train     # fair-price model + data/reports/model_eval.md (~1 min)
 conda run -n hk-estate hkestate rank      # data/reports/ranked_listings_<date>.csv (~1 min)
+conda run -n hk-estate hkestate report    # growth study: data/reports/findings_<date>.md (~1.5 min)
 conda run -n hk-estate streamlit run app/dashboard.py   # dashboard at http://localhost:8501
 ```
 
 A stopped backfill carries on where it left off when run again. Logs go to `data/logs/`,
 reports to `data/reports/`.
 
-`train` and `rank` read the database once (about 40 seconds) and save a snapshot in
+`train`, `rank` and `report` read the database once (about 40 seconds) and save a snapshot in
 `data/model/`; add `--from-snapshot` to reuse it. Retrain as data grows (the territory
-backfill, geocoding); rerun `rank` after each day's listings. The dashboard reads only
+backfill, geocoding); rerun `rank` after each day's listings and `report` after `train`
+(the findings report is preliminary until the territory backfill finishes). The scheduled
+tasks run `rank` daily and `train` weekly (docs/operations.md). The dashboard reads only
 `data/model/`, so it can stay open while other jobs run.
 
 ## Data folder

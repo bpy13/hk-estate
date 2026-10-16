@@ -50,6 +50,13 @@ hkestate rank
        -> data/reports/ranked_listings_<date>.csv, asking_gap_<date>.csv
        -> data/model/ranked_latest.parquet
 streamlit run app/dashboard.py -> dashboard_data.py reads data/model/ (+ run_log read-only)
+hkestate report                              (growth study, Phase 5)
+  └─ snapshot (+ deal_pair, RVD series) -> features.deal_features (clean = exclude_reason None)
+       -> pairs.py: real, ricacorp, gain (% change; check only), estimated (model value now)
+       -> costs.py: stamp duty (dated IRD tables), round-trip costs, RVD yields x listing anchor
+       -> growth.py: regression + time/district checks, repeat-sales index, drawdown
+       -> study.py (all of it) -> report.py + charts.py
+       -> data/reports/findings_<date>.md + findings_<date>/*.svg
 ```
 
 ## Modules
@@ -80,6 +87,11 @@ streamlit run app/dashboard.py -> dashboard_data.py reads data/model/ (+ run_log
 | `gap.py` | asking-vs-deal pairs and per-district gap (5% `assumed` under 30 pairs) |
 | `rank.py` | values active sale listings, discount, confidence, cross-site dedupe, ranked CSV |
 | `dashboard_data.py` | data and filters for `app/dashboard.py` (Streamlit: ranked list, detail, model page, run banner) |
+| `pairs.py` | repeat-sales pairs: real, Ricacorp, % change (check), estimated (Phase 5) |
+| `costs.py` | stamp duty by date (IRD tables, cited), round-trip costs, RVD yields, listing anchor |
+| `growth.py` | attribute regression (clustered by building), out-of-sample checks, robust verdicts, repeat-sales index, drawdown, RVD long-run |
+| `study.py` | the growth study end to end from a snapshot (`hkestate report`) |
+| `report.py`, `charts.py` | findings Markdown and SVG charts |
 | `cli.py` | `hkestate` command |
 
 ## Data
