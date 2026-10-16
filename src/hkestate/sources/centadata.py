@@ -21,7 +21,7 @@ from datetime import date, datetime
 from functools import lru_cache
 from urllib.parse import quote
 
-from hkestate.normalise import parse_floor
+from hkestate.normalise import norm_name, parse_floor
 
 BASE = "https://hk.centanet.com/findproperty/centadata-details/"
 SOURCE = "centadata"
@@ -332,6 +332,48 @@ def in_window(d: CdDeal) -> bool:
     return bool(days) and max(days) >= WINDOW_START
 
 
+def _block_signature(text: str) -> str | None:
+    """'1A' for '1座 (1A)', '第1A座' or '1A座'; '2' for '第2座' or '鑽岸 (2座)'. Centadata and
+    28Hse write the same block differently, so blocks are compared by this."""
+    m = re.search(r"(?<!\d)(\d+)\s*([A-Za-z])?\s*座", text)
+    if not m:
+        return None
+    letter = m.group(2)
+    m2 = re.search(r"\(\s*\d+\s*([A-Za-z])\s*\)", text)
+    if m2:
+        letter = m2.group(1)
+    return f"{m.group(1)}{(letter or '').upper()}"
+
+
+def _dev_text(text: str) -> str:
+    # Centadata writes 晉海II as 晉海ll (two lower-case L)
+    t = re.sub(r"[\s()（）]+", " ", norm_name(text).lower()).replace("ll", "ii")
+    return f" {t.strip()} "
+
+
+def match_block(phase: str, block: str, buildings: dict[str, tuple[str, str]]) -> list[str]:
+    """28Hse buildings for a Centadata block page. Where the 28Hse group holds several
+    developments with their own block numbers (LOHAS Park: every development has a block 1),
+    the development is picked first, by the longest 28Hse name found in the page's phase text,
+    and the block is then matched by number and letter. A development 28Hse doesn't have
+    gives no match. Groups with one development use `match_buildings` as before."""
+    from hkestate.backfill import match_buildings
+
+    devs: dict[str, list[str]] = {}
+    for b, (dev, _) in buildings.items():
+        devs.setdefault(dev.strip(), []).append(b)
+    if len(devs) <= 1:
+        return match_buildings(f"{phase} {block}", buildings)
+    text = _dev_text(phase)
+    named = [d for d in devs if d and f" {_dev_text(d).strip()} " in text]
+    if not named:
+        return []
+    dev = max(named, key=len)
+    sig = _block_signature(norm_name(block))
+    hits = [b for b in devs[dev] if _block_signature(norm_name(buildings[b][1])) == sig]
+    return hits if sig and len(hits) == 1 else []
+
+
 def _split_flat(flat: str, bids: list[str], buildings) -> tuple[str, list[str]]:
     """Centadata labels flats on multi-building pages with the street number ('1號A').
     Returns the plain flat letter and the building(s) it can be in."""
@@ -346,11 +388,10 @@ def _split_flat(flat: str, bids: list[str], buildings) -> tuple[str, list[str]]:
 def crosscheck_block(con, blk: BlockPage, buildings: dict[str, tuple[str, str]], url: str):
     """Match one Centadata block's deals to 28Hse deals; store Centadata-only deals."""
     from hkestate import db
-    from hkestate.backfill import match_buildings
 
     # One Centadata block is usually one 28Hse building, but may span several (Mei Foo's
     # "百老匯街1-3號" covers 28Hse's 1號, 2號 and 3號).
-    bids = match_buildings(f"{blk.phase} {blk.block}", buildings)
+    bids = match_block(blk.phase, blk.block, buildings)
     res = BlockResult(
         block=f"{blk.estate} {blk.phase} {blk.block}", building_id=",".join(bids) or None
     )

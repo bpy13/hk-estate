@@ -15,6 +15,43 @@ def page():
     return (FIX / "block_page.html").read_text(encoding="utf-8")
 
 
+# ---- block mapping in an estate of several developments (LOHAS Park) -----------------------------
+
+LOHAS = {
+    "m1": ("Grand Montara ", "第1A座"), "m2": ("Grand Montara ", "第1B座"),
+    "mo": ("MONTARA ", "第2A座"),
+    "gs": ("Grand Seasons ", "第1座(1A)"),
+    "l6": ("LP6 ", "1座"),
+    "k1": ("晉海 ", "第1A座"), "k2": ("晉海II ", "第3A座"),
+    "i1": ("凱柏峰 I ", "1A座"), "i2": ("凱柏峰 II ", "2A座"),
+    "mar": ("Marini ", "第3A座"), "gm": ("Grand Marini ", "第2A座"),
+}
+
+
+@pytest.mark.parametrize("phase, block, want", [
+    ("7期B Grand Montara", "1座 (1A)", ["m1"]),      # not LP6's plain block 1
+    ("7期B Grand Montara", "1座 (1B)", ["m2"]),
+    ("7期A Montara", "2座 (2A)", ["mo"]),
+    ("12期C Grand Seasons", "1座 (1A)", ["gs"]),
+    ("4期A 晉海", "1A座", ["k1"]),
+    ("4期B 晉海ll", "3A座", ["k2"]),                 # Centadata's "ll" is 28Hse's "II"
+    ("11期B 凱柏峰 I", "1座 (1A)", ["i1"]),
+    ("11期C 凱柏峰 II", "2座 (2A)", ["i2"]),
+    ("9期A Marini", "3座 (3A)", ["mar"]),
+    ("9期B Grand Marini", "2座 (2A)", ["gm"]),
+    ("6期 Lp6", "1座", ["l6"]),
+    ("13期B 海璇灣 I", "1座 (1A)", []),               # a development 28Hse doesn't have
+    ("7期B Grand Montara", "5座 (5A)", []),           # a block 28Hse doesn't have
+])
+def test_match_block_picks_the_development_then_the_block(phase, block, want):
+    assert cd.match_block(phase, block, LOHAS) == want
+
+
+def test_match_block_single_development_keeps_the_old_matching():
+    one = {"b1": ("太古城 海天徑", "1座"), "b2": ("太古城 海天徑", "2座")}
+    assert cd.match_block("太古城", "2座", one) == ["b2"]
+
+
 # ---- the safe literal reader -------------------------------------------------------------------
 
 
