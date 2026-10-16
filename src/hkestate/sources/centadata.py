@@ -18,6 +18,7 @@ import json
 import re
 from dataclasses import dataclass, field
 from datetime import date, datetime
+from functools import lru_cache
 from urllib.parse import quote
 
 from hkestate.normalise import parse_floor
@@ -51,6 +52,9 @@ _TOKEN = re.compile(
 )
 
 _UNSET = object()
+_OPEN_PAREN = re.compile(r"\s*\(")
+_COMMA_OR_CLOSE = re.compile(r"\s*([,)])")
+_CLOSE = re.compile(r"\s*\)")
 
 
 class _Reader:
@@ -95,7 +99,7 @@ class _Reader:
                 if (k2, t2) != ("num", "0"):
                     raise NotData("void with an expression")
                 return None
-            if self.text[self.pos:].lstrip().startswith("("):
+            if _OPEN_PAREN.match(self.text, self.pos):  # no slicing: pages are ~300 kB
                 raise NotData("function call")
             if self.refs is None or tok not in self.refs:
                 raise NotData(f"unknown name {tok!r}")
@@ -159,6 +163,7 @@ def parse_js_value(text: str, refs: dict | None = None):
     return v
 
 
+@lru_cache(maxsize=4)  # a page is read by several parsers in a row; callers never modify it
 def read_nuxt(html: str) -> dict:
     """The page data object from `window.__NUXT__=(function(params){return OBJ}(args))`."""
     start = html.find("window.__NUXT__=(function(")
@@ -185,18 +190,14 @@ def read_nuxt(html: str) -> dict:
     args_reader = _Reader(tail, {})
     args_reader.pos = 1
     args = []
-    while True:
-        rest_args = tail[args_reader.pos:].lstrip()
-        if rest_args.startswith(")"):
-            break
+    while not _CLOSE.match(tail, args_reader.pos):
         args.append(args_reader.value())
-        rest_args = tail[args_reader.pos:]
-        stripped = rest_args.lstrip()
-        args_reader.pos += len(rest_args) - len(stripped) + 1
-        if stripped[:1] == ")":
-            break
-        if stripped[:1] != ",":
+        m = _COMMA_OR_CLOSE.match(tail, args_reader.pos)
+        if not m:
             raise NotData("bad argument list")
+        args_reader.pos = m.end()
+        if m.group(1) == ")":
+            break
     values = {p: (args[i] if i < len(args) else None) for i, p in enumerate(params)}
     return _resolve(obj, values)
 
