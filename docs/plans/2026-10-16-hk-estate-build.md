@@ -246,6 +246,13 @@ Lint: `ruff check .`.
   - Done when: territory-wide estate and building lists load (count recorded in
     `docs/sources.md`), with HOS, TPS, villas and village houses excluded by rule, and a
     test checks the rule.
+  - Status 2026-10-16 (unticked, live run in progress): code and tests done
+    (`src/hkestate/sources/cd_master.py`, `hkestate master`, resumable via run_progress; about
+    26 h at 2 s/request because hk.centanet.com is shared with the Centanet listing scraper).
+    Rule: Centadata listing flags `hos_flag`/`prh_flag`, `isHouse`, and names (villa, village
+    lot, village house); override file `data/manual/master_overrides.csv`. Pilot estates are
+    recorded but not reloaded. Also stores Centadata's % change vs previous deal in
+    `gain_pct`. Record the final counts in `docs/sources.md` when the pass finishes.
 - [ ] **Task 3.2: Full backfill**
   - Done when: the backfill completes, resuming across runs, and `scripts/coverage.py`
     writes per-estate coverage (first deal year, deal count) to `data/reports/coverage.csv`.
@@ -257,10 +264,18 @@ Lint: `ruff check .`.
       metres)
     - each building has its district and building age (from the first deal or the occupation
       year where a source gives it).
+  - Status 2026-10-16 (unticked): `python -m hkestate.geo` (ALS geocoding works, resumable;
+    rerun as the master list grows). Deviation: ALS names only 16 of 98 MTR stations and
+    Overpass/CSDI are disallowed by robots.txt, so MTR distance is written only once station
+    coordinates are complete (open item).
 - [ ] **Task 3.4: SRPE first-hand sales**
   - Done when: first-hand transactions for developments since the portal began are stored
     and flagged `first_hand`, with price-list facing and size attributes attached to units
     where available.
+  - Status 2026-10-16 (unticked, live run in progress): `python -m hkestate.sources.srpe`
+    (Playwright passes the disclaimer once, then the JSON API and register-of-transactions
+    PDFs at 30 s). Price-list PDFs (facing/size) and the finished-sales index are not done
+    (open items).
 - [ ] **Task 3.5: Territory-wide listings**
   - Done when: the daily job covers all estates. One run's elapsed time is under 1 hour, or
     the split across the day is documented.

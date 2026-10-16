@@ -62,4 +62,20 @@ cache pruning.)*
   continuously in the background with the largest estates first. Keep the 2018–2021 per-flat
   pass.
 
+- **MTR station coordinates (blocks MTR distance, Task 3.3).** ALS resolves only 16 of 98
+  stations by name; Overpass and CSDI are disallowed by robots.txt. Default: you drop a
+  `data/manual/mtr_stations.csv` (code,lat,lon; codes as in table `mtr_station`), then
+  `python -m hkestate.geo` fills `master_building.mtr_station/mtr_m`.
+- **SRPE gaps (Task 3.4).** (a) Price-list PDFs (flat facing and size) not parsed. (b)
+  Developments whose sales ended over 18 months ago are in a second index
+  (`disclaimer_index_for_all_residential_t18m`) that is not read, so older first-hand sales
+  are missing. (c) SRPE deals dedupe only against rows under the same building id (cd-
+  buildings), not pilot 28Hse ids. (d) Rerun `python -m hkestate.sources.srpe` after the
+  master pass and geocoding so unmatched developments get buildings.
+- **Master list vs 28Hse ids (for Task 3.2).** Territory buildings carry `cd-` ids, the 28Hse
+  backfill mints `h28-` ids; link them (name/address, via `source_map`) so the duplicate rule
+  can pair their deals.
+- **Subsidised estates with no current listing** carry no HOS/TPS flag on Centadata and pass
+  the coverage filter; use `data/manual/master_overrides.csv`.
+
 ## Later
