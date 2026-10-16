@@ -125,6 +125,13 @@ Exclusion flags in `txn_all` (decisions.md "Schema"):
 | `excl_non_market` | non-market transfer (when a source marks it) |
 | `excl_bulk` | 3 or more flats in one building on the same day |
 | `excl_outlier` | price per sq ft more than 5 median absolute deviations from the building's median for that year (MAD scaled by 1.4826, floor 5% of the median; needs ≥5 deals in the building-year) |
+| `excl_quarantine` | the wrongly-attached LOHAS Park Centadata rows (`db.QUARANTINE_SQL`); also ignored by the duplicate, bulk, outlier and price-check tests of other rows (Phase 5) |
+| `excl_parking` | the price includes a parking space (28Hse 連車位 `with_parking`, SRPE `has_parking`) (Phase 5) |
+| `excl_price_check` | under half or over double the building's median price per sq ft, adjusted to today's market by the RVD index of the flat's size class (5+ otherwise-clean deals; part-share transfers) (Phase 5) |
+
+The first-hand rule (developer sales SRPE doesn't flag) and the house/subsidised-estate filter
+need building-level logic and the master tables, so they live in `features.deal_features`
+(`exclude_reason`), which both the fair-price model and the growth study use.
 
 The fair-price model adds its own exclusions on top (`features.py` `exclude_reason`,
 decisions.md "Phase 4 build"); the stored views are unchanged. `db.txn_all_sql(latest)`

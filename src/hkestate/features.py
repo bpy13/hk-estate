@@ -192,7 +192,10 @@ def deflator(index_df: pd.DataFrame, classes, dates,
 # (index-adjusted, all years) is not a normal sale of a whole flat: part-share transfers
 # (one co-owner buying out another) are registered like sales and 28Hse doesn't mark them.
 # Unlike the yearly MAD rule in txn_all, this holds when such deals cluster in one building.
-PRICE_CHECK_LOW, PRICE_CHECK_HIGH, PRICE_CHECK_MIN_DEALS = 0.5, 2.0, 5
+# The same rule (same thresholds) is in the shared `txn_all` view as `excl_price_check`; here
+# it runs after the model's own exclusions (first-hand rule, houses), so it can differ slightly.
+PRICE_CHECK_LOW, PRICE_CHECK_HIGH = db.PRICE_CHECK_LOW, db.PRICE_CHECK_HIGH
+PRICE_CHECK_MIN_DEALS = db.PRICE_CHECK_MIN_DEALS
 
 
 def price_check(adj_psf: pd.Series, building: pd.Series) -> pd.Series:

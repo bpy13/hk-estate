@@ -309,3 +309,96 @@ def test_hse28_registry_dates_are_registration_dates(con):
 
 def test_unit_id_is_building_floor_flat():
     assert db.unit_id("b1", "10", "A") == "b1|10|A"
+
+
+# ---- Phase 5: shared clean view (price check, parking, quarantined rows) -------------------
+
+
+def _txn_raw_row(source_id, price, day, *, unit, building="b1", saleable=500.0,
+                 source="hse28", raw=None, estate=None,
+                 fetched_at=datetime(2026, 10, 16, 12)):
+    import json
+
+    return {
+        "source": source, "source_id": source_id, "fetched_at": fetched_at,
+        "url": "https://example.com/x", "building_id": building, "estate_id": estate,
+        "floor_label": "10", "flat": unit, "deal_date": day, "deal_type": "registry",
+        "price_hkd": price, "saleable_sqft": saleable,
+        "raw_json": json.dumps(raw or {}),
+    }
+
+
+def test_price_check_flags_clustered_part_share_deals(con):
+    # One deal a year at ~HK$10,000/sq ft, then five 2026 "sales" at HK$3,000/sq ft (part-share
+    # transfers). They are too many for the yearly 5-MAD rule (they are that year's median),
+    # but under half the building's median price per sq ft: excl_price_check.
+    _setup_building(con)
+    for i, yr in enumerate(range(2019, 2025)):
+        _txn(con, f"n{i}", 10_000 * 500 + i * 1000, date(yr, 3, 1), unit=f"U{i}")
+    for i in range(5):
+        _txn(con, f"part{i}", 3_000 * 500, date(2026, 1 + i, 9), unit=f"P{i}")
+    flags = dict(con.execute("SELECT source_id, excl_price_check FROM txn_all").fetchall())
+    assert all(flags[f"part{i}"] for i in range(5))
+    assert not any(flags[f"n{i}"] for i in range(6))
+    assert {f"part{i}" for i in range(5)}.isdisjoint(_clean_ids(con))
+    assert all(f"n{i}" in _clean_ids(con) for i in range(6))
+
+
+def test_price_check_adjusts_for_the_market_index(con):
+    # A 1996 deal at HK$3,000/sq ft in a building whose recent deals are HK$10,000: the RVD
+    # index rose from 30 to 100 in between, so index-adjusted it is a normal price.
+    _setup_building(con)
+    con.executemany(
+        "INSERT INTO price_index (series, freq, period, class, region, value) "
+        "VALUES ('rvd_price_index', 'month', ?, ?, 'ALL', ?)",
+        [(date(1996, 6, 1), c, 30.0) for c in ("A", "B", "ALL")]
+        + [(date(2024, 1, 1), c, 100.0) for c in ("A", "B", "ALL")])
+    for i in range(6):
+        _txn(con, f"n{i}", 10_000 * 500, date(2024, 1 + i, 3), unit=f"U{i}")
+    _txn(con, "old", 3_000 * 500, date(1996, 6, 15), unit="OLD")
+    flags = dict(con.execute("SELECT source_id, excl_price_check FROM txn_all").fetchall())
+    assert flags["old"] is False
+
+
+def test_price_check_needs_five_deals(con):
+    _setup_building(con)
+    _txn(con, "a", 10_000 * 500, date(2024, 1, 3), unit="A")
+    _txn(con, "b", 3_000 * 500, date(2025, 2, 3), unit="B")
+    assert _clean_ids(con) == {"a", "b"}
+
+
+def test_parking_deals_are_flagged_and_left_out(con):
+    _setup_building(con)
+    db.insert_txn_raw(con, [
+        _txn_raw_row("park", 9_000_000, date(2024, 1, 3), unit="A", raw={"with_parking": True}),
+        _txn_raw_row("srpe_park", 9_000_000, date(2024, 2, 3), unit="B", source="srpe",
+                     raw={"has_parking": True}),
+        _txn_raw_row("flat", 8_000_000, date(2024, 3, 3), unit="C", raw={"with_parking": False}),
+    ])
+    flags = dict(con.execute("SELECT source_id, excl_parking FROM txn_all").fetchall())
+    assert flags == {"park": True, "srpe_park": True, "flat": False}
+    assert _clean_ids(con) == {"flat"}
+
+
+def test_quarantined_lohas_park_rows_are_flagged_and_ignored_by_other_rules(con):
+    # Centadata rows stored against the wrong LOHAS Park building by the first cross-check run
+    # (before 19:44 on 2026-10-16): flagged, out of `txn`, and not counted towards a bulk deal.
+    con.execute("INSERT INTO estate (estate_id, name_zh, group_name, source, source_key) "
+                "VALUES ('lp', 'LP6', 'lohas-park', 'hse28', '9')")
+    con.execute("INSERT INTO building (building_id, estate_id, name_zh) VALUES ('lpb', 'lp', 'x')")
+    bad = datetime(2026, 10, 16, 19, 30)
+    db.insert_txn_raw(con, [
+        _txn_raw_row("q1", 8_000_000, date(2024, 5, 5), unit="A", building="lpb",
+                     source="centadata", estate="lp", fetched_at=bad),
+        _txn_raw_row("h1", 8_000_000, date(2024, 5, 5), unit="B", building="lpb", estate="lp"),
+        _txn_raw_row("h2", 8_100_000, date(2024, 5, 5), unit="C", building="lpb", estate="lp"),
+        _txn_raw_row("late", 8_000_000, date(2024, 6, 5), unit="D", building="lpb",
+                     source="centadata", estate="lp",
+                     fetched_at=datetime(2026, 10, 16, 19, 50)),
+    ])
+    flags = {r[0]: r[1:] for r in con.execute(
+        "SELECT source_id, excl_quarantine, excl_bulk FROM txn_all").fetchall()}
+    assert flags["q1"][0] is True
+    assert flags["late"][0] is False
+    assert flags["h1"] == (False, False)  # two real deals that day: not a bulk deal
+    assert _clean_ids(con) == {"h1", "h2", "late"}

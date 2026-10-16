@@ -33,6 +33,11 @@ MAD_FLOOR = 0.05
 BULK_MIN_UNITS = 3  # this many flats in one building on one day = bulk deal
 DUP_PRICE_TOL = 0.01  # same sale reported twice: price within 1% ...
 DUP_DAYS = 90  # ... and dates within 90 days
+# Price check (decisions.md "Phase 4 build", added to the shared view in Phase 5): a deal at
+# under half or over double its building's median index-adjusted price per sq ft (buildings
+# with 5+ clean deals) is not a normal sale of a whole flat, e.g. a part-share transfer.
+PRICE_CHECK_LOW, PRICE_CHECK_HIGH, PRICE_CHECK_MIN_DEALS = 0.5, 2.0, 5
+SQFT_PER_SQM = 10.7639
 
 # Which copy of a sale wins when it is reported more than once (lower = preferred).
 SOURCE_RANK_SQL = """
@@ -293,9 +298,22 @@ TABLES_DDL = [
 def txn_all_sql(latest: str = "txn_latest") -> str:
     """The query behind the `txn_all` view, reading deals from `latest` (a view or table
     shaped like `txn_latest`). The fair-price model passes a filtered copy so rows it must
-    ignore (see QUARANTINE_SQL) never take part in the duplicate, bulk or outlier tests."""
+    ignore (see QUARANTINE_SQL) never take part in the duplicate, bulk or outlier tests.
+
+    Added in Phase 5 (so the growth study and any other reader of `txn` share them):
+    `excl_quarantine` (QUARANTINE_SQL rows: flagged, and ignored by the duplicate, bulk,
+    outlier and price-check tests of other rows), `excl_parking` (the price includes a
+    parking space) and `excl_price_check` (the fair-price model's price check)."""
     return f"""
-    WITH base AS (
+    WITH latest AS (
+        SELECT *, {QUARANTINE_SQL} AS excl_quarantine,
+            CASE WHEN json_valid(raw_json) THEN
+                coalesce(json_extract_string(raw_json, '$.with_parking') = 'true'
+                         OR json_extract_string(raw_json, '$.has_parking') = 'true', false)
+                ELSE false END AS excl_parking
+        FROM {latest}
+    ),
+    base AS (
         -- 28Hse dates Land Registry deals by registration date (Centadata cross-check)
         -- a 28Hse deal in a building linked to a master (Centadata) building takes that
         -- building's id, so both sources' deals share one unit (src/hkestate/link.py)
@@ -318,7 +336,7 @@ def txn_all_sql(latest: str = "txn_latest") -> str:
                 WHEN t.gross_sqft > 0 AND b.saleable_to_gross > 0 THEN 'converted'
                 WHEN t.gross_sqft > 0 THEN 'gross_only'
             END AS area_basis
-        FROM {latest} t
+        FROM latest t
         LEFT JOIN building b ON b.building_id = t.building_id
         LEFT JOIN (SELECT source_key, master_id FROM source_map
                    WHERE source = 'hse28' AND kind = 'building') sm
@@ -332,6 +350,7 @@ def txn_all_sql(latest: str = "txn_latest") -> str:
               OR (a.floor_label IN ('高層', '中層', '低層')
                   AND a.building_id = o.building_id AND a.flat = o.flat))
          AND NOT (a.source = o.source AND a.source_id = o.source_id)
+         AND NOT o.excl_quarantine
          AND abs(a.price_hkd - o.price_hkd) <= {DUP_PRICE_TOL} * o.price_hkd
          AND abs(date_diff('day', a.deal_date, o.deal_date)) <= {DUP_DAYS}
          AND (o.source_rank < a.source_rank
@@ -348,7 +367,7 @@ def txn_all_sql(latest: str = "txn_latest") -> str:
     ),
     bulk AS (
         SELECT building_id, deal_date
-        FROM flagged WHERE NOT excl_duplicate
+        FROM flagged WHERE NOT excl_duplicate AND NOT excl_quarantine
         GROUP BY building_id, deal_date
         HAVING count(DISTINCT unit_id) >= {BULK_MIN_UNITS}
     ),
@@ -363,7 +382,8 @@ def txn_all_sql(latest: str = "txn_latest") -> str:
         SELECT building_id, year(deal_date) AS yr,
             median(psf_hkd) AS med, count(*) AS n
         FROM psf
-        WHERE psf_hkd IS NOT NULL AND NOT (excl_duplicate OR excl_low_price OR excl_bulk)
+        WHERE psf_hkd IS NOT NULL
+          AND NOT (excl_duplicate OR excl_low_price OR excl_bulk OR excl_quarantine)
         GROUP BY ALL
     ),
     mad AS (
@@ -372,16 +392,55 @@ def txn_all_sql(latest: str = "txn_latest") -> str:
                 AS mad
         FROM psf p JOIN yr
           ON p.building_id = yr.building_id AND year(p.deal_date) = yr.yr
-        WHERE p.psf_hkd IS NOT NULL AND NOT (p.excl_duplicate OR p.excl_low_price OR p.excl_bulk)
+        WHERE p.psf_hkd IS NOT NULL
+          AND NOT (p.excl_duplicate OR p.excl_low_price OR p.excl_bulk OR p.excl_quarantine)
         GROUP BY p.building_id, yr.yr, yr.med, yr.n
+    ),
+    outl AS (
+        SELECT psf.*,
+            coalesce(m.n >= {OUTLIER_MIN_DEALS} AND m.mad > 0
+                     AND abs(psf.psf_hkd - m.med) > {OUTLIER_MADS} * m.mad, false)
+                AS excl_outlier,
+            -- RVD size class (saleable m2: A < 40, B < 70, C < 100, D < 160, E) and month,
+            -- for the index-adjusted price check
+            CASE WHEN area_sqft IS NULL THEN 'ALL'
+                 WHEN area_sqft / {SQFT_PER_SQM} < 40 THEN 'A'
+                 WHEN area_sqft / {SQFT_PER_SQM} < 70 THEN 'B'
+                 WHEN area_sqft / {SQFT_PER_SQM} < 100 THEN 'C'
+                 WHEN area_sqft / {SQFT_PER_SQM} < 160 THEN 'D' ELSE 'E' END AS _cls,
+            date_trunc('month', coalesce(psf.instrument_date, psf.deal_date)) AS _month
+        FROM psf
+        LEFT JOIN mad m ON psf.building_id = m.building_id AND year(psf.deal_date) = m.yr
+    ),
+    idx AS (  -- RVD price index by class, relative to its last published month
+        SELECT i.class, i.period, i.value / l.last_value AS rel
+        FROM price_index i
+        JOIN (SELECT class, arg_max(value, period) AS last_value FROM price_index
+              WHERE series = 'rvd_price_index' AND region = 'ALL' AND freq = 'month'
+              GROUP BY class) l USING (class)
+        WHERE i.series = 'rvd_price_index' AND i.region = 'ALL' AND i.freq = 'month'
+    ),
+    adj AS (  -- price per sq ft at today's market level (unadjusted where no index)
+        SELECT o.*, o.psf_hkd / coalesce(idx.rel, 1.0) AS _adj_psf
+        FROM outl o ASOF LEFT JOIN idx ON idx.class = o._cls AND o._month >= idx.period
+    ),
+    bmed AS (  -- each building's median adjusted price per sq ft over its otherwise-clean deals
+        SELECT building_id, median(_adj_psf) AS med, count(*) AS n
+        FROM adj
+        WHERE _adj_psf IS NOT NULL
+          AND NOT (excl_duplicate OR excl_low_price OR excl_first_hand OR excl_non_market
+                   OR excl_bulk OR excl_outlier OR excl_quarantine OR excl_parking)
+        GROUP BY building_id
     )
-    SELECT psf.* EXCLUDE (source_rank),
-        coalesce(m.n >= {OUTLIER_MIN_DEALS} AND m.mad > 0
-                 AND abs(psf.psf_hkd - m.med) > {OUTLIER_MADS} * m.mad, false) AS excl_outlier,
+    SELECT adj.* EXCLUDE (source_rank, _cls, _month, _adj_psf),
+        coalesce(bm.n >= {PRICE_CHECK_MIN_DEALS}
+                 AND (adj._adj_psf < {PRICE_CHECK_LOW} * bm.med
+                      OR adj._adj_psf > {PRICE_CHECK_HIGH} * bm.med), false)
+            AS excl_price_check,
         u.floor_num, u.floor_kind
-    FROM psf
-    LEFT JOIN mad m ON psf.building_id = m.building_id AND year(psf.deal_date) = m.yr
-    LEFT JOIN unit u ON u.unit_id = psf.unit_id
+    FROM adj
+    LEFT JOIN bmed bm ON bm.building_id = adj.building_id
+    LEFT JOIN unit u ON u.unit_id = adj.unit_id
     """
 
 
@@ -414,7 +473,8 @@ VIEWS_DDL = [
     CREATE OR REPLACE VIEW txn AS
     SELECT * FROM txn_all
     WHERE NOT (excl_duplicate OR excl_low_price OR excl_first_hand OR excl_non_market
-               OR excl_bulk OR excl_outlier)
+               OR excl_bulk OR excl_outlier OR excl_quarantine OR excl_parking
+               OR excl_price_check)
     """,
 ]
 
