@@ -25,6 +25,18 @@ hkestate crosscheck                          (sources/centadata.py)
        └─ deals 28Hse doesn't have -> txn_raw with source='centadata'
 
 txn_raw -> txn_latest -> txn_all (flags) -> txn (clean)   views, recomputed on query
+
+hkestate daily  (= listings, all sources, + cache prune; Task Scheduler 08:00, docs/operations.md)
+  └─ listing_run.py                          per source, per pilot estate group
+       ├─ sources/centanet.py: sitemap -> detail pages (new + rotating 1/7)
+       ├─ sources/hse28_listings.py: estate search pages -> detail if new / price changed
+       │    (skipped while data/locks/hse28.lock is held by a backfill or update)
+       ├─ sources/spacious.py: neighbourhood search pages (cards only)
+       ├─ listings.store_raw -> listing_raw   append when changed; free text never stored
+       ├─ listings.record_seen -> listing, listing_snapshot (one per HK day), mark_delisted
+       ├─ match.py -> listing.building_id, floor_band, dup_group; relink_relistings
+       └─ flags.py (keywords.yml) -> risk_flag
+hkestate update (weekly) -> backfill.update_estates: newest 28Hse deal-list pages
 ```
 
 ## Modules
@@ -38,7 +50,15 @@ txn_raw -> txn_latest -> txn_all (flags) -> txn (clean)   views, recomputed on q
 | `sources/hse28.py` | 28Hse parsers (deal lists, block grids, per-flat pages) and URLs |
 | `sources/rvd.py` | RVD spreadsheet parser and loader |
 | `sources/centadata.py` | Centadata block-page parser (reads the page's embedded data without running it) and cross-check |
-| `backfill.py` | crawl plan per estate, resumable steps, loading |
+| `backfill.py` | crawl plan per estate, resumable steps, loading; `update_estates` (weekly) |
+| `listing_types.py` | the `Listing` record every listing parser returns |
+| `sources/centanet.py`, `sources/hse28_listings.py`, `sources/spacious.py` | listing parsers and URLs (agent details never read) |
+| `listing_run.py` | the daily listing run: pilot targets per site, fetch, store, finish |
+| `listings.py` | listing storage, snapshots, delisting, relisting links |
+| `match.py` | listing → building (manual / single / exact / range / contains / fuzzy), floor band, cross-site duplicates |
+| `flags.py`, `keywords.yml` | keyword risk flags with negations |
+| `locks.py` | job lock files (`hse28`, `listings`) |
+| `maintenance.py` | deletes cached listing pages 7+ days old |
 | `cli.py` | `hkestate` command |
 
 ## Data
@@ -57,8 +77,12 @@ the same ids: estate `h28-<id>`, phase `h28-<id>-s<n>`, building `h28-<id>-b<n>`
 | `txn_all` (view) | every deal with `unit_id`, `area_sqft` + `area_basis` (`saleable`, `converted`, `gross_only`), price per sq ft and exclusion flags | |
 | `txn` (view) | clean deals for analysis: no flagged rows | |
 | `price_index`, `rent_index`, `market_stat` | RVD series by class and region, monthly or annual, with provisional and fewer-than-20-deals marks | (series, freq, period, class, region) |
-| `listing_raw`, `listing_snapshot` | listings (Phase 2) | |
-| `attribute`, `risk_flag` | flat attributes and risk flags (later phases) | |
+| `listing_raw` | every listing reading that changed something: parsed fields as columns (kind, building text, floor, flat, price or monthly rent, areas, rooms, facing, age, dates, feature tags) + `raw_json`; never agent names, phones, licences, agencies or free text | (source, listing_id, fetched_at) |
+| `listing` | current state per listing: estate group, matched `building_id` + `match_method`, `floor_band`, price, first/last seen, `status` (active/delisted), `relist_of`, `dup_group`, `last_detail_at` | (source, listing_id) |
+| `listing_snapshot` | one row per listing per HK day: price, building, band, status (new, seen, price_change, relisted, delisted) | (source, listing_id, snapshot_date) |
+| `listing_run_day` | days a source's run covered an estate group (delisting counts these) | (source, scope, run_date) |
+| `risk_flag` | keyword flags per listing (haunted, tenanted, sea_view, renovated, illegal_structure, studio) with the matched term | |
+| `attribute` | flat attributes (later phases) | |
 | `source_map` | other sources' estate/building/unit codes → master ids | (source, kind, source_key) |
 | `run_log` | one row per command run: status, rows added, message | `run_id` |
 | `run_progress` | finished steps of a resumable command; a rerun skips them | (command, step_key) |

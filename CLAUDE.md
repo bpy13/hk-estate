@@ -19,7 +19,8 @@ Read these before substantial changes:
 - Install: `conda env create -f environment.yml`, then
   `conda run -n hk-estate python -m pip install -e ".[dev]"` (conda env `hk-estate`, Python 3.12)
 - Run: `conda run -n hk-estate hkestate <command>`: `backfill --estates pilot` (resumable),
-  `rvd`, `crosscheck --estates pilot`, `status`. Spot-check:
+  `rvd`, `crosscheck --estates pilot`, `listings`, `daily`, `update`, `prune-cache`,
+  `status`. Scheduled jobs and locks: `docs/operations.md`. Spot-check:
   `conda run -n hk-estate python scripts/spot_check.py`. Logs in `data/logs/`, reports in
   `data/reports/`.
 - Tests: `conda run -n hk-estate python -m pytest -q`

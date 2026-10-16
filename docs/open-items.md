@@ -18,9 +18,9 @@ here; a limit or trap we live with goes in `known-issues.md`. Each item in one p
    across an attribute group, and these pairs are reported separately from real pairs.
    **Default: (a) + (d)**, noted as a limit in the report. Phase 5 only; earlier phases don't
    depend on it.
-2. **Raw listing pages in the cache contain agent names and phones** (the pages show them;
-   parsers will skip them and the database never stores them). Default: delete cached listing
-   pages after 7 days with a prune step in the daily job.
+2. [x] **Raw listing pages in the cache contain agent names and phones.** *(Done in Phase 2,
+   with the default: the daily job deletes cache day-folders 7+ days old for Centanet, 28Hse
+   and Spacious; `hkestate prune-cache` does it by hand.)*
 3. **CSDI files by hand?** CSDI's API is off-limits (robots.txt), so MTR distance will be to
    the station centre (geocoded with ALS), not the nearest exit. Default: station centres.
    The alternative is for you to download the MTR-exits file once in a browser and drop it in
@@ -31,9 +31,27 @@ here; a limit or trap we live with goes in `known-issues.md`. Each item in one p
 - SRPE (Phase 3, Task 3.4): the site is now a JavaScript app with a disclaimer and session-token
   API and a 30 s crawl-delay. Decide how to drive it (Playwright for the disclaimer, then the
   API at 30 s per request) before Task 3.4. A full backfill is about 30 hours.
-- Centanet listings: the sitemap's `lastmod` is always today, so price changes on existing
-  listings need a rotating re-read of detail pages (e.g. 1/7 of live listings a day). Design in
-  Task 2.1/2.3.
+- [x] Centanet listings: the sitemap's `lastmod` is always today, so price changes on existing
+  listings need a rotating re-read of detail pages. *(Done in Phase 2: new listings plus the
+  oldest-read seventh of known ones each day, so every price is re-read within 7 days.)*
+- **28Hse live listing run waits for the LOHAS Park backfill.** The 28Hse listing parser is
+  built and tested on fixtures only; while the backfill (PID 5004) runs, the daily job skips
+  28Hse (lock `data/locks/hse28.lock`) so the two don't share 28Hse's rate limit. The first
+  daily run after the backfill ends does the first live 28Hse listing pass (~100 search pages
+  plus ~1,000 detail pages at 4 s, about 75 minutes). The estate search URLs
+  (`/buy/apartment/a1/dg9/c1140` style) were taken from 28Hse's own links but not yet fetched;
+  check that run's log for 404s.
+- **LOHAS Park listings: 157 of 1,385 unmatched** because 凱柏峰 I–III and the three Seasons
+  developments are not in the building table yet (the backfill is still loading LOHAS Park).
+  They will match on the first daily run after the load; rerun `hkestate listings
+  --sources spacious` to rematch sooner.
+- **Spacious finds no City One or Goldwin Heights listings.** Their neighbourhood pages (Sha
+  Tin, Mid-Levels West) stop after 3 pages; deeper pages or the building pages
+  (`/n/77-.../b/93017--city-one-shatin/...`) are needed. Secondary source, low priority;
+  proposal: switch these two to building pages in Phase 3 (Task 3.5).
+- **75 Taikoo Shing Centanet listings name only the phase** (e.g. "太古城 海天花園", no block),
+  so they can't be placed in a building. Left unmatched; they could be valued at phase level
+  later.
 - [x] Fetcher: a robots.txt fetch has no retry. One run saw Centanet's robots.txt fail once,
   which (correctly, but needlessly) blocked the host for that run. Add 1–2 retries for
   robots.txt on 5xx or network errors in Phase 1. *(Done in Phase 1: 2 retries with 2 s / 4 s

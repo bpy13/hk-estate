@@ -14,6 +14,13 @@ Bugs that will be fixed go in `open-items.md` instead.
 - **CSDI data API disallowed by robots.txt.** MTR distance uses station centres from MTR open
   data, not station exits.
 - **Spacious listings have no floor or flat.** They match only to a building.
+- **Many Centanet and 28Hse listings hide the floor and flat** (agents leave them out), so
+  their floor band is `unknown`; they still match to a building.
+- **Listing free text is never stored.** Titles and blurbs may name agents or give phone
+  numbers, so they are read only for keyword flags; to re-flag old listings, the page has to
+  be read again.
+- **28Hse search pages may show promoted listings from other estates**; listings whose
+  estate id differs from the estate being read are dropped.
 
 - **28Hse dates are registration dates**, 2–6 weeks after the agreement (see decisions).
 - **LOHAS Park is 22 separate developments on 28Hse** (首都, 領都, ... Grand Seasons), loaded
@@ -30,6 +37,10 @@ Bugs that will be fixed go in `open-items.md` instead.
   backfill now waits 4 s between requests (~900 an hour), pauses 15 minutes on a 429/5xx
   and stops after three in a row on one page; rerunning resumes. A territory-wide backfill
   at this pace is far slower than the Phase 0 estimate (see open items).
+- **The daily job skips 28Hse while a backfill runs** (lock `data/locks/hse28.lock`), so on
+  those days 28Hse listings get no snapshot; the day doesn't count towards delisting.
+- **Cached listing pages are deleted after 7 days** (they show agent details), so a listing
+  page older than that can't be re-parsed from the cache.
 - **DuckDB allows one process at a time.** Long jobs open the database only while writing;
   other commands wait for the file (up to 5 minutes).
 

@@ -185,21 +185,35 @@ Lint: `ruff check .`.
 
 ## Phase 2 – Listings (pilot)
 
-- [ ] **Task 2.1: Listing scrapers**: one module per kept site, under `sources/`.
+- [x] **Task 2.1: Listing scrapers**: one module per kept site, under `sources/`.
   - Done when:
     - parser tests on fixtures pass
     - a live run stores the pilot estates' listings in `listing_raw`
     - no agent names or phones are stored (a test asserts the columns don't exist).
   - Notes: search-result pages daily; detail pages only for new listings or a changed
     price.
-- [ ] **Task 2.2: Matching**
+  - Result (2026-10-16): `sources/centanet.py` (sitemap + detail pages; search pages show
+    only 24 results), `sources/hse28_listings.py` (estate search pages + detail),
+    `sources/spacious.py` (zh-tw neighbourhood pages, cards only). Live: Centanet 2,500
+    listings (2,144 sale, 356 rent), Spacious 33. **28Hse ran on fixtures only**: its live run
+    waits for the LOHAS Park backfill (shared rate limit; open-items). Centanet detail pages
+    are re-read in a rotating seventh a day (its sitemap dates are useless). Rent listings
+    are collected too.
+- [x] **Task 2.2: Matching**
   - Files: `src/hkestate/match.py`, `data/` manual map CSV (path in config), tests.
   - Done when: tests cover name fuzz, TC/SC, floor-band mapping and cross-site dedupe
     (building + band + area ±2%), and ≥80% of live pilot listings match a building.
-- [ ] **Task 2.3: Snapshots and delisting**
+  - Result: 2,276 of 2,533 live listings (89.9%) match a building. Mei Foo's address-range
+    blocks map to the range's first street number (`range`); LOHAS Park's unmatched 157 wait
+    for the backfill to load their developments; manual map at
+    `data/manual/building_map.csv` (`match.manual_map_path()`).
+- [x] **Task 2.3: Snapshots and delisting**
   - Done when: tests show one snapshot per listing per HK day, delisted after 3 missed days,
     and a relisting at a new price becomes a new snapshot of the same listing.
-- [ ] **Task 2.4: Risk-flag keywords**
+  - Result: "missed days" count only days the source actually covered the estate (a laptop
+    off or a skipped/blocked source doesn't delist); a new id for the same flat links to the
+    old listing (`relist_of`).
+- [x] **Task 2.4: Risk-flag keywords**
   - Files: `src/hkestate/flags.py`, `src/hkestate/keywords.yml`, tests.
   - Done when: tests pass for the seed terms, including negation cases ("非凶宅").
   - Notes: seed terms:
@@ -209,15 +223,24 @@ Lint: `ruff check .`.
     - 全新裝修 / renovated
     - 僭建 / illegal structure
     - 開放式 / studio
-  - Squarefoot's haunted list is added as a flag source if Phase 0 kept it.
-- [ ] **Task 2.5: Daily job**
+  - Squarefoot's haunted list is added as a flag source if Phase 0 kept it. (Dropped in
+    Phase 0: blocked.)
+  - Result: negations per flag in `keywords.yml`; building/estate names are removed before
+    matching (太古城's 海景花園 isn't a sea view); `rooms = 0` also flags `studio`.
+- [x] **Task 2.5: Daily job**
   - Files: `scripts/daily.ps1`, `scripts/register_task.ps1`, `docs/operations.md`.
   - Done when:
     - the task is registered (daily 08:00, run after a missed start)
     - a manual run writes `run_log` and a log file
     - a weekly transaction refresh is registered as well.
+  - Result: `\hk-estate\daily listings` (08:00, `hkestate daily`: listings + cache prune)
+    and `\hk-estate\weekly deals` (Sundays 07:00, `hkestate update`), StartWhenAvailable,
+    current user, logged-on only (no stored password). Manual start of the daily task
+    17:34: exit 0, `run_log` status `partial` (28Hse skipped by the lock while the backfill
+    runs), logs `task_daily_*.log` + `daily_*.log`. Lock files in `data/locks/` (`hse28`
+    held by backfill/update, `listings` by listing runs).
 
-## Phase 3 – Territory-wide scale and enrichment
+## Phase 3 – Territory-wide scale and enrichment (sonnet)
 
 - [ ] **Task 3.1: Master estate/building list**
   - Done when: territory-wide estate and building lists load (count recorded in
@@ -242,7 +265,7 @@ Lint: `ruff check .`.
   - Done when: the daily job covers all estates. One run's elapsed time is under 1 hour, or
     the split across the day is documented.
 
-## Phase 4 – Fair price and dashboard
+## Phase 4 – Fair price and dashboard (opus)
 
 - [ ] **Task 4.1: Feature table**
   - Done when: `features.py` builds one row per deal and per listing, and tests check feature
@@ -274,7 +297,7 @@ Lint: `ruff check .`.
     reasons, listing link) render and are checked in the browser; the run-failure banner
     shows when the last `run_log` entry failed.
 
-## Phase 5 – Growth study and report
+## Phase 5 – Growth study and report (opus)
 
 - [ ] **Task 5.1: Repeat-sales pairs**
   - Done when: tests show pairs are built only from clean deals on the same unit held ≥3

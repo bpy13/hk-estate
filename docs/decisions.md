@@ -212,6 +212,35 @@ Details and measurements in `docs/sources.md`. Supersedes parts of "Source roles
   both holding it): same flat, price within 1%, dates within 90 days; the 28Hse Land
   Registry copy wins.
 
+## Phase 2 build: listings (2026-10-16, Claude's calls)
+- **Where each site's pilot listings come from:** Centanet from its detail sitemap (slug
+  starts with the estate name); 28Hse from its estate-filtered search pages
+  (`/buy|rent/apartment/<area>/<district>/c<estate id>`); Spacious from the Chinese
+  neighbourhood search pages (sale only), filtered by building name.
+- **Detail pages:** Centanet: new listings plus a rotating seventh of known ones a day.
+  28Hse: only new listings or a changed price (search cards carry the rest). Spacious: none
+  (cards have everything it offers; no floor or flat on Spacious anyway).
+- **Request pacing:** Centanet 2 s (hk.centanet.com is shared with the Phase 3 Centadata
+  crawl, which also uses 2 s, so the host sees ~1 request/s), 28Hse 4 s, Spacious 1 s.
+- **Rent listings** are collected too (Centanet and 28Hse), for current yields in Phase 5.
+- **Mei Foo address ranges:** Centanet names a block "百老匯街19-21號"; 28Hse lists one
+  building per street number. A range listing is matched to the lowest number's building
+  (`match_method = 'range'`): it is one physical block.
+- **Delisting counts run days, not calendar days:** a listing is delisted after 3 runs of its
+  source that covered its estate and didn't see it; days the laptop was off, or a run that
+  was blocked or skipped a source, don't count.
+- **Relisting:** the same id seen again after delisting gets a snapshot with status
+  `relisted`; a new id on the same site for the same building, floor band, flat and area
+  (±2%) within 180 days of a delisting gets `relist_of` = the earlier listing.
+- **Flags** come from titles, blurbs and feature tags with building/estate names removed
+  (so 太古城's 海景花園 blocks don't read as "sea view"); `rooms = 0` also sets `studio`.
+  Only the flag and the matched term are stored.
+- **28Hse is skipped by the daily job while a backfill or the weekly update holds the
+  `hse28` lock**, rather than the whole job waiting: Centanet and Spacious still run, and the
+  database is shared through short sessions.
+- **Weekly transaction refresh** (`hkestate update`) reads each estate's deal list from page 1
+  and stops at the first page that adds nothing.
+
 ## Repository
 - **Public GitHub repo `hk-estate` on account `bpy13`** (2026-10-16). Because it is public:
   scraped data, the database and raw-page cache are never committed (`data/` ignored), and no

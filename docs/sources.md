@@ -201,6 +201,28 @@ for a while; the backfill now runs at one request per 4 s (see known-issues).
 
 **Spot-check:** pending (runs after the LOHAS Park load).
 
+## Phase 2 results: pilot listings (2026-10-16)
+
+First live listing run (`hkestate listings`, Centanet + Spacious; 28Hse waits for the
+backfill, see open-items):
+
+| Source | Listings stored | Notes |
+|---|---|---|
+| Centanet | 2,498 (sale + rent) of 2,512 in the sitemap | TKS 406, Mei Foo 330, City One 377, LOHAS Park 1,370, Goldwin Heights 15; ~1.7 h at 2 s per page; 14 pages failed or gone |
+| Spacious | 33 (sale) | TKS 15, LOHAS Park 15, Mei Foo 3; none found for City One / Goldwin Heights |
+| 28Hse | 0 (not run live yet) | parser tested on fixtures |
+
+Matched to a building: **2,275 of 2,531 (89.9%)**: City One 99%, Goldwin Heights 100%,
+Mei Foo 100% (315 via address ranges), LOHAS Park 87% (developments not yet loaded), Taikoo
+Shing 82% (listings naming only the phase).
+
+28Hse estate listing URLs: `/buy/apartment/<area>/<district>/c<estate id>` with
+TKS `a1/dg9`, Mei Foo `a2/dg107`, City One `a3/dg44`, LOHAS Park `a3/dg41`, Goldwin Heights
+`a1/dg3` (from 28Hse's district menu and listing links; not fetched yet).
+
+Spacious neighbourhoods (zh-tw): 太古城 48, 荔枝角 88 (Mei Foo), 沙田 77 (City One),
+日出康城 128, 西半山 35 (Goldwin Heights). Pagination links carry `rel="next nofollow"`.
+
 ## Territory-wide backfill estimate (transaction master)
 
 | Pass | Pages | Time |
