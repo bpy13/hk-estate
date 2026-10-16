@@ -1,0 +1,296 @@
+"""Location attributes for buildings: coordinates, nearest MTR station, district, age.
+
+Coordinates come from the government Address Lookup Service (ALS): one request per building,
+using the street address Centadata shows. ALS also names the district, which is kept next to
+Centadata's own. Distance is straight-line to the nearest MTR *station centre* (decisions.md:
+the CSDI exit data is behind a disallowed API).
+
+ALS knows few MTR stations by name (16 of 98 resolved exactly), so station coordinates also
+come from an optional hand-made file `data/manual/mtr_stations.csv` (code,lat,lon). Distances
+are only written once every station has coordinates, because a station without them could be
+the true nearest one.
+"""
+
+from __future__ import annotations
+
+import csv
+import io
+import math
+import re
+from dataclasses import dataclass
+from datetime import date
+from html import unescape
+from urllib.parse import quote
+
+import httpx
+
+from hkestate import db
+from hkestate.config import get_data_dir
+from hkestate.fetch import FetchError, SourceBlocked
+
+ALS_URL = "https://www.als.gov.hk/lookup?q={q}&n=1"
+MTR_CSV = "https://opendata.mtr.com.hk/data/mtr_lines_and_stations.csv"
+
+GEO_DDL = [
+    """
+    CREATE TABLE IF NOT EXISTS mtr_station (
+        code    VARCHAR PRIMARY KEY,
+        name_zh VARCHAR,
+        name_en VARCHAR,
+        lat     DOUBLE,
+        lon     DOUBLE
+    )""",
+]
+
+
+def ensure_tables(con) -> None:
+    for ddl in GEO_DDL:
+        con.execute(ddl)
+
+
+# ---- ALS -------------------------------------------------------------------------------------
+
+
+@dataclass
+class AlsResult:
+    lat: float
+    lon: float
+    name_zh: str
+    district_zh: str
+    score: float | None
+
+
+def _tag(block: str, tag: str) -> str:
+    m = re.search(rf"<{tag}>([^<]*)</{tag}>", block)
+    return unescape(m.group(1)) if m else ""
+
+
+def parse_als(xml: str) -> AlsResult | None:
+    """The first suggested address of an ALS answer (read with regexes: it is untrusted)."""
+    m = re.search(r"<SuggestedAddress>.*?</SuggestedAddress>", xml, re.S)
+    if not m:
+        return None
+    block = m.group(0)
+    lat, lon = _tag(block, "Latitude"), _tag(block, "Longitude")
+    if not lat or not lon:
+        return None
+    chi = re.search(r"<ChiPremisesAddress>.*?</ChiPremisesAddress>", block, re.S)
+    chi_text = chi.group(0) if chi else ""
+    score = _tag(block, "Score")
+    return AlsResult(float(lat), float(lon), _tag(chi_text, "BuildingName"),
+                     _tag(chi_text, "DcDistrict"), float(score) if score else None)
+
+
+def als_query(address: str | None) -> str | None:
+    """'沙田/銀城街1號' -> '銀城街1號'; a range '1-3號' -> '1號'."""
+    if not address:
+        return None
+    street = address.split("/", 1)[-1].strip()
+    street = re.sub(r"(\d+[A-Za-z]?)\s*[-–]\s*\d+[A-Za-z]?(?=號)", r"\1", street)
+    return street or None
+
+
+def seed_queries(con) -> int:
+    """Fill geo_query for buildings that have an address (pilot 28Hse buildings, which have
+    none, are queried by estate + block name)."""
+    con.execute("""
+        INSERT INTO master_building (building_id, estate_name, block_name, district, geo_query)
+        SELECT b.building_id, e.name_zh, b.name_zh, e.district, e.name_zh || ' ' || b.name_zh
+        FROM building b JOIN estate e USING (estate_id)
+        WHERE e.source = 'hse28'
+          AND b.building_id NOT IN (SELECT building_id FROM master_building)""")
+    rows = con.execute(
+        "SELECT building_id, address FROM master_building "
+        "WHERE geo_query IS NULL AND address IS NOT NULL").fetchall()
+    for bid, addr in rows:
+        q = als_query(addr)
+        if q:
+            con.execute("UPDATE master_building SET geo_query = ? WHERE building_id = ?", [q, bid])
+    return len(rows)
+
+
+def lookup(fetcher, query: str) -> AlsResult | None:
+    return parse_als(fetcher.get(ALS_URL.format(q=quote(query)), "static"))
+
+
+def geocode_buildings(fetcher, db_path=None, log=print, limit: int | None = None) -> dict:
+    """Geocode every master building not yet tried. Resumable: geo_status marks the done ones."""
+    with db.session(db_path) as con:
+        ensure_tables(con)
+        seed_queries(con)
+        todo = con.execute(
+            "SELECT building_id, geo_query, district FROM master_building "
+            "WHERE geo_status IS NULL AND geo_query IS NOT NULL ORDER BY building_id"
+        ).fetchall()
+    if limit:
+        todo = todo[:limit]
+    log(f"geocoding {len(todo)} buildings")
+    stats = {"ok": 0, "no_match": 0, "error": 0}
+    for i, (bid, query, district) in enumerate(todo, 1):
+        try:
+            res = lookup(fetcher, query)
+            # the same street name exists in several districts: retry with the district
+            if res and district and res.district_zh and district[:2] != res.district_zh[:2]:
+                retry = lookup(fetcher, f"{district} {query}")
+                if retry and retry.district_zh[:2] == district[:2]:
+                    res = retry
+            status = "ok" if res else "no_match"
+        except SourceBlocked:
+            raise
+        except (FetchError, httpx.HTTPError) as e:
+            log(f"  {bid}: {type(e).__name__} {e}")
+            stats["error"] += 1
+            continue
+        stats[status] += 1
+        with db.session(db_path) as con:
+            con.execute(
+                "UPDATE master_building SET lat = ?, lon = ?, geo_status = ?, geo_name = ?, "
+                "geo_district = ?, geo_at = now() WHERE building_id = ?",
+                [res.lat if res else None, res.lon if res else None, status,
+                 res.name_zh if res else None, res.district_zh if res else None, bid],
+            )
+        if i % 200 == 0:
+            log(f"{i}/{len(todo)} {stats}")
+    log(f"geocoding done: {stats}")
+    return stats
+
+
+# ---- MTR ---------------------------------------------------------------------------------------
+
+
+def haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    a = (math.sin((p2 - p1) / 2) ** 2
+         + math.cos(p1) * math.cos(p2) * math.sin(math.radians(lon2 - lon1) / 2) ** 2)
+    return 2 * 6_371_000 * math.asin(math.sqrt(a))
+
+
+def nearest_station(lat: float, lon: float, stations) -> tuple[str, float]:
+    """(station, metres) for the closest of [(name, lat, lon), ...]."""
+    return min(((n, haversine_m(lat, lon, la, lo)) for n, la, lo in stations),
+               key=lambda x: x[1])
+
+
+def load_stations(fetcher, db_path=None, log=print) -> int:
+    """MTR station list (open data) with coordinates from ALS where it names the station
+    exactly, then from data/manual/mtr_stations.csv. Returns stations still without coordinates."""
+    text = fetcher.get(MTR_CSV, "static").lstrip("﻿")
+    stations: dict[str, tuple[str, str]] = {}
+    for r in csv.DictReader(io.StringIO(text)):
+        if r.get("Station Code"):
+            stations.setdefault(r["Station Code"], (r["Chinese Name"], r["English Name"]))
+    manual = {}
+    path = get_data_dir() / "manual" / "mtr_stations.csv"
+    if path.exists():
+        with open(path, encoding="utf-8", newline="") as fh:
+            manual = {r["code"]: (float(r["lat"]), float(r["lon"])) for r in csv.DictReader(fh)}
+    with db.session(db_path) as con:
+        ensure_tables(con)
+        have = {r[0] for r in con.execute(
+            "SELECT code FROM mtr_station WHERE lat IS NOT NULL").fetchall()}
+    for code, (zh, en) in stations.items():
+        if code in have:
+            continue
+        pos = manual.get(code)
+        if pos is None:
+            for q in (f"港鐵{zh}站", f"MTR {en} Station"):
+                res = lookup(fetcher, q)
+                if res and res.name_zh.startswith(f"港鐵{zh}站"):
+                    pos = (res.lat, res.lon)
+                    break
+        with db.session(db_path) as con:
+            con.execute("INSERT OR REPLACE INTO mtr_station VALUES (?, ?, ?, ?, ?)",
+                        [code, zh, en, pos[0] if pos else None, pos[1] if pos else None])
+    with db.session(db_path) as con:
+        missing = con.execute("SELECT count(*) FROM mtr_station WHERE lat IS NULL").fetchone()[0]
+    log(f"{len(stations)} MTR stations, {missing} without coordinates")
+    return missing
+
+
+def assign_mtr(con) -> int:
+    """Nearest-station distance for every geocoded building; 0 if any station lacks
+    coordinates (see module docstring). Returns buildings updated."""
+    if con.execute("SELECT count(*) FROM mtr_station WHERE lat IS NULL").fetchone()[0]:
+        return 0
+    stations = con.execute("SELECT name_zh, lat, lon FROM mtr_station").fetchall()
+    if not stations:
+        return 0
+    rows = con.execute(
+        "SELECT building_id, lat, lon FROM master_building WHERE lat IS NOT NULL").fetchall()
+    for bid, lat, lon in rows:
+        name, m = nearest_station(lat, lon, stations)
+        con.execute("UPDATE master_building SET mtr_station = ?, mtr_m = ? WHERE building_id = ?",
+                    [name, round(m), bid])
+    return len(rows)
+
+
+# ---- age ---------------------------------------------------------------------------------------
+
+
+def set_building_ages(con, today: date | None = None) -> None:
+    """built_year from the completion date (Centadata; 1900/1950-or-earlier placeholders are
+    ignored), else the year of the building's first recorded deal (a proxy: marked)."""
+    year = (today or date.today()).year
+    con.execute(
+        f"""
+        UPDATE master_building SET
+            built_year = y, built_basis = basis, age_years = {year} - y
+        FROM (
+            SELECT b.building_id,
+                CASE WHEN year(b.completion_date) > 1950 THEN year(b.completion_date)
+                     ELSE f.first_year END AS y,
+                CASE WHEN year(b.completion_date) > 1950 THEN 'completion'
+                     WHEN f.first_year IS NOT NULL THEN 'first_deal' END AS basis
+            FROM master_building b
+            LEFT JOIN (SELECT building_id, min(year(deal_date)) AS first_year
+                       FROM txn_raw GROUP BY building_id) f USING (building_id)
+        ) s
+        WHERE master_building.building_id = s.building_id
+        """
+    )
+
+
+# ---- command line: python -m hkestate.geo [--limit N] ---------------------------------------
+
+
+def main(argv=None) -> int:
+    import argparse
+
+    from hkestate.cli import _logger
+    from hkestate.fetch import Fetcher
+
+    p = argparse.ArgumentParser(prog="python -m hkestate.geo")
+    p.add_argument("--db", default=None)
+    p.add_argument("--limit", type=int, default=None)
+    args = p.parse_args(argv)
+    log = _logger("geo")
+    with db.session(args.db) as con:
+        db.init_db(con)
+        from hkestate.sources import cd_master
+        cd_master.ensure_tables(con)
+        ensure_tables(con)
+        run_id = db.start_run(con, "geo")
+    status, message, stats = "failed", "", {}
+    try:
+        with Fetcher() as f:
+            load_stations(f, args.db, log)
+            stats = geocode_buildings(f, args.db, log, args.limit)
+        with db.session(args.db) as con:
+            n = assign_mtr(con)
+            set_building_ages(con)
+            total, ok = con.execute(
+                "SELECT count(*), count(lat) FROM master_building").fetchone()
+        log(f"coordinates for {ok}/{total} buildings; MTR distance set for {n}")
+        status = "ok"
+    except Exception as e:
+        message = f"{type(e).__name__}: {e}"
+        log(message)
+        raise
+    finally:
+        with db.session(args.db) as con:
+            db.finish_run(con, run_id, status, stats.get("ok", 0), message)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
