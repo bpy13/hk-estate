@@ -292,7 +292,10 @@ class SrpeClient:
     """Bearer-token JSON client at the site's Crawl-delay. The token comes from one
     Playwright visit that ticks the disclaimer, exactly as a visitor would."""
 
-    def __init__(self, delay_s: float = DEFAULT_DELAY_S, sleep=time.sleep, clock=time.monotonic):
+    def __init__(self, delay_s: float = DEFAULT_DELAY_S, sleep=time.sleep, clock=time.monotonic,
+                 allowed=None):
+        # `allowed(url) -> bool` is the robots.txt check (Fetcher.allowed); None = no check
+        self._allowed = allowed
         self.delay_s = delay_s
         self._sleep, self._clock = sleep, clock
         self._last = None
@@ -303,8 +306,17 @@ class SrpeClient:
     def close(self):
         self._http.close()
 
+    def _check(self, url: str) -> None:
+        """Refuse (before any request) a URL robots.txt disallows for our user agent."""
+        if self._allowed is not None and not self._allowed(url):
+            from hkestate.fetch import RobotsDisallowed
+
+            raise RobotsDisallowed(url)
+
     def login(self) -> None:
         from playwright.sync_api import sync_playwright
+
+        self._check(DISCLAIMER_URL)
 
         with sync_playwright() as p:
             browser = p.chromium.launch()
@@ -335,6 +347,7 @@ class SrpeClient:
         self._last = self._clock()
 
     def _send(self, method: str, url: str, **kw) -> httpx.Response:
+        self._check(url)
         for attempt in (0, 1):
             self._wait()
             self.requests += 1
@@ -366,6 +379,8 @@ def run_srpe(client: SrpeClient, db_path=None, log=print, limit: int | None = No
     """List developments, then read each one's newest register. Resumable: a development's
     detail is checked once a day and a register is parsed once per issue."""
     import pdfplumber
+
+    from hkestate.fetch import RobotsDisallowed
 
     today = date.today().isoformat()
     with db.session(db_path) as con:
@@ -401,7 +416,11 @@ def run_srpe(client: SrpeClient, db_path=None, log=print, limit: int | None = No
             if not done:
                 pdf_path = pdf_dir / f"{dev.dev_id}_{detail.register_file}"
                 if not pdf_path.exists():
-                    pdf_path.write_bytes(client.download(detail.download_path))
+                    try:
+                        pdf_path.write_bytes(client.download(detail.download_path))
+                    except RobotsDisallowed:
+                        log(f"skipped register: robots.txt disallows {detail.download_path}")
+                        continue
                 bad_rows: list[tuple[int, str]] = []
                 with pdfplumber.open(pdf_path) as pdf:
                     deals = register_deals(pdf, bad_rows)
@@ -455,11 +474,12 @@ def main(argv=None) -> int:
         if not f.allowed(f"{API}/Map/getMapDevResultById"):
             raise SystemExit("robots.txt disallows the SRPE API")
         delay = max(DEFAULT_DELAY_S, f._min_interval.get(HOST, 0.0))  # robots Crawl-delay
-    client = SrpeClient(delay_s=delay)
-    try:
-        run_srpe(client, args.db, log, args.limit)
-    finally:
-        client.close()
+        # every URL (disclaimer page, list, detail, register download) is checked before use
+        client = SrpeClient(delay_s=delay, allowed=f.allowed)
+        try:
+            run_srpe(client, args.db, log, args.limit)
+        finally:
+            client.close()
     return 0
 
 

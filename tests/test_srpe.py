@@ -172,3 +172,29 @@ def test_store_register_flags_first_hand_and_dedupes_against_other_sources(con):
     assert flags == {"centadata": True, "srpe": False}
     # the first-hand deal itself stays out of the clean view, and so does its duplicate
     assert con.execute("SELECT count(*) FROM txn WHERE flat = 'C'").fetchone()[0] == 0
+
+
+def test_client_checks_robots_before_login_and_every_request():
+    from hkestate.fetch import RobotsDisallowed
+
+    asked = []
+
+    def deny(url):
+        asked.append(url)
+        return False
+
+    c = srpe.SrpeClient(allowed=deny)
+
+    def boom(*a, **k):
+        raise AssertionError("a disallowed path was requested")
+
+    c._http.request = boom
+    with pytest.raises(RobotsDisallowed):
+        c.login()  # refused before any browser starts
+    with pytest.raises(RobotsDisallowed):
+        c.post("DistrictAreaSearch/getDistrictAreaSearchResult", {})
+    with pytest.raises(RobotsDisallowed):
+        c.download("/api/SrpeWebService/download/all_development_map/trx/x/1/f.pdf/en")
+    assert asked[0] == srpe.DISCLAIMER_URL
+    assert "DistrictAreaSearch" in asked[1] and "/download/" in asked[2]
+    c.close()
