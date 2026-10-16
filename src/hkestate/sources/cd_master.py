@@ -242,6 +242,29 @@ def save_estate(con, info: EstateInfo, *, excluded: str | None, blocks: int, pil
     )
 
 
+def _gain(raw: dict) -> float | None:
+    """Centadata's "% change vs the previous deal" of the flat. The previous deal's date is
+    not on the page, so only the percentage (and the price it implies) is known."""
+    v = raw.get("gainPercent")
+    return float(v) if isinstance(v, (int, float)) else None
+
+
+def prev_price(price_hkd: int | None, gain_pct: float | None) -> int | None:
+    """The previous deal's price implied by the latest price and the % change."""
+    if not price_hkd or gain_pct is None or gain_pct <= -100:
+        return None
+    return round(price_hkd / (1 + gain_pct / 100))
+
+
+def backfill_gain_pct(con) -> int:
+    """Fill gain_pct on Centadata rows loaded before it was stored, from their raw_json."""
+    count = ("SELECT count(*) FROM txn_raw WHERE source = 'centadata' AND gain_pct IS NULL")
+    before = con.execute(count).fetchone()[0]
+    con.execute("UPDATE txn_raw SET gain_pct = try_cast(json_extract_string(raw_json, "
+                "'$.gainPercent') AS DOUBLE) WHERE source = 'centadata' AND gain_pct IS NULL")
+    return before - con.execute(count).fetchone()[0]
+
+
 def load_block(con, est: EstateInfo, blk: cd.BlockPage, url: str,
                page: EstateInfo | None = None) -> int:
     """Store one block: estate, building, master_building, units and the latest deal of each
@@ -271,6 +294,7 @@ def load_block(con, est: EstateInfo, blk: cd.BlockPage, url: str,
             "instrument_date": d.instrument_date, "registration_date": d.registration_date,
             "deal_type": "registry", "price_hkd": d.price_hkd,
             "saleable_sqft": d.saleable_sqft, "gross_sqft": d.gross_sqft,
+            "gain_pct": _gain(d.raw),
             "raw_json": json.dumps(d.raw, ensure_ascii=False, default=str),
         })
     skipped = ",".join(str(x) for x in sorted(infer_skipped(labels)))

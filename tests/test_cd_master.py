@@ -195,3 +195,17 @@ def test_master_rows_record_exclusions(con):
     assert rows == [("2-AAAAAAAAAA", True, "hos"), ("2-OKOKOKOKOK", False, None)]
     # an excluded estate leaves no estate/building rows behind
     assert con.execute("SELECT count(*) FROM estate").fetchone()[0] == 0
+
+
+def test_previous_deal_change_is_stored_with_the_latest_deal(con):
+    deals = [("T9", "30", "B", 5_500_000, 405, 520, "2019-05-17T00:00:00", "2019-06-10T00:00:00")]
+    html = nuxt_page(deals=deals).replace('"transactionPrice": 5500000',
+                                          '"transactionPrice": 5500000, "gainPercent": 10.0')
+    load(con, html)
+    assert con.execute("SELECT gain_pct FROM txn_raw WHERE source_id = 'T9'").fetchone()[0] == 10.0
+    # rows loaded before this column was filled are repaired from their raw_json
+    con.execute("UPDATE txn_raw SET gain_pct = NULL")
+    assert cm.backfill_gain_pct(con) == 1
+    assert con.execute("SELECT gain_pct FROM txn_raw").fetchone()[0] == 10.0
+    assert cm.prev_price(5_500_000, 10.0) == 5_000_000
+    assert cm.prev_price(5_500_000, None) is None
