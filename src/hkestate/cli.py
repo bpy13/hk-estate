@@ -122,7 +122,8 @@ def cmd_status(args) -> int:
                    count(*) FILTER (WHERE c.source_id IS NOT NULL) AS clean,
                    min(t.deal_date), max(t.deal_date)
             FROM txn_latest t LEFT JOIN estate e USING (estate_id)
-            LEFT JOIN txn c USING (source, source_id)
+            -- explicit ON: estate has a `source` column too, so USING would be ambiguous
+            LEFT JOIN txn c ON c.source = t.source AND c.source_id = t.source_id
             GROUP BY 1 ORDER BY 1
             """
         ).fetchall():
