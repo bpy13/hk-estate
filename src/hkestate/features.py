@@ -253,7 +253,7 @@ def _deals_sql() -> str:
     return f"""
     SELECT a.source, a.source_id, a.fetched_at, a.unit_id, a.building_id, a.estate_id,
         a.floor_label, a.flat, a.deal_date, a.instrument_date, a.registration_date,
-        a.deal_type, a.price_hkd, a.area_sqft, a.area_basis, a.psf_hkd,
+        a.deal_type, a.price_hkd, a.area_sqft, a.area_basis, a.psf_hkd, a.gain_pct,
         coalesce(a.rooms, u.rooms) AS rooms, a.floor_num, a.floor_kind,
         a.excl_duplicate, a.excl_low_price, a.excl_first_hand, a.excl_non_market,
         a.excl_bulk, a.excl_outlier,
@@ -330,6 +330,15 @@ def extract(con) -> dict:
         "index": con.execute(
             "SELECT class, period, value FROM price_index "
             "WHERE series = 'rvd_price_index' AND region = 'ALL'").df(),
+        # Phase 5 (growth study): Ricacorp previous-deal pairs and every RVD series
+        "deal_pairs": con.execute(
+            "SELECT cur_source, cur_id, prev_source, prev_id, unit_id, cur_date, "
+            "cur_price_hkd, prev_date, prev_price_hkd, hold_days, gain_pct, prev_derived "
+            "FROM deal_pair").df() if _has_table(con, "deal_pair") else pd.DataFrame(),
+        "rvd": con.execute(
+            "SELECT 'price' AS kind, series, freq, period, class, region, value "
+            "FROM price_index UNION ALL "
+            "SELECT 'rent', series, freq, period, class, region, value FROM rent_index").df(),
         "srpe_buildings": [r[0] for r in con.execute(
             "SELECT DISTINCT building_id FROM txn_latest "
             "WHERE source = 'srpe' AND building_id IS NOT NULL").fetchall()],
@@ -347,6 +356,12 @@ def extract(con) -> dict:
 
 
 _FRAMES = ["deals", "buildings", "estates", "listings", "index", "run_log"]
+_OPTIONAL_FRAMES = ["deal_pairs", "rvd"]  # added in Phase 5; older snapshots lack them
+
+
+def _has_table(con, name: str) -> bool:
+    return con.execute("SELECT count(*) FROM information_schema.tables WHERE table_name = ?",
+                       [name]).fetchone()[0] > 0
 
 
 def snapshot(db_path=None, out_dir: Path | None = None) -> dict:
@@ -360,8 +375,9 @@ def snapshot(db_path=None, out_dir: Path | None = None) -> dict:
 def save_snapshot(raw: dict, out_dir: Path | None = None) -> Path:
     out = out_dir or model_dir() / "snapshot"
     out.mkdir(parents=True, exist_ok=True)
-    for name in _FRAMES:
-        raw[name].to_parquet(out / f"{name}.parquet", index=False)
+    for name in _FRAMES + _OPTIONAL_FRAMES:
+        if name in raw:
+            raw[name].to_parquet(out / f"{name}.parquet", index=False)
     meta = {**raw["meta"], "srpe_buildings": raw["srpe_buildings"]}
     (out / "meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=1), "utf-8")
     return out
@@ -370,6 +386,9 @@ def save_snapshot(raw: dict, out_dir: Path | None = None) -> Path:
 def load_snapshot(out_dir: Path | None = None) -> dict:
     src = out_dir or model_dir() / "snapshot"
     raw = {name: pd.read_parquet(src / f"{name}.parquet") for name in _FRAMES}
+    for name in _OPTIONAL_FRAMES:
+        path = src / f"{name}.parquet"
+        raw[name] = pd.read_parquet(path) if path.exists() else pd.DataFrame()
     meta = json.loads((src / "meta.json").read_text("utf-8"))
     raw["srpe_buildings"] = meta.pop("srpe_buildings", [])
     raw["meta"] = meta

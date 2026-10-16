@@ -394,9 +394,19 @@ Lint: `ruff check .`.
 
 ## Phase 5 – Growth study and report (opus)
 
-- [ ] **Task 5.1: Repeat-sales pairs**
+- [x] **Task 5.1: Repeat-sales pairs**
   - Done when: tests show pairs are built only from clean deals on the same unit held ≥3
     years, with first-hand starts tagged.
+  - Result (2026-10-16): `src/hkestate/pairs.py`, `tests/test_pairs.py`. Before it, the shared
+    `txn_all` view gained `excl_price_check`, `excl_parking` and `excl_quarantine` (`txn`
+    leaves them out); the first-hand rule and house filter stay in `features.deal_features`,
+    whose `exclude_reason` is the clean definition the pairs use. Four pair types, kept apart:
+    `real` (two recorded sales), `ricacorp` (derived previous deal), `gain` (Centadata/28Hse %
+    change: previous price, no date; a check only) and `estimated` (pre-2018 latest sale vs
+    the model's value today). Live, partial data (snapshot 2026-10-16 20:51): 2,950 real
+    pairs (1,646 first-hand starts, 94% pilot; starts 1995-2023, mostly 2018-2020), 39
+    Ricacorp, 68,639 gain pairs (the % change agrees with the recorded previous price within
+    2% on 96% of 2,691 overlaps), 96,702 estimated candidates (32,107 first-hand starts).
 - [ ] **Task 5.2: Costs and rents**
   - Files: `src/hkestate/costs.py` (dated stamp-duty table from IRD pages, with sources
     cited in code comments), tests for known amounts at several dates.
