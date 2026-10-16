@@ -1,7 +1,9 @@
 """Task 4.2: the fair-price model. Out-of-time split on the last 6 months, error by group,
 same-building comparables check, conformal 80% intervals, SHAP values per prediction."""
 
+import json
 from datetime import date
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -107,3 +109,34 @@ def test_train_writes_model_report_and_predictions(tmp_path, monkeypatch, raw):
     m = model.load()
     lst = features.listing_features(raw, today=date(2026, 10, 17))
     assert len(model.predict_adj(m, lst)) == len(lst)
+
+
+def test_model_files_are_written_and_read_under_a_shared_lock(tmp_path, monkeypatch):
+    """train swaps fair_price.txt/.json in while rank may be reading them: both take the
+    `model` lock, so a reader never sees a new .txt with an old .json."""
+    import os
+
+    from hkestate import locks
+
+    monkeypatch.setenv("HKESTATE_DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(model, "MODEL_LOCK_WAIT_S", 0.3)
+
+    class Booster:
+        def save_model(self, path):
+            Path(path).write_text("trees", "utf-8")
+
+    # free lock: the pair is written, and the lock is released afterwards
+    model.save_model_files(Booster(), {"q": 1}, model.model_dir())
+    assert (model.model_dir() / "fair_price.txt").exists()
+    assert (model.model_dir() / "fair_price.json").exists()
+    assert locks.held_by("model") is None
+
+    # another live process holds the lock (as a running train would): both sides wait, then
+    # give up with LockBusy instead of touching the files
+    path = locks.lock_path("model")
+    path.write_text(str(os.getppid()))
+    with pytest.raises(locks.LockBusy):
+        model.save_model_files(Booster(), {"q": 2}, model.model_dir())
+    with pytest.raises(locks.LockBusy):
+        model.load()
+    assert json.loads((model.model_dir() / "fair_price.json").read_text("utf-8")) == {"q": 1}

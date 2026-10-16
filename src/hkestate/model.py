@@ -26,6 +26,8 @@ from __future__ import annotations
 
 import json
 import math
+import time
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from pathlib import Path
@@ -34,7 +36,7 @@ import lightgbm as lgb
 import numpy as np
 import pandas as pd
 
-from hkestate import features
+from hkestate import features, locks
 from hkestate.config import get_data_dir
 
 NUM_FEATURES = ["area_sqft", "rooms", "floor_num", "rel_floor", "top_floor", "age_years",
@@ -336,10 +338,38 @@ def predict_shap(m: FairPrice, df: pd.DataFrame) -> pd.DataFrame:
     return shap_frame(m.booster, matrix(df, m.categories))
 
 
+MODEL_LOCK_WAIT_S = 60.0  # how long train/rank wait for each other's short file access
+
+
+@contextmanager
+def model_lock():
+    """Held while fair_price.txt and fair_price.json are written (train) or read (rank,
+    report), so a reader never gets a new .txt with the old .json. Both are short, so the
+    other side waits; LockBusy if it is still held after MODEL_LOCK_WAIT_S."""
+    deadline = time.monotonic() + MODEL_LOCK_WAIT_S
+    while (pid := locks.held_by("model")) is not None:
+        if time.monotonic() >= deadline:
+            raise locks.LockBusy(f"the model files are in use by process {pid}")
+        time.sleep(0.2)
+    with locks.hold("model"):
+        yield
+
+
+def save_model_files(booster, meta: dict, out_dir: Path) -> None:
+    """Write the booster and its metadata as one unit (see `model_lock`)."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    with model_lock():
+        booster.save_model(str(out_dir / "fair_price.txt"))
+        (out_dir / "fair_price.json").write_text(
+            json.dumps(meta, ensure_ascii=False, indent=1, default=str), "utf-8")
+
+
 def load(path: Path | None = None) -> FairPrice:
     d = path or model_dir()
-    meta = json.loads((d / "fair_price.json").read_text("utf-8"))
-    return FairPrice(lgb.Booster(model_file=str(d / "fair_price.txt")), meta)
+    with model_lock():
+        meta = json.loads((d / "fair_price.json").read_text("utf-8"))
+        booster = lgb.Booster(model_file=str(d / "fair_price.txt"))
+    return FairPrice(booster, meta)
 
 
 def coverage_table(train: pd.DataFrame, listings: pd.DataFrame) -> pd.DataFrame:
@@ -391,7 +421,6 @@ def train(raw: dict, rounds: int = ROUNDS, today: date | None = None, log=print)
     out_dir = model_dir()
     out_dir.mkdir(parents=True, exist_ok=True)
     model_path, meta_path = out_dir / "fair_price.txt", out_dir / "fair_price.json"
-    booster.save_model(str(model_path))
     index_last = str(_index_wide(raw["index"]).index.max().date())
     meta = {
         "trained_at": datetime.now().isoformat(timespec="seconds"),
@@ -401,7 +430,7 @@ def train(raw: dict, rounds: int = ROUNDS, today: date | None = None, log=print)
         "n_train": len(tr), "n_train_pilot": int(tr["is_pilot"].sum()),
         "eval": ev.summary.to_dict("records"), "split": ev.split, "data": raw["meta"],
     }
-    meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=1, default=str), "utf-8")
+    save_model_files(booster, meta, out_dir)
     test_path = out_dir / "test_predictions.parquet"
     tp.to_parquet(test_path, index=False)
     # the dashboard's comparables and price histories read this (no database needed)
