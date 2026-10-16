@@ -437,6 +437,7 @@ def run_master(fetcher, db_path=None, log=print, limit: int | None = None) -> di
         raise
     finally:
         with db.session(db_path) as con:
+            backfill_gain_pct(con)
             db.finish_run(con, run_id, status, stats["deals"], message or json.dumps(stats))
     log(f"done: {stats}")
     return stats
