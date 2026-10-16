@@ -7,6 +7,8 @@
     hkestate backfill-territory [--discover]   28Hse, whole territory, largest first
     hkestate ricacorp [--max-hours N]          Ricacorp previous-deal pairs (weekly)
     hkestate link-ids                          match 28Hse ids to master ids
+    hkestate train [--from-snapshot]           fair-price model + data/reports/model_eval.md
+    hkestate rank                              ranked listings CSV in data/reports/
     hkestate status
 
 Every run is logged to data/logs/<command>_<time>.log and to `run_log` in the database.
@@ -292,6 +294,42 @@ def cmd_ricacorp(args) -> int:
                               max_hours=args.max_hours)
     return 0
 
+def _logged(args, command: str, work) -> int:
+    """Run `work(log)` with a log file and a run_log row (status ok/failed + its message)."""
+    import json
+
+    log = _logger(command)
+    with db.session(args.db) as con:
+        db.init_db(con)
+        run_id = db.start_run(con, command)
+    status, message, rows = "failed", "", 0
+    try:
+        rows, summary = work(log)
+        status, message = "ok", json.dumps(summary, ensure_ascii=False, default=str)
+    except Exception as e:
+        message = f"{type(e).__name__}: {e}"
+        log(message)
+        raise
+    finally:
+        with db.session(args.db) as con:
+            db.finish_run(con, run_id, status, rows, message)
+    return 0
+
+
+def cmd_train(args) -> int:
+    """Fair-price model: snapshot the database, evaluate out of time, fit, write the report."""
+    from hkestate import features, model
+
+    def work(log):
+        raw = features.load_snapshot() if args.from_snapshot else features.snapshot(args.db)
+        log(f"snapshot: {raw['meta']}")
+        out = model.train(raw, rounds=args.rounds, log=log)
+        mdape = {r["group"]: round(r["mdape"], 4) for r in out["meta"]["eval"]}
+        return out["meta"]["n_train"], {"mdape": mdape, "report": str(out["report_path"])}
+
+    return _logged(args, "train", work)
+
+
 def cmd_status(args) -> int:
     with db.session(args.db) as con:
         db.init_db(con)
@@ -371,6 +409,11 @@ def main(argv: list[str] | None = None) -> int:
     rp.add_argument("--place-only", action="store_true",
                     help="no requests: place stored deals in buildings and write pairs")
     rp.set_defaults(func=cmd_ricacorp)
+    t = sub.add_parser("train", help="fair-price model: evaluate, fit, write model_eval.md")
+    t.add_argument("--from-snapshot", action="store_true",
+                   help="reuse data/model/snapshot instead of reading the database")
+    t.add_argument("--rounds", type=int, default=800, help="boosting rounds")
+    t.set_defaults(func=cmd_train)
     s = sub.add_parser("status", help="recent runs and row counts")
     s.set_defaults(func=cmd_status)
 

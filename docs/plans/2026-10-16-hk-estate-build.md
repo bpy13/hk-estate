@@ -336,7 +336,7 @@ Lint: `ruff check .`.
     first-hand (SRPE + rule), houses, quarantined LOHAS Park rows, 28Hse agreement dates.
     `db.txn_all_sql()` lets the model run the `txn_all` query without the quarantined rows.
     Coverage in training: MTR distance and coordinates 72%, age 95%, rooms 9%, facing 6%.
-- [ ] **Task 4.2: Fair-price model**
+- [x] **Task 4.2: Fair-price model**
   - Done when:
     - LightGBM on log price per sq ft, trained on deals up to month T−6 and tested on the
       last 6 months
@@ -344,6 +344,16 @@ Lint: `ruff check .`.
     - a same-building comparables check is computed alongside
     - conformal 80% intervals
     - `shap` values are stored per prediction.
+  - Result (2026-10-16): `src/hkestate/model.py`, `hkestate train [--from-snapshot]` (~1 min
+    with the database read, seconds from the snapshot). Out of time (test 2026-04-08 to
+    2026-10-08, 3,543 deals): median absolute error 5.3% (pilot 5.7%, territory 5.1%),
+    median signed error -2.9% (rising market, index frozen at the cut-off); 80% intervals held
+    83%; same-building comparables 6.1% on the 92% of test deals they cover (model 5.2% on
+    those). Additions to the plan: the target is divided by the RVD price index of the flat's
+    size class (trees can't extrapolate in time), frozen at the cut-off in the test; three
+    fits (calibration, test, final). SHAP via LightGBM's TreeSHAP (the `shap` package can't
+    load here, decisions.md). Outputs in `data/model/` (model, meta, test predictions with
+    SHAP, a deals table for the dashboard).
 - [ ] **Task 4.3: Asking-vs-deal gap**
   - Done when: pairs of a listing and a deal on the same unit within 90 days are counted per
     district. Where a district has ≥30 pairs, its median gap is used. Otherwise 5%, marked
