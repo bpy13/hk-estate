@@ -241,6 +241,30 @@ Details and measurements in `docs/sources.md`. Supersedes parts of "Source roles
 - **Weekly transaction refresh** (`hkestate update`) reads each estate's deal list from page 1
   and stops at the first page that adds nothing.
 
+## After Phase 2 (2026-10-17)
+- **Pre-2018 history is a priority, not optional** (user). Long-term growth depends on it.
+  Use every free pre-2018 data point:
+  - Centadata latest deals back to 1995, in the price model and as one end of growth pairs.
+  - RVD indices: popular-development indices since 1992, class indices since 1979.
+  - Estimated pairs (pre-2018 latest deal → model value today), reported apart from real
+    pairs.
+  - A probe of further free sources for older per-flat history.
+  Paid sources stay out (HK$0 budget) unless the user approves a spend.
+- **MTR distance to station centres** (user). Not exits.
+- **Pre-2018 probe results** (Claude's call, following the user's "pre-2018 is a priority";
+  details in `docs/sources.md`):
+  - **Ricacorp: used** (Task 3.6). Its robots-allowed estate pages give real repeat-sale
+    pairs reaching back to about 1997 for recent resales. A weekly re-crawl accumulates
+    them.
+  - **Centadata's "% change vs previous deal": captured** as a lower-confidence pair, since
+    the previous date is unknown.
+  - **Not used:**
+    - Wayback Machine (no deal rows)
+    - HKP, Midland, Squarefoot, house730 (403)
+    - Land Registry (counts only)
+
+    Paid sources stay out.
+
 ## Repository
 - **Public GitHub repo `hk-estate` on account `bpy13`** (2026-10-16). Because it is public:
   scraped data, the database and raw-page cache are never committed (`data/` ignored), and no

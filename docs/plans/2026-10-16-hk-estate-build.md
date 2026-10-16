@@ -264,6 +264,17 @@ Lint: `ruff check .`.
 - [ ] **Task 3.5: Territory-wide listings**
   - Done when: the daily job covers all estates. One run's elapsed time is under 1 hour, or
     the split across the day is documented.
+- [ ] **Task 3.6: Ricacorp previous-deal pairs (added 2026-10-17)**
+  - Files: `src/hkestate/sources/ricacorp.py`, tests with trimmed fixtures, weekly job entry.
+  - Done when:
+    - parser tests pass
+    - one territory-wide pass of the estate pages (robots-allowed only; never `/api/`)
+      stores each recent resale with its previous deal date and price (from days held and %
+      gain), as `txn_raw` rows `source='ricacorp'` plus a pair link
+    - deduped against 28Hse deals
+    - the weekly job re-crawls, so pairs accumulate.
+  - Notes: about 6 hours per pass. Keep only parsed rows: prune cached Ricacorp pages after
+    parsing (about 18 GB per pass otherwise).
 
 ## Phase 4 – Fair price and dashboard (opus)
 

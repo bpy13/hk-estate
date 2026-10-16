@@ -6,39 +6,9 @@ here; a limit or trap we live with goes in `known-issues.md`. Each item in one p
 ## Blockers
 
 ## Waiting on the user
-1. **History from 2000 can't be met with free sources.** Free full deal histories start in
-   2018 (28Hse). Before that we only have each flat's latest deal (Centadata, back to 1995).
-   This matters most for the growth study: repeat-sales pairs held 3+ years would start
-   2018–2023 and cover one cycle (2021 peak, 2021–24 fall, recovery). Options: (a) accept
-   2018 onward, and use Centadata's older latest deals for the fair-price model only;
-   (b) approve a paid source (IRIS or similar); (c) probe other agency sites (e.g. Ricacorp,
-   Hong Kong Property) for older history. (d) Claude's suggestion, combinable with (a): pair
-   each flat's pre-2018 latest deal (Centadata) with the fair-price model's estimate of its
-   value today, giving long-horizon "estimated pairs" back to 1995. Model error averages out
-   across an attribute group, and these pairs are reported separately from real pairs.
-   **Default: (a) + (d)**, noted as a limit in the report. Phase 5 only; earlier phases don't
-   depend on it.
-2. [x] **Raw listing pages in the cache contain agent names and phones.** *(Done in Phase 2,
-   with the default: the daily job deletes cache day-folders 7+ days old for Centanet, 28Hse
-   and Spacious; `hkestate prune-cache` does it by hand.)*
-3. **CSDI files by hand?** CSDI's API is off-limits (robots.txt), so MTR distance will be to
-   the station centre (geocoded with ALS), not the nearest exit. Default: station centres.
-   The alternative is for you to download the MTR-exits file once in a browser and drop it in
-   `data/`.
-
-4. **Ricacorp "days held and % gain" for previous-deal pairs?** Ricacorp's estate pages
-   (allowed by robots.txt) show, for each resale among the newest ~10 deals, how long the
-   previous owner held the flat and the % gain. That gives the previous deal's date and price
-   even when it is before 2018 (examples back to 1997), so each such resale becomes a real
-   pair. Limits: only deals of the last 90 days, newest ~10 per estate, so a weekly crawl of
-   about 15,000 pages (~6 h, ~1.2 MB each) would collect them going forward; nothing earlier.
-   Why it matters: real pre-2018 pairs for the growth study, which "estimated pairs" cannot
-   replace. Default: **not now**; revisit after Phase 5 shows how thin the pre-2018 pairs are.
-   (Probe details: `docs/sources.md`, "Pre-2018 history probe".)
-5. **Use Centadata's "% change vs previous deal" as a second price per flat?** It is in the
-   block pages we already fetch, so it costs no requests; the previous deal's date is unknown
-   (before the latest deal, after the previous registration). Default: **ok**, I check the
-   parser and use it as an extra, lower-confidence pair.
+*(Settled 2026-10-17 and moved to decisions.md: pre-2018 history (every free source, plus
+estimated pairs, Ricacorp pairs as Task 3.6, Centadata % change); MTR station centres; listing
+cache pruning.)*
 
 ## Pending work
 - Verify current (Feb 2026) stamp duty rules on IRD pages before modelling round-trip costs.
@@ -88,6 +58,8 @@ here; a limit or trap we live with goes in `known-issues.md`. Each item in one p
   ~3 (the agreed limit was 1–3 days). Options for Phase 3: (a) accept ~9 days of background
   running in chunks; (b) skip the 2018–2021 per-flat pass outside the pilot (~150k of the
   pages; history then starts March 2021 except via Centadata's latest deal per flat).
-  Default: (a), run in nightly chunks. Decide before Task 3.2.
+  **Decided (Claude's call, 2026-10-17, given the user's priority on history):** (a), run
+  continuously in the background with the largest estates first. Keep the 2018–2021 per-flat
+  pass.
 
 ## Later
