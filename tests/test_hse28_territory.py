@@ -37,13 +37,22 @@ def test_parse_sitemap_reads_estates_and_child_sitemaps():
     assert [(e.name, e.id) for e in estates] == [("太古城", 1140), ("測試苑", 5555)]
 
 
-def test_discover_reads_only_estate_sitemaps():
-    pages = {ht.SITEMAP_INDEX: SITEMAP_INDEX,
-             "https://www.28hse.com/sitemap_share/sitemap-estate-1.xml": SITEMAP_ESTATE}
-    f = FakeFetcher(pages)
-    found = ht.discover(f, log=lambda *a: None)
+def test_discover_reads_gzipped_child_sitemaps_whatever_they_are_called():
+    """Real layout (checked 2026-10-16): the index names sitemap1..3.xml.gz, none with "estate"
+    in the address; estate pages (and office estates, which are not wanted) sit among others."""
+    import gzip
+    index = ("<sitemapindex>" + "".join(
+        f"<sitemap><loc>https://www.28hse.com/sitemap{i}.xml.gz</loc></sitemap>"
+        for i in (1, 2)) + "</sitemapindex>")
+    other = "<urlset><url><loc>https://www.28hse.com/news/x-1</loc></url></urlset>"
+    mixed = SITEMAP_ESTATE.replace(
+        "</urlset>",
+        "<url><loc>https://www.28hse.com/estate/office/detail/%E8%BE%A6-9</loc></url></urlset>")
+    pages = {ht.SITEMAP_INDEX: index,
+             "https://www.28hse.com/sitemap1.xml.gz": gzip.compress(other.encode()),
+             "https://www.28hse.com/sitemap2.xml.gz": gzip.compress(mixed.encode())}
+    found = ht.discover(FakeFetcher(pages), log=lambda *a: None)
     assert {e.id for e in found} == {1140, 5555}
-    assert all("property" not in u for u in f.requests)
 
 
 def test_add_estates_keeps_existing_rows(dbpath):

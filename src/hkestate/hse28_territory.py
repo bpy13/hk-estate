@@ -4,8 +4,9 @@ The pilot backfill (`backfill.py`) takes hand-listed estates. For the territory 
 28Hse estates lives in table `hse28_estate` and comes from, in order of preference:
 
 1. `discover`: 28Hse's own sitemap (robots.txt names `/sitemap_share/sitemap-index.xml`).
-   Only child sitemaps with "estate" in their address are read; if there are none, the run
-   says so and stops, rather than reading every sitemap.
+   The index lists three gzipped children (sitemap1..3.xml.gz); estate pages
+   (`/estate/detail/<name>-<id>`, about 12,000) are all in sitemap2, mixed with listings.
+   Office estates (`/estate/office/detail/`) are not matched.
 2. `data/manual/hse28_estates.csv` (columns `id,name`), for a list you made yourself.
 3. The 28Hse listing runs: every listing card names its estate (`source_estate_key`).
 
@@ -75,17 +76,27 @@ def parse_sitemap(xml: str) -> tuple[list[str], list[EstateRef]]:
     return children, list(estates.values())
 
 
+MAX_CHILD_SITEMAPS = 10
+
+
+def _sitemap_text(fetcher, url: str) -> str:
+    """A sitemap's text, whether or not it is gzipped."""
+    from hkestate.sources.spacious import gunzip_text
+    return gunzip_text(fetcher.get_bytes(url, "static"))
+
+
 def discover(fetcher, log=print) -> list[EstateRef]:
     """Estates from 28Hse's sitemap (a handful of requests)."""
-    index = fetcher.get(SITEMAP_INDEX, "static")
+    index = _sitemap_text(fetcher, SITEMAP_INDEX)
     children, estates = parse_sitemap(index)
     found = {e.id: e for e in estates}
-    wanted = [c for c in children if "estate" in c.lower()]
-    log(f"sitemap index: {len(children)} child sitemaps, {len(wanted)} about estates")
-    if children and not wanted and not found:
-        log("no estate sitemap among: " + ", ".join(children[:10]))
-    for url in wanted:
-        _, more = parse_sitemap(fetcher.get(url, "static"))
+    # The child sitemaps are gzipped and named sitemap1..3.xml.gz: estate pages share them with
+    # listings and news, so every child is read (there are only a few; a cap guards a surprise).
+    log(f"sitemap index: {len(children)} child sitemaps")
+    if len(children) > MAX_CHILD_SITEMAPS:
+        log(f"too many child sitemaps; reading the first {MAX_CHILD_SITEMAPS}")
+    for url in children[:MAX_CHILD_SITEMAPS]:
+        _, more = parse_sitemap(_sitemap_text(fetcher, url))
         found.update({e.id: e for e in more})
     log(f"{len(found)} estates found in the sitemap")
     return list(found.values())

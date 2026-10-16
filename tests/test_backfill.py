@@ -53,6 +53,10 @@ class FakeFetcher:
             raise FetchError(url, 404)
         return self.pages[url]
 
+    def get_bytes(self, url, page_type):
+        page = self.get(url, page_type)
+        return page if isinstance(page, bytes) else page.encode("utf-8")
+
 
 UNIT_URL = hse28.canonical_url(
     "https://www.28hse.com/estate/detail/太古城-1140/history/stateno-1/blockno-18/unitid-172141"
