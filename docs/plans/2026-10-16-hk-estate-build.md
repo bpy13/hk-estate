@@ -423,7 +423,10 @@ Lint: `ruff check .`.
       at the deal date)
     - total return adds rental yield from RVD rent indices, anchored to current rental
       listings.
-- [ ] **Task 5.3: Attribute regression and indices**
+- [x] **Task 5.3: Attribute regression and indices**
+  - Result (2026-10-16): `src/hkestate/growth.py`, `tests/test_growth.py` (planted effects,
+    sign-flip, fallback split, index recovery, drawdown). Deviation: the time split falls back
+    to purchase year at the median (too few pairs end by 2018; decisions.md "Phase 5 build").
   - Done when:
     - annualised growth is regressed on attributes with district, age, start-period and
       start-price controls

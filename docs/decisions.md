@@ -306,6 +306,49 @@ Details and measurements in `docs/sources.md`. Supersedes parts of "Source roles
   as the `shap` package: importing `shap` fails on this laptop because Windows Application
   Control blocks a scikit-learn DLL it loads.
 
+## Phase 5 build: growth study (2026-10-16, Claude's calls)
+- **Shared clean view.** `txn_all` now flags `excl_price_check` (the Phase 4 price check, same
+  thresholds, index-adjusted in SQL), `excl_parking` and `excl_quarantine` (the wrong LOHAS
+  Park rows, also ignored by the duplicate/bulk/outlier tests of other rows); `txn` leaves
+  them out. The first-hand rule and the house filter need building-level logic and the
+  master tables, so they stay in `features.deal_features`; its `exclude_reason` is the clean
+  definition both the model and the growth study use. Nothing is deleted.
+- **Pairs are consecutive clean sales of a unit, held 3+ years**; a shorter hold is dropped,
+  not merged with an earlier sale. A developer sale may start a pair (tagged
+  `first_hand_start`) if it passes every check except the bulk rule (a launch sells many
+  flats a day). Two sales whose areas differ by over 10% are not treated as the same flat.
+- **Four pair types, never pooled with estimated pairs:** real; Ricacorp (derived previous
+  sale; pooled with real as "recorded" since both are actual prices); Centadata/28Hse
+  "% change" pairs (no previous date, so used only to check the previous price, 96% within
+  2%, and as a weak sign check); estimated (pre-2018 last sale vs the Phase 4 model's value).
+- **Time split adapted.** The plan's "pairs ending by 2018 vs later" leaves almost no recorded
+  pairs before 2019 (28Hse's free data starts 2018) and estimated pairs all end today. When
+  either side has under 200 pairs, the split is by purchase year at the median (recorded:
+  bought by 2018 vs later; estimated: by 2009 vs later). The district check deals districts
+  into two halves of similar size. Robust = p < 0.05 and the same sign in both halves of
+  both splits. An attribute that never varies within a district (e.g. "large estate" in the
+  pilot estates) is not tested, since district is a control.
+- **Regression:** annual log growth on attribute dummies (size bands, floor thirds, MTR
+  bands, large estate, special unit, south-facing among known facings, sea view, first-hand
+  start) with district, purchase-year and sale-year dummies, building age at purchase (and
+  squared) and log purchase price per sq ft; errors clustered by building.
+- **Model error for estimated pairs:** in the residuals (clustered by building) plus a tilt
+  check: the model's out-of-time error by attribute, divided by the median holding years; an
+  estimated effect no bigger than that tilt is not called robust.
+- **Drawdown index:** monthly repeat-sales (BMN) index with a light month-to-month smoothness
+  penalty; recorded pairs judged from 2018, estimated pairs over 1995-2017.
+- **Costs:** legal 0.3% charged once, on the purchase (decisions above list it without "each
+  side"); agent 1% each side; stamp duty for an HKPR who owns another flat (Scale 1 from
+  23 Feb 2013, 15% from 5 Nov 2016, 7.5% from 25 Oct 2023, Scale 2 from 28 Feb 2024), with a
+  first-home buyer shown as a sensitivity. No SSD (holds are 3+ years) or BSD (HKPR).
+- **Rental yield:** RVD average rent / average price per m2 by size class and region (1999 on;
+  carried back to 1993 by the rent and price indices), averaged over each pair's holding
+  period, times the median ratio of current listing yields (asking rent / recent sale price
+  per sq ft, by building) to RVD's; 1 if under 20 buildings; limited to 0.5-2. Total return
+  = after-cost growth + that yield (no reinvestment, no leverage, gross of holding costs).
+- **Charts are hand-written SVG** (`charts.py`): matplotlib is not installed and Windows
+  Application Control already blocks one compiled package here.
+
 ## Repository
 - **Public GitHub repo `hk-estate` on account `bpy13`** (2026-10-16). Because it is public:
   scraped data, the database and raw-page cache are never committed (`data/` ignored), and no
