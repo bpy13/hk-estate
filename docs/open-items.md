@@ -26,6 +26,20 @@ here; a limit or trap we live with goes in `known-issues.md`. Each item in one p
    The alternative is for you to download the MTR-exits file once in a browser and drop it in
    `data/`.
 
+4. **Ricacorp "days held and % gain" for previous-deal pairs?** Ricacorp's estate pages
+   (allowed by robots.txt) show, for each resale among the newest ~10 deals, how long the
+   previous owner held the flat and the % gain. That gives the previous deal's date and price
+   even when it is before 2018 (examples back to 1997), so each such resale becomes a real
+   pair. Limits: only deals of the last 90 days, newest ~10 per estate, so a weekly crawl of
+   about 15,000 pages (~6 h, ~1.2 MB each) would collect them going forward; nothing earlier.
+   Why it matters: real pre-2018 pairs for the growth study, which "estimated pairs" cannot
+   replace. Default: **not now**; revisit after Phase 5 shows how thin the pre-2018 pairs are.
+   (Probe details: `docs/sources.md`, "Pre-2018 history probe".)
+5. **Use Centadata's "% change vs previous deal" as a second price per flat?** It is in the
+   block pages we already fetch, so it costs no requests; the previous deal's date is unknown
+   (before the latest deal, after the previous registration). Default: **ok**, I check the
+   parser and use it as an extra, lower-confidence pair.
+
 ## Pending work
 - Verify current (Feb 2026) stamp duty rules on IRD pages before modelling round-trip costs.
 - SRPE (Phase 3, Task 3.4): the site is now a JavaScript app with a disclaimer and session-token

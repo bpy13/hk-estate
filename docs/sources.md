@@ -236,3 +236,43 @@ The hosts are different, so Centadata and 28Hse can run side by side: about **3 
 wall-clock time for 28Hse, which is the limit. History before 2018 exists only as one latest
 deal per flat (Centadata), so the plan's "history from 2000" can't be met with free
 sources (see open-items).
+
+## Pre-2018 history probe (2026-10-17)
+
+Goal: free per-flat or per-building residential history from before 2018. About 10 pages from
+Ricacorp, about 35 requests to the Wayback Machine (CDX index queries plus 9 archived pages),
+4 pages from data.gov.hk and Land Registry (via WebFetch), and robots.txt for 8 hosts. All
+through the project fetcher except the government pages. No requests to www.28hse.com (the
+backfill keeps its rate limit); 28Hse facts below come from the Phase 0 notes above.
+Timings assume 1.4 s per page.
+
+| Source | Allowed? | What it holds | Sample seen | Territory estimate | Verdict |
+|---|---|---|---|---|---|
+| Ricacorp (ricacorp.com) | robots.txt allows `*` except `/api/` paths; no crawl-delay for us | Server-rendered estate page (`/zh-hk/property/transaction/estate/<name>-...`): the latest ~8-10 deals of the last 90 days (block, floor, flat, price, area, registration date, source) plus, for resales, **days held by the previous owner and % gain** (`上手持有`, `升跌`). Longer lists, paging, the history tab and the "more deals" list are JavaScript calls to `/api/` (disallowed). Sale detail pages add nothing (no previous deal). Detail pages show an agent name: skip | Taikoo Shing page: 8 deals, 6 with hold days (2,022 to 10,617 days, i.e. previous deals back to ~1997) | 15,358 estate pages (sitemap) x 1.4 s = ~6 h per pass, but each page is ~1.2 MB (~18 GB per pass, must not be kept); weekly re-crawl | **Needs user decision.** Gives a pre-2018 previous price and date only for recent resales, and only the newest ~10 deals per big estate. See open items |
+| Hong Kong Property (hkp.com.hk) | robots.txt answers **403** | not fetched | none | - | **Don't use** (blocked) |
+| Midland (midland.com.hk) | robots.txt **403** | not fetched | none | - | **Don't use** (blocked) |
+| Midland ICI (midlandici.com.hk) | robots.txt allows `*` except `/wp-admin/` | WordPress site for commercial and industrial property, not homes | robots only | - | **Don't use** (out of scope) |
+| Centaline other pages (hk.centanet.com, hk.centadata.com) | allowed except `/centanetapi/api/` | Block grid (latest deal per flat, already used). Paged transaction lists and full per-flat history come only from the disallowed API; the server-rendered list is 24 rows and ignores `?page=` (Phase 0). No other allowed HTML page shows a flat's full history | Phase 0 pages | - | **Don't use** (nothing new) |
+| Centadata grid "% change" field | allowed | Each latest deal carries its % change versus the **previous** deal, so the previous price is price / (1 + change). Previous date is not shown | already in the cached block pages | no extra requests | **Use** (check it is parsed; see open items) |
+| 28Hse before 2018 | allowed (robots cached) | Site states free data only from 2018; the full history is a paid feature | not fetched | - | **Don't use** (paid) |
+| Squarefoot, house730 | robots.txt **403** | not fetched | none | - | **Don't use** (blocked); no alternative hostname tried |
+| Property.hk | robots allows `*` except `/prop/`, `/member/` and others | Classifieds site | robots only | - | **Don't use** (no transaction data seen; not probed) |
+| Wayback Machine: Centadata | `archive.org/robots.txt` allows `*` (only `/control/`, `/report/` disallowed); `web.archive.org` has no robots.txt (404). Terms of use allow research use; automated access should be modest | Archived `ptest.aspx?info=tr` (transaction tab), `pih09/estate.aspx`, 2011-2022. The transaction rows were loaded by script after the page: the two archived `info=tr` pages had only placeholder dates (01/01/1900), no deals. One 2013 estate page had 17 price strings (not examined further) | CDX: 300+ transaction-tab URLs (query capped at 300) for the whole of 2011-2022, so a few hundred estates at most, 1 to 3 snapshots each | not worth a pass | **Don't use** (no rows in snapshots) |
+| Wayback Machine: Midland | as above | 2004 mobile "3G" pages: ~17 estates (Taikoo Shing, City One, Mei Foo, ...), **monthly high/average/low price per sq ft** for the 12 months to Mar-Jun 2004; one or two snapshots each | 4 pages read | ~17 estates x 2 snapshots | **Don't use** (aggregate, 17 estates, one year) |
+| Wayback Machine: 28Hse, Ricacorp, HKP | as above | CDX found no archived transaction, history or estate-detail pages before 2018 for 28Hse (home page only) or Ricacorp (images only); HKP only marketing pages and images | 6 index queries | - | **Don't use** (nothing archived) |
+| Land Registry statistics (landreg.gov.hk, data.gov.hk `hk-lr-data5-landreg`) | open data; no robots.txt (404); licence text not read | Monthly count of residential sale agreements by consideration band, 2005-2026, JSON and XLS; a regional table (broad regions, not estates) | dataset page read | 22 yearly files | **Use only for market context** (territory/region, no per-flat data) |
+| RVD popular developments index (data.gov.hk) | open data | Price index for selected popular developments from 1992 (monthly, quarterly, annual CSV with API) | already in use (RVD) | ~20 files | **Use** (already planned) |
+| IRIS / Land Registry search | paid | Individual title searches | not probed | - | **Don't use** (paid; user decides) |
+
+### Findings
+
+- No free, allowed source gives a flat's full deal list before 2018. Every agency keeps it
+  behind a JavaScript call to an `/api/` path that its robots.txt disallows, or behind payment.
+- The one new source of pre-2018 per-flat information is Ricacorp's "days held and % gain" on
+  recent resales. It gives the previous deal's date (registration date minus days held) and
+  price (price / (1 + gain)). Gain is shown as a whole percent, so the previous price is
+  accurate to about 0.5-1%. It is a previous-deal pair, not a history.
+- Centadata's block grid also carries "% change versus the previous deal", which would give
+  the previous price for every flat with a latest deal (date unknown). Worth checking whether
+  the parser keeps it.
+- The Wayback Machine holds page shells only; the deals were never in the archived HTML.
