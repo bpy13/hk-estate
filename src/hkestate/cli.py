@@ -106,6 +106,18 @@ def cmd_crosscheck(args) -> int:
     return 0
 
 
+def cmd_master(args) -> int:
+    """Territory-wide Centadata estate/building list and latest deal per flat (resumable)."""
+    from hkestate.fetch import Fetcher
+    from hkestate.sources import cd_master
+
+    log = _logger("master")
+    # 2 s between requests: hk.centanet.com is shared with the Centanet listing scraper
+    with Fetcher(min_interval=cd_master.MIN_INTERVAL_S) as f:
+        cd_master.run_master(f, db_path=args.db, log=log, limit=args.limit)
+    return 0
+
+
 def cmd_status(args) -> int:
     with db.session(args.db) as con:
         db.init_db(con)
@@ -148,6 +160,10 @@ def main(argv: list[str] | None = None) -> int:
     c = sub.add_parser("crosscheck", help="compare 28Hse deals with Centadata block pages")
     c.add_argument("--estates", required=True, help="comma-separated names, or 'pilot'")
     c.set_defaults(func=cmd_crosscheck)
+
+    m = sub.add_parser("master", help="territory-wide estate/building list from Centadata")
+    m.add_argument("--limit", type=int, default=None, help="only the next N estates (testing)")
+    m.set_defaults(func=cmd_master)
 
     s = sub.add_parser("status", help="recent runs and row counts")
     s.set_defaults(func=cmd_status)
