@@ -322,13 +322,20 @@ Lint: `ruff check .`.
 
 ## Phase 4 – Fair price and dashboard (opus)
 
-- [ ] **Task 4.1: Feature table**
+- [x] **Task 4.1: Feature table**
   - Done when: `features.py` builds one row per deal and per listing, and tests check feature
     definitions:
     - saleable area, rooms, floor_num and relative floor (floor ÷ building top floor)
     - facing bins: N, NE, E, SE, S, SW, W, NW, unknown
     - view flags, age, district, MTR distance, estate size, first-hand flag
     - month index.
+  - Result (2026-10-16): `features.py` reads the database once (`extract`, one short session,
+    ~40 s) and saves a snapshot in `data/model/snapshot/`. Live: 200,065 deals, 114,951
+    trainable (37,157 pilot, 77,794 territory); 2,324 active sale listings, 1,941 valuable.
+    The open items "before Phase 4" are handled here (decisions.md "Phase 4 build"): parking,
+    first-hand (SRPE + rule), houses, quarantined LOHAS Park rows, 28Hse agreement dates.
+    `db.txn_all_sql()` lets the model run the `txn_all` query without the quarantined rows.
+    Coverage in training: MTR distance and coordinates 72%, age 95%, rooms 9%, facing 6%.
 - [ ] **Task 4.2: Fair-price model**
   - Done when:
     - LightGBM on log price per sq ft, trained on deals up to month T−6 and tested on the

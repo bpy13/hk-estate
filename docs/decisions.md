@@ -265,6 +265,37 @@ Details and measurements in `docs/sources.md`. Supersedes parts of "Source roles
 
     Paid sources stay out.
 
+## Phase 4 build: fair price (2026-10-16, Claude's calls)
+- **Agreement dates for 28Hse deals: shifted back by the measured lag.** 28Hse Land Registry
+  deals show the registration date; for the model (month index, train/test split) they move
+  back by the median Centadata registration-minus-agreement gap, measured on every `hkestate
+  train` (14 days on 72,732 Centadata deals since 2018; middle half 11-20 days). Centadata and
+  SRPE give the agreement date themselves; 28Hse agency reports keep the date shown. Stored
+  dates are unchanged; only the model's `agreement_date` is shifted.
+- **Left out of fair-price training and comparables** (kept in storage; `features.py`
+  `exclude_reason`):
+  - deals including a parking space (28Hse 連車位, SRPE parking column)
+  - first-hand sales: SRPE's flag, and where SRPE doesn't cover the building, a rule: a flat's
+    first recorded deal within 24 months of the building's completion. Without a completion
+    date, the building's first deal is the anchor, but only for a launch (25%+ of the
+    building's flats first sold in those 24 months, first deal 1998 or later). A first try
+    without the 25%-of-all-flats test would have treated old buildings whose 28Hse history
+    starts in 2018 as launches. On the live data the rule marks 65,208 deals, a median of
+    one year before completion: Centadata's "latest deal per flat" is the developer sale for
+    every flat never resold.
+  - houses, villas and subsidised estates (master-list coverage filter; SRPE house registers)
+  - Ricacorp previous deals derived from days held and % gain
+  - the ~14,500 wrong-building LOHAS Park Centadata rows from the first cross-check run,
+    filtered read-only by fetch time (`db.QUARANTINE_SQL`; 8,954 are still the newest copy)
+    before the duplicate/bulk/outlier tests, so they can't distort them. Deleting them still
+    waits for the owner (open-items).
+- **Facing and sea view are flat-level**: a listing stating them lends them to every deal on
+  the same building + flat letter. Listings without a floor are valued at their band's middle
+  (1/6, 1/2, 5/6 of the building) or, with no band, at mid-height (marked `imputed`).
+- **SHAP values come from LightGBM's own TreeSHAP** (`pred_contrib=True`), the same algorithm
+  as the `shap` package: importing `shap` fails on this laptop because Windows Application
+  Control blocks a scikit-learn DLL it loads.
+
 ## Repository
 - **Public GitHub repo `hk-estate` on account `bpy13`** (2026-10-16). Because it is public:
   scraped data, the database and raw-page cache are never committed (`data/` ignored), and no

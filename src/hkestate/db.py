@@ -290,19 +290,11 @@ TABLES_DDL = [
     )""",
 ]
 
-VIEWS_DDL = [
-    # Newest version of every source row (raw is append-only; a changed row adds a version).
-    """
-    CREATE OR REPLACE VIEW txn_latest AS
-    SELECT * EXCLUDE (rn) FROM (
-        SELECT *, row_number() OVER (
-            PARTITION BY source, source_id ORDER BY fetched_at DESC) AS rn
-        FROM txn_raw)
-    WHERE rn = 1
-    """,
-    # Every deal with its unit, comparable area and exclusion flags.
-    f"""
-    CREATE OR REPLACE VIEW txn_all AS
+def txn_all_sql(latest: str = "txn_latest") -> str:
+    """The query behind the `txn_all` view, reading deals from `latest` (a view or table
+    shaped like `txn_latest`). The fair-price model passes a filtered copy so rows it must
+    ignore (see QUARANTINE_SQL) never take part in the duplicate, bulk or outlier tests."""
+    return f"""
     WITH base AS (
         -- 28Hse dates Land Registry deals by registration date (Centadata cross-check)
         -- a 28Hse deal in a building linked to a master (Centadata) building takes that
@@ -326,7 +318,7 @@ VIEWS_DDL = [
                 WHEN t.gross_sqft > 0 AND b.saleable_to_gross > 0 THEN 'converted'
                 WHEN t.gross_sqft > 0 THEN 'gross_only'
             END AS area_basis
-        FROM txn_latest t
+        FROM {latest} t
         LEFT JOIN building b ON b.building_id = t.building_id
         LEFT JOIN (SELECT source_key, master_id FROM source_map
                    WHERE source = 'hse28' AND kind = 'building') sm
@@ -390,7 +382,33 @@ VIEWS_DDL = [
     FROM psf
     LEFT JOIN mad m ON psf.building_id = m.building_id AND year(psf.deal_date) = m.yr
     LEFT JOIN unit u ON u.unit_id = psf.unit_id
+    """
+
+
+# Rows stored wrongly and kept out of analysis without deleting them (raw data is
+# append-only; deleting needs the owner's OK, docs/open-items.md). Evaluated on txn_latest.
+# - The first LOHAS Park cross-check run (2026-10-16 19:28-19:31, before the matching fix)
+#   stored ~14,500 Centadata rows against the wrong LOHAS Park buildings. The fixed run
+#   started 19:44; every LOHAS Park Centadata row fetched before that is from the bad run.
+QUARANTINE_SQL = """
+    (source = 'centadata'
+     AND fetched_at < TIMESTAMP '2026-10-16 19:44:00'
+     AND estate_id IN (SELECT estate_id FROM estate WHERE group_name = 'lohas-park'))
+"""
+
+
+VIEWS_DDL = [
+    # Newest version of every source row (raw is append-only; a changed row adds a version).
+    """
+    CREATE OR REPLACE VIEW txn_latest AS
+    SELECT * EXCLUDE (rn) FROM (
+        SELECT *, row_number() OVER (
+            PARTITION BY source, source_id ORDER BY fetched_at DESC) AS rn
+        FROM txn_raw)
+    WHERE rn = 1
     """,
+    # Every deal with its unit, comparable area and exclusion flags.
+    f"CREATE OR REPLACE VIEW txn_all AS {txn_all_sql()}",
     # What the analysis uses: market resale deals only, one copy each.
     """
     CREATE OR REPLACE VIEW txn AS
