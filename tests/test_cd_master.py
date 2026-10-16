@@ -17,7 +17,8 @@ SITEMAP = """<?xml version="1.0" encoding="utf-8"?>
 </urlset>"""
 
 
-def nuxt_page(*, estate="測試苑", phase="", block="1座", code="2-AAAAAAAAAA",\n              block_code="1-BBBBBBBBBB",
+def nuxt_page(*, estate="測試苑", phase="", block="1座", code="2-AAAAAAAAAA",
+              block_code="1-BBBBBBBBBB",
               estate_type="Normal", is_house=False, hos=False, prh=False, listings=True,
               op_date="1998-05-01T00:00:00", units=60, floors=30, deals=(), blocks=(),
               phases=(), parent=None):

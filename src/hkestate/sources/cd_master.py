@@ -393,7 +393,7 @@ def run_master(fetcher, db_path=None, log=print, limit: int | None = None) -> di
                 streak += 1
                 log(f"  {code} {name}: {type(e).__name__} {e}")
                 if streak >= MAX_CONSECUTIVE_ERRORS:
-                    raise RuntimeError(f"{streak} errors in a row; stopping (rerun to resume)") from e
+                    raise RuntimeError(f"{streak} errors in a row; stopping (rerun)") from e
                 continue
             streak = 0
             stats["estates"] += 1
