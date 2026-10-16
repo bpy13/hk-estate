@@ -118,11 +118,7 @@ cache pruning.)*
   are excluded by decision. Before Phase 4, apply the coverage filter to SRPE developments
   (9-column house registers, or the master list's house flag) so they never enter comparables
   or growth pairs.
-- **Task 1.6 check failed: LOHAS Park Centadata match rate 15.8%** (2026-10-16 19:31, not
-  ticked). Exact output from `hkestate crosscheck --estates lohas-park`:
-  `lohas-park: 57/86 blocks mapped, 2251/14264 Centadata deals since 2018 found in 28Hse (15.8%), dates {'near': 27, 'registration': 2223, 'instrument': 1}, 14562 Centadata-only rows added`
-  Report: `data/reports/crosscheck_20261016.md` (lists the 29 unmapped Centadata blocks). The
-  other four pilot estates are 93.8-99.6%. Likely cause: 28Hse's LOHAS Park block mapping
-  (57 of 86), not a data error, but unconfirmed. Needs a look before Task 1.6 can be ticked.
+- **Wrong-building Centadata rows from the first LOHAS Park cross-check.** The 19:28-19:31 run (before the matching fix) stored about 14,500 Centadata-only rows in 	xn_raw against the wrong LOHAS Park buildings (e.g. Montara deals on LP6). The fixed run (19:44 on) adds correct versions of the unmatched ones, which supersede them in 	xn_latest, but rows that now match a 28Hse deal, and 海璇灣 rows, keep the wrong building. Fix: delete 	xn_raw rows with source='centadata', LOHAS Park estates and etched_at before 2026-10-16 19:44, then rerun hkestate crosscheck --estates lohas-park (stored pages, no new requests). The delete was blocked in this session and needs your OK.
+- **海璇灣 I and II (Centadata phases 13A/13B) are not in the 28Hse LOHAS Park set.** 8 blocks, ~900 deals. Territory backfill picks them up if 28Hse has them as a separate estate.
 
 ## Later

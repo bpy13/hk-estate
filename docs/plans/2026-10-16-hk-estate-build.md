@@ -175,13 +175,13 @@ Lint: `ruff check .`.
   - Files: `scripts/spot_check.py`, result note in `docs/sources.md`.
   - Done when: 50 random pilot rows match the live site on price, date, floor, flat and area
     (50/50). Mismatches are fixed or explained.
-- [ ] **Task 1.6: Second-source cross-check (Centadata, per the Phase 0 change)**
+- [x] **Task 1.6: Second-source cross-check (Centadata, per the Phase 0 change)**
   - Files: `src/hkestate/sources/centadata.py`, `tests/test_centadata.py`.
   - Done when: for the pilot estates, a report (`data/reports/crosscheck_<date>.md`) shows
     the match rate of Centadata deals (2018 on) to 28Hse deals; Centadata-only deals are in
     `txn_raw` with `source='centadata'`.
-  - Status: done for 4 of 5 estates (93.8–99.6%, see `docs/sources.md`); LOHAS Park after
-    its load.
+  - Status: done for 4 of 5 estates (93.8–99.6%, see `docs/sources.md`); LOHAS Park 82.4%
+    raw, 94.9% without first-hand sales and developments 28Hse lacks (explained in docs/sources.md).
 
 ## Phase 2 – Listings (pilot)
 

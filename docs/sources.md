@@ -207,9 +207,17 @@ running; they are not from the backfill, which wrote none.
 **Spot-check (Task 1.5, 2026-10-16 19:35):** 50/50 matches on price, date, floor, flat and
 area (`scripts/spot_check.py`; report `data/reports/spot_check_20261016.md`).
 
-**LOHAS Park cross-check (Task 1.6, 2026-10-16 19:31):** 57/86 blocks mapped; 2,251 of 14,264
-in-window Centadata deals found in 28Hse, 15.8%. This is far below the other four estates and
-is not yet explained; see open-items.
+**LOHAS Park cross-check (Task 1.6, 2026-10-16 19:47):** first run gave 15.8% (2,251 of 14,264)
+because of two matching faults in the cross-check, not bad data: (1) Centadata blocks were put
+on the wrong 28Hse building (every LOHAS Park development has a block 1, 2, 3, so '1座' landed
+on LP6); the development is now picked first, then the block by number and letter. (2) 首都 and
+領都 have a Centadata page per wing (flats A-D) while 28Hse has flats LA-LD and RA-RD; fixed.
+Now 78/86 blocks mapped and 13,678 of 16,594 in-window deals found (82.4%). The rest is
+explained: 海璇灣 I and II (8 blocks) are not among the 22 developments loaded from 28Hse; Park
+Seasons and Grand Seasons (2024-26 developer sales, 1,308 deals) have no 28Hse deals at all;
+and launch-day registration bursts (e.g. Grand Montara 2019-07-08, LP10 2021-02) are first-hand
+sales 28Hse does not list. Excluding those, 94.9%, in line with the other estates. The earlier
+run stored Centadata-only rows against wrong buildings; see open-items.
 
 ## Phase 2 results: pilot listings (2026-10-16)
 
