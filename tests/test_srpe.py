@@ -52,6 +52,7 @@ ROWS = [
     ["17/12/2015", "24/12/2015", "", "L1", "5", "C", "", "$3,723,048.00", "", "(a) terms", ""],
     ["01/02/2016", "", "", "L1", "12", "A", "P12", "$5,000,000.00", "", "", "Yes"],  # PASP only
     ["05/03/2016", "20/03/2016", "01/06/2016", "L1", "7", "B", "", "$4,000,000.00", "", "", ""],
+    ["05-04-2016", "12-04-2016", "", "Tower H2", "6", "C", "", "4,854,000.00", "", "", ""],
     ["", "", "", "", "", "", "", "", "", "", ""],
     ["10/10/2016", "", "", "", "", "", "", "$1.00", "", "", ""],  # no unit: ignored
 ]
@@ -59,8 +60,10 @@ ROWS = [
 
 def test_register_rows():
     deals = srpe.parse_register_rows(ROWS)
-    assert len(deals) == 2  # the terminated sale and the unit-less row are dropped
-    a, b = deals
+    assert len(deals) == 3  # the terminated sale and the unit-less row are dropped
+    a, b, dashed = deals
+    assert (dashed.block, dashed.price_hkd, dashed.asp_date) == (
+        "Tower H2", 4_854_000, date(2016, 4, 12))
     assert (a.block, a.floor, a.flat, a.price_hkd) == ("L1", "5", "C", 3_723_048)
     assert (a.pasp_date, a.asp_date) == (date(2015, 12, 17), date(2015, 12, 24))
     assert a.deal_date == date(2015, 12, 24) and not a.pasp_only and not a.related_party
@@ -80,7 +83,7 @@ def test_pdf_rows_are_read_from_every_page_table(tmp_path):
     class Pdf:
         pages = [Page([[["x"]]]), Page([ROWS])]
 
-    assert len(srpe.register_deals(Pdf())) == 2
+    assert len(srpe.register_deals(Pdf())) == 3
 
 
 # ---- matching to master buildings and dedupe ---------------------------------------------------
@@ -116,7 +119,7 @@ def test_match_buildings_unknown_address(con):
 def test_store_register_flags_first_hand_and_dedupes_against_other_sources(con):
     deals = srpe.parse_register_rows(ROWS)
     n = srpe.store_deals(con, "2947", "煥然壹居", ["cd-1-A"], deals, "https://example/rt")
-    assert n == 2
+    assert n == 3
     row = con.execute("SELECT source, first_hand, deal_type, building_id, floor_label, flat "
                       "FROM txn_raw WHERE source = 'srpe' ORDER BY deal_date").fetchall()
     assert row[0] == ("srpe", True, "first_hand", "cd-1-A", "5", "C")

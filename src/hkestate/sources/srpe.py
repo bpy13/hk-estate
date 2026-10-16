@@ -155,7 +155,8 @@ class RegisterDeal:
         return self.asp_date is None
 
 
-_DATE = re.compile(r"^\s*(\d{2})/(\d{2})/(\d{4})\s*$")
+# Registers write dates as 17/12/2015 or 05-04-2016 depending on the vendor.
+_DATE = re.compile(r"^\s*(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})\s*$")
 
 
 def _date(cell) -> date | None:
@@ -291,7 +292,7 @@ class SrpeClient:
                 for _ in range(60):
                     if seen.get("a"):
                         break
-                    time.sleep(1)
+                    page.wait_for_timeout(1000)  # lets the browser deliver its events
                 self._token = seen.get("a") or ""
             finally:
                 browser.close()
@@ -366,8 +367,9 @@ def run_srpe(client: SrpeClient, db_path=None, log=print, limit: int | None = No
             added, bids = 0, []
             with db.session(db_path) as con:
                 bids = match_development(con, dev)
-                done = detail.register_id is None or db.step_done(
-                    con, COMMAND, f"register:{dev.dev_id}:{detail.register_id}")
+                # ":u" = read before its buildings were in the master list; redone once they are
+                step = f"register:{dev.dev_id}:{detail.register_id}:{'m' if bids else 'u'}"
+                done = detail.register_id is None or db.step_done(con, COMMAND, step)
             if not done:
                 pdf_path = pdf_dir / f"{dev.dev_id}_{detail.register_file}"
                 if not pdf_path.exists():
@@ -377,8 +379,7 @@ def run_srpe(client: SrpeClient, db_path=None, log=print, limit: int | None = No
                 with db.session(db_path) as con:
                     added = store_deals(con, dev.dev_id, dev.name, bids, deals,
                                         f"https://{HOST}{detail.download_path.split('?')[0]}")
-                    db.mark_step(con, COMMAND, f"register:{dev.dev_id}:{detail.register_id}",
-                                 run_id, f"{len(deals)} sales")
+                    db.mark_step(con, COMMAND, step, run_id, f"{len(deals)} sales")
                 stats["registers"] += 1
                 stats["deals"] += added
             stats["developments"] += 1
