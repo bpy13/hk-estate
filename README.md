@@ -28,10 +28,19 @@ conda run -n hk-estate hkestate rvd                         # RVD price/rent ind
 conda run -n hk-estate hkestate crosscheck --estates pilot  # compare with Centadata
 conda run -n hk-estate hkestate status                      # recent runs and row counts
 conda run -n hk-estate python scripts/spot_check.py         # 50 deals vs the live site
+
+conda run -n hk-estate hkestate train     # fair-price model + data/reports/model_eval.md (~1 min)
+conda run -n hk-estate hkestate rank      # data/reports/ranked_listings_<date>.csv (~1 min)
+conda run -n hk-estate streamlit run app/dashboard.py   # dashboard at http://localhost:8501
 ```
 
 A stopped backfill carries on where it left off when run again. Logs go to `data/logs/`,
 reports to `data/reports/`.
+
+`train` and `rank` read the database once (about 40 seconds) and save a snapshot in
+`data/model/`; add `--from-snapshot` to reuse it. Retrain as data grows (the territory
+backfill, geocoding); rerun `rank` after each day's listings. The dashboard reads only
+`data/model/`, so it can stay open while other jobs run.
 
 ## Data folder
 

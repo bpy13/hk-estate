@@ -376,12 +376,21 @@ Lint: `ruff check .`.
     output: part-share-like deals in one Mei Foo block distorted it; fixed by a price check
     and by valuing listings at the last well-populated month (decisions.md). Out-of-time error
     after the fix: 5.1% (pilot 5.2%, territory 5.0%), 80% intervals held 84%.
-- [ ] **Task 4.5: Dashboard**
+- [x] **Task 4.5: Dashboard**
   - Files: `app/dashboard.py`.
   - Done when: launched with `streamlit run`; the ranked list, filters (district, price,
     size, flags, confidence), and a detail page (comparables, unit price history, SHAP
     reasons, listing link) render and are checked in the browser; the run-failure banner
     shows when the last `run_log` entry failed.
+  - Result (2026-10-16): `app/dashboard.py` + `src/hkestate/dashboard_data.py`; pages
+    Ranked listings / Listing detail / Model (`?page=...&listing=source:id`). Launched
+    headless on the live data and screenshotted each page in Chromium (Playwright): no
+    exceptions; the screenshots caught and fixed four display bugs ($ read as a formula, a
+    cut-off range metric, "nan", overlapping chart labels). Banner: red when the newest
+    `run_log` entry failed (AppTest), plus a yellow note for commands whose newest run
+    failed (live: Ricacorp's 403). Reads only `data/model/` (run_log read-only, falls back
+    to the snapshot when the database is busy). Tests: `tests/test_dashboard.py` (AppTest
+    renders every page). No map (later phase).
 
 ## Phase 5 – Growth study and report (opus)
 

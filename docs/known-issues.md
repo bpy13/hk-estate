@@ -33,6 +33,25 @@ Bugs that will be fixed go in `open-items.md` instead.
   They are kept and dropped as duplicates once the Land Registry deal arrives; a market
   deal that never gets registered stays with a band instead of a floor.
 
+## Fair price and ranking (Phase 4)
+
+- **Every district's asking-vs-deal gap is the 5% default (`assumed`)** until 30 listing-deal
+  pairs exist in a district; listings only started on 2026-10-16.
+- **Most listings give no exact floor.** They are valued at their band's middle (高層 = 5/6 of
+  the building's height) or at mid-height when no band is given (`floor_basis` `imputed`),
+  so floor premiums are averaged out for them.
+- **Valuations run a few % low in a rising market.** The out-of-time test shows a median
+  signed error of about -3% (index frozen at the cut-off); listings use the RVD index carried
+  forward from its last published month, about two months old.
+- **Missing features stay missing.** MTR distance and coordinates cover about 72% of training
+  deals (geocoding is partial), rooms 9%, facing 6% (only from listings that state it).
+  Coverage is in `data/reports/model_eval.md`; retrain after the geocoding and backfill runs.
+- **Rooms come almost only from listings**, so the model learns little from them.
+- **Listings in buildings the model never saw** get no building effect (the category is
+  missing to the model) and lean on estate, district and location.
+- **The dashboard shows the last `hkestate rank`**, not live listings; rerun rank after the
+  daily job.
+
 ## Scraping
 
 - **28Hse rate-limits long runs.** After ~45 minutes at 1 request/s (~1,600 requests) it

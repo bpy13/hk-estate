@@ -118,4 +118,22 @@ cache pruning.)*
 - **Wrong-building Centadata rows from the first LOHAS Park cross-check.** The 19:28-19:31 run (before the matching fix) stored about 14,500 Centadata-only rows in 	xn_raw against the wrong LOHAS Park buildings (e.g. Montara deals on LP6). The fixed run (19:44 on) adds correct versions of the unmatched ones, which supersede them in 	xn_latest, but rows that now match a 28Hse deal, and 海璇灣 rows, keep the wrong building. Fix: delete 	xn_raw rows with source='centadata', LOHAS Park estates and etched_at before 2026-10-16 19:44, then rerun hkestate crosscheck --estates lohas-park (stored pages, no new requests). The delete was blocked in this session and needs your OK.
 - **海璇灣 I and II (Centadata phases 13A/13B) are not in the 28Hse LOHAS Park set.** 8 blocks, ~900 deals. Territory backfill picks them up if 28Hse has them as a separate estate.
 
+- **Retrain and re-rank as Phase 3 data lands (Phase 4 follow-up).** `hkestate train` then
+  `hkestate rank` after the territory 28Hse backfill, the master pass and the geocoding run
+  finish, and compare pilot vs territory error in `data/reports/model_eval.md` (today 5.2% vs
+  5.0%). Proposal: add `hkestate rank` to the daily job after listings (about 1 minute), and
+  `hkestate train` to the weekly job. Not registered yet (changes the scheduled tasks).
+- **SRPE first-hand deals reach no building yet** (0 of ~8,600 have a `building_id`), so their
+  first-hand flag doesn't feed the model; the first-hand rule covers those buildings for now.
+  Same root cause as SRPE gap (d) above: rerun the SRPE matching after the master pass.
+- **Part-share transfers in the stored views.** The model's price check drops deals under half
+  / over double their building's median price per sq ft (decisions.md), but `txn_all`/`txn`
+  still keep them. Proposal: add the same rule to `txn_all` as `excl_price_check` before
+  Phase 5 so the growth pairs leave them out too. Changes a shared view, so not done
+  unasked.
+- **The quarantined LOHAS Park rows are only filtered, not deleted** (see "Wrong-building
+  Centadata rows" above): the model and rank read around them; the stored `txn_all`/`txn`
+  views still include them until you OK the delete.
+
 ## Later
+- **Dashboard map** (decisions.md: "a map in a later phase"): not built in Phase 4.

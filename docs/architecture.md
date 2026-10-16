@@ -37,6 +37,19 @@ hkestate daily  (= listings, all sources, + cache prune; Task Scheduler 08:00, d
        ├─ match.py -> listing.building_id, floor_band, dup_group; relink_relistings
        └─ flags.py (keywords.yml) -> risk_flag
 hkestate update (weekly) -> backfill.update_estates: newest 28Hse deal-list pages
+
+hkestate train                               (fair price, Phase 4)
+  └─ features.snapshot: one short DB session -> data/model/snapshot/*.parquet
+       (txn_all query minus db.QUARANTINE_SQL rows, buildings, listings, RVD index, run_log)
+  └─ features.deal_features: one row per deal, exclude_reason (None = trainable)
+  └─ model.train: 3 LightGBM fits (calibration, out-of-time test, final)
+       -> data/model/fair_price.txt + .json, test_predictions.parquet, deals.parquet
+       -> data/reports/model_eval.md
+hkestate rank
+  └─ snapshot -> features.listing_features -> model (+ TreeSHAP) -> gap.py (district gaps)
+       -> data/reports/ranked_listings_<date>.csv, asking_gap_<date>.csv
+       -> data/model/ranked_latest.parquet
+streamlit run app/dashboard.py -> dashboard_data.py reads data/model/ (+ run_log read-only)
 ```
 
 ## Modules
@@ -62,6 +75,11 @@ hkestate update (weekly) -> backfill.update_estates: newest 28Hse deal-list page
 | `hse28_territory.py` | territory 28Hse backfill: estate list (sitemap, CSV, listing cards), largest-first order, resumable run |
 | `locks.py` | job lock files (`hse28`, `listings`) |
 | `maintenance.py` | deletes cached listing pages 7+ days old |
+| `features.py` | Phase 4 feature table: database extract/snapshot, one row per deal and per listing, model exclusions (parking, first-hand rule, houses, price check, quarantine), 28Hse agreement dates, RVD deflator |
+| `model.py` | fair-price LightGBM: time split, index-adjusted target, conformal intervals, comparables check, TreeSHAP reasons, `model_eval.md` |
+| `gap.py` | asking-vs-deal pairs and per-district gap (5% `assumed` under 30 pairs) |
+| `rank.py` | values active sale listings, discount, confidence, cross-site dedupe, ranked CSV |
+| `dashboard_data.py` | data and filters for `app/dashboard.py` (Streamlit: ranked list, detail, model page, run banner) |
 | `cli.py` | `hkestate` command |
 
 ## Data
@@ -107,6 +125,11 @@ Exclusion flags in `txn_all` (decisions.md "Schema"):
 | `excl_non_market` | non-market transfer (when a source marks it) |
 | `excl_bulk` | 3 or more flats in one building on the same day |
 | `excl_outlier` | price per sq ft more than 5 median absolute deviations from the building's median for that year (MAD scaled by 1.4826, floor 5% of the median; needs ≥5 deals in the building-year) |
+
+The fair-price model adds its own exclusions on top (`features.py` `exclude_reason`,
+decisions.md "Phase 4 build"); the stored views are unchanged. `db.txn_all_sql(latest)`
+runs the `txn_all` query over any `txn_latest`-shaped source, which is how the model leaves
+out the quarantined rows (`db.QUARANTINE_SQL`) before the flags are computed.
 
 The views are recomputed on every query. At territory scale (Phase 3) `txn_all` may need to
 be materialised as a table after each load.

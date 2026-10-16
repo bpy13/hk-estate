@@ -406,8 +406,8 @@ def train(raw: dict, rounds: int = ROUNDS, today: date | None = None, log=print)
     tp.to_parquet(test_path, index=False)
     # the dashboard's comparables and price histories read this (no database needed)
     keep = ["source", "source_id", "unit_id", "building_id", "building_name", "estate_name",
-            "floor_label", "flat", "agreement_date", "price_hkd", "area_sqft", "psf_hkd",
-            "exclude_reason", "is_pilot", "district"]
+            "floor_label", "floor_num", "rel_floor", "flat", "agreement_date", "price_hkd",
+            "area_sqft", "psf_hkd", "exclude_reason", "is_pilot", "district"]
     deals[keep].to_parquet(out_dir / "deals.parquet", index=False)
 
     listings = features.listing_features(raw, today)
