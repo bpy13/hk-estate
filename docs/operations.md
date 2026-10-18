@@ -74,8 +74,11 @@ whose process has ended is ignored.
 - `listings.lock`: held by `hkestate daily` / `hkestate listings`; a second listing run
   started meanwhile records `skipped` and exits.
 
-The database itself is shared: every job opens it only for short writes, and a job that
-finds it busy waits up to 5 minutes (`db.connect`).
+The database itself is shared: every job opens it only for short reads and writes, and a job
+that finds it busy retries for up to 30 minutes (`db.connect`: 5 s between tries, doubling
+to 60 s, each wait logged as "database busy" in the task log). Only the 'file in use' error
+is retried; any other error stops the job. `train`, `rank` and `report` read their data
+into memory in one session (a few minutes), close the file, then fit or score without it.
 
 ## Logs and checks
 

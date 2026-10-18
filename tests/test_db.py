@@ -402,3 +402,86 @@ def test_quarantined_lohas_park_rows_are_flagged_and_ignored_by_other_rules(con)
     assert flags["late"][0] is False
     assert flags["h1"] == (False, False)  # two real deals that day: not a bulk deal
     assert _clean_ids(con) == {"h1", "h2", "late"}
+
+
+LOCK_MSG = ("IO Error: Cannot open file: The process cannot access the file because it is "
+            "being used by another process.")
+
+
+def test_connect_backs_off_from_5s_to_60s_and_logs_each_wait(tmp_path, monkeypatch, capsys):
+    import duckdb
+
+    sleeps = []
+    clock = [0.0]
+    real = duckdb.connect
+    tries = []
+
+    def busy_then_free(path, *a, **k):
+        tries.append(1)
+        if len(tries) <= 7:
+            raise duckdb.IOException(LOCK_MSG)
+        return real(path, *a, **k)
+
+    monkeypatch.setattr(db.duckdb, "connect", busy_then_free)
+    monkeypatch.setattr(db.time, "monotonic", lambda: clock[0])
+
+    def fake_sleep(s):
+        sleeps.append(s)
+        clock[0] += s
+
+    monkeypatch.setattr(db.time, "sleep", fake_sleep)
+    db.connect(tmp_path / "x.duckdb").close()
+    assert sleeps == [5, 10, 20, 40, 60, 60, 60]
+    assert capsys.readouterr().err.count("database busy") == 7
+
+
+def test_connect_gives_up_after_the_wait_limit(tmp_path, monkeypatch):
+    import duckdb
+
+    clock = [0.0]
+
+    def always_busy(path, *a, **k):
+        raise duckdb.IOException(LOCK_MSG)
+
+    monkeypatch.setattr(db.duckdb, "connect", always_busy)
+    monkeypatch.setattr(db.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(db.time, "sleep", lambda s: clock.__setitem__(0, clock[0] + s))
+    with pytest.raises(duckdb.IOException):
+        db.connect(tmp_path / "x.duckdb")
+    assert 25 * 60 <= clock[0] <= 30 * 60  # waited about the 30 minutes, not 5
+
+
+def test_connect_does_not_retry_other_errors(tmp_path, monkeypatch):
+    import duckdb
+
+    calls = []
+
+    def broken(path, *a, **k):
+        calls.append(1)
+        raise duckdb.IOException("IO Error: Could not read enough bytes from file")
+
+    monkeypatch.setattr(db.duckdb, "connect", broken)
+    monkeypatch.setattr(db.time, "sleep", lambda s: pytest.fail("must not wait"))
+    with pytest.raises(duckdb.IOException):
+        db.connect(tmp_path / "x.duckdb")
+    assert len(calls) == 1
+
+
+def test_connect_waits_for_a_real_second_process(tmp_path, monkeypatch):
+    """A child process holds the file for ~2 s; connect() waits and then succeeds."""
+    import subprocess
+    import sys
+
+    path = tmp_path / "held.duckdb"
+    db.connect(path).close()
+    code = ("import duckdb,sys,time; c=duckdb.connect(sys.argv[1]); print('held',flush=True);"
+            "time.sleep(2); c.close()")
+    child = subprocess.Popen([sys.executable, "-c", code, str(path)], stdout=subprocess.PIPE,
+                             text=True)
+    try:
+        assert child.stdout.readline().strip() == "held"
+        monkeypatch.setattr(db, "LOCK_BACKOFF_FIRST_S", 0.5)
+        con = db.connect(path, wait_s=60)
+        con.close()
+    finally:
+        child.wait(timeout=30)

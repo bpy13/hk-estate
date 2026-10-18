@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-import random
+import sys
 import time
 from collections.abc import Iterable, Mapping
 from contextlib import contextmanager
@@ -55,22 +55,38 @@ def default_db_path() -> Path:
     return get_data_dir() / "hkestate.duckdb"
 
 
-def connect(path: Path | str | None = None, *, wait_s: float = 300.0) -> duckdb.DuckDBPyConnection:
+LOCK_WAIT_S = 30 * 60  # how long to wait for another process to let go of the file
+LOCK_BACKOFF_FIRST_S = 5.0
+LOCK_BACKOFF_MAX_S = 60.0
+
+
+def _is_lock_error(e: Exception) -> bool:
+    """True for the 'another process has the file open' IOException, and nothing else."""
+    text = str(e).lower()
+    # Linux/Mac say "lock"; Windows says "used by another process" / "already open".
+    return any(k in text for k in ("lock", "another process", "already open"))
+
+
+def connect(path: Path | str | None = None, *,
+            wait_s: float = LOCK_WAIT_S) -> duckdb.DuckDBPyConnection:
     """Open the database. DuckDB allows one process at a time, so if another command holds
-    the file we wait (up to `wait_s`) for it to be released."""
+    the file we retry (5 s, doubling to 60 s between tries) for up to `wait_s` (30 minutes:
+    the scheduled train and rank hold it for several minutes). Each wait is logged to stderr,
+    which the task wrappers capture. Any other error is raised at once."""
     path = Path(path) if path else default_db_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     deadline = time.monotonic() + wait_s
+    delay = LOCK_BACKOFF_FIRST_S
     while True:
         try:
             return duckdb.connect(str(path))
         except duckdb.IOException as e:
-            text = str(e).lower()
-            # Linux/Mac say "lock"; Windows says "used by another process" / "already open".
-            busy = any(k in text for k in ("lock", "another process", "already open"))
-            if not busy or time.monotonic() > deadline:
+            if not _is_lock_error(e) or time.monotonic() + delay > deadline:
                 raise
-            time.sleep(0.5 + random.random())
+            print(f"{datetime.now():%Y-%m-%d %H:%M:%S} database busy (another process has "
+                  f"{path.name} open); retrying in {delay:.0f}s", file=sys.stderr, flush=True)
+            time.sleep(delay)
+            delay = min(delay * 2, LOCK_BACKOFF_MAX_S)
 
 
 @contextmanager
