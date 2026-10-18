@@ -19,7 +19,8 @@ Read these before substantial changes:
 - Install: `conda env create -f environment.yml`, then
   `conda run -n hk-estate python -m pip install -e ".[dev]"` (conda env `hk-estate`, Python 3.12)
 - Run: `conda run -n hk-estate hkestate <command>`: `backfill --estates pilot` (resumable),
-  `rvd`, `crosscheck --estates pilot`, `listings`, `daily`, `update`, `prune-cache`,
+  `rvd`, `crosscheck --estates pilot`, `cd-history` (every sale per flat from Centadata; resumable;
+  `--estates`, `--limit`, `--max-hours`), `listings`, `daily`, `update`, `prune-cache`,
   `status`, `train`, `rank` (fair price; `--from-snapshot` reuses `data/model/snapshot`),
   `report` (growth study, `data/reports/findings_<date>.md`). Notebook: `notebooks/explore.ipynb`.
   Dashboard: `conda run -n hk-estate streamlit run app/dashboard.py`. Scheduled jobs and

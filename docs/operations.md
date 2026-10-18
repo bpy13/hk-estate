@@ -1,4 +1,4 @@
-﻿# Operations
+# Operations
 
 How the scheduled jobs run on the laptop, where to look when something goes wrong, and how
 to run things by hand. Commands assume the repo folder and the `hk-estate` conda env.
@@ -86,6 +86,33 @@ that finds it busy retries for up to 30 minutes (`db.connect`: 5 s between tries
 to 60 s, each wait logged as "database busy" in the task log). Only the 'file in use' error
 is retried; any other error stops the job. `train`, `rank` and `report` read their data
 into memory in one session (a few minutes), close the file, then fit or score without it.
+
+## Centadata sale history (`hkestate cd-history`)
+
+Loads every recorded sale of each flat (back to 1995) from Centadata, for the growth study.
+Not scheduled: it is a one-off territory run (about 29 hours, see docs/sources.md "Centadata
+history"), then it can be repeated now and then to pick up buildings added by the master pass.
+
+```powershell
+conda run -n hk-estate hkestate cd-history                       # whole territory, largest estates first
+conda run -n hk-estate hkestate cd-history --estates taikoo-shing --limit 20   # a quick trial
+conda run -n hk-estate hkestate cd-history --max-hours 8         # stop after 8 hours; rerun to continue
+```
+
+- Flat codes come from the latest deals already stored (`txn_raw`, source `centadata`), so the
+  master pass (`hkestate master`) must have covered an estate first. A flat whose latest deal
+  matched 28Hse in the pilot cross-check was not stored as a Centadata row, so it has no
+  code yet (open item).
+- One call carries up to 40 flats and returns 100 rows a page; 4 s between calls (the master
+  pass and the Centanet listings share this host). Every answer is cached.
+- Progress is kept per building (`run_progress`, command `cd-history`): a restart skips
+  finished buildings, and a rerun adds nothing that is already stored. A building whose batch
+  failed is tried again on the next run.
+- `--limit N` counts buildings. The job **pauses while the `listings` lock is held** (the daily
+  listing job), stops after 5 errors in a row, stops for good on a 403 or challenge page, and
+  holds the `cd-history` lock so two copies cannot run. It writes a `run_log` row
+  (command `cd-history`) and `data\logs\cd-history_<time>.log`.
+- After a load, run `hkestate train` and `hkestate report` to use the dated pairs.
 
 ## Monthly blocked-site check (`hkestate check-blocked`)
 

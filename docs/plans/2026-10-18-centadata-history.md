@@ -66,7 +66,7 @@ the growth study uses real dated pairs instead of estimated ones before 2018.
   - A `gain` pair whose start date is now known moves to `real`.
   - Done when: a test with a two-sale Centadata history makes one real pair. After the pilot
     load, `hkestate report` shows more recorded pairs that start before 2018.
-- [ ] **Task 5: run it and document it**
+- [x] **Task 5: run it and document it**
   - Update `docs/operations.md`, `README.md` and `CLAUDE.md` (the command list).
   - The territory run is started in the background by the main session, not by the helper.
   - Done when: docs are updated; pytest and ruff are green.

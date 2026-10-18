@@ -10,7 +10,10 @@ here; a limit or trap we live with goes in `known-issues.md`. Each item in one p
 estimated pairs, Ricacorp pairs as Task 3.6, Centadata % change); MTR station centres; listing
 cache pruning.)*
 
-- **Delete the wrong-building Centadata rows from the first LOHAS Park cross-check.** The
+- [x] *(Done 2026-10-18: the owner ran the delete, 14,562 rows, 0 left; `hkestate crosscheck
+  --estates lohas-park` rerun from cached pages added 164 Centadata-only rows, match rate
+  82.4% as before. `QUARANTINE_SQL` stays as a guard and now matches nothing.)*
+  **Delete the wrong-building Centadata rows from the first LOHAS Park cross-check.** The
   19:28-19:31 run on 2026-10-16 (before the matching fix) stored about 14,500 Centadata-only
   rows in `txn_raw` against the wrong LOHAS Park buildings (e.g. Montara deals on LP6). The
   fixed run (19:44 on) adds correct versions of the unmatched ones, but rows that now match a
@@ -123,6 +126,17 @@ cache pruning.)*
   year may reflect those launches' pricing. Recheck with territory pairs.
 - **Jupyter is not in the conda env.** `notebooks/explore.ipynb` was checked by running its
   cells as code; to open it interactively, `conda install -n hk-estate ipykernel notebook`.
+
+- **`cd-history` skips pilot flats whose latest deal matched 28Hse.** Its flat codes come from
+  stored Centadata rows, and the pilot cross-check stores only the Centadata deals 28Hse did
+  not have (99% of 2018+ latest deals matched), so those flats have no stored code and get no
+  pre-2018 history. Taikoo Shing: 6,001 codes for about 12,000 flats. Fix when wanted: have
+  the cross-check also keep the flat code of matched deals (a small table), then rerun
+  `cd-history --estates pilot`. Territory estates are complete (the master pass stores every
+  latest deal). *(Phase 1, Task 3.)*
+- **Page size 200-400 was not tried.** 100 rows a page works and 500 gives HTTP 500; to keep
+  to the probe allowance only those two were tested. A larger page would cut calls by up to
+  a third on big buildings. *(Task 2.)*
 
 ## Later
 - **Dashboard map** (decisions.md: "a map in a later phase"): not built in Phase 4.
