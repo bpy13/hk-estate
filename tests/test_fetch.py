@@ -1,7 +1,8 @@
-"""Polite fetcher behaviour, tested offline against httpx.MockTransport."""
+﻿"""Polite fetcher behaviour, tested offline against httpx.MockTransport."""
 
 import gzip
 import hashlib
+import json
 from datetime import date, timedelta
 
 import httpx
@@ -461,3 +462,99 @@ def test_five_hops_is_allowed(tmp_path):
 
     fetcher, _, _ = make_fetcher(tmp_path, handler)
     assert fetcher.get("https://example.com/0", "static") == "<html>ok</html>"
+
+
+# ---- JSON POST -----------------------------------------------------------------------------
+
+
+def test_post_json_checks_robots_and_sends_user_agent_and_body(tmp_path):
+    seen = []
+
+    def handler(request):
+        seen.append(request)
+        return httpx.Response(200, text='{"ok": 1}')
+
+    fetcher, requests, _ = make_fetcher(tmp_path, handler)
+    url = "https://example.com/api/s"
+    assert fetcher.post_json(url, {"codes": ["a"]}, "transaction") == '{"ok": 1}'
+    assert seen[0].method == "POST"
+    assert seen[0].headers["user-agent"] == USER_AGENT
+    assert seen[0].headers["content-type"] == "application/json"
+    assert json.loads(seen[0].content) == {"codes": ["a"]}
+    with pytest.raises(RobotsDisallowed):
+        fetcher.post_json("https://example.com/private/s", {"codes": ["a"]}, "transaction")
+    assert len(page_requests(requests)) == 1
+
+
+def test_post_json_is_paced_like_a_get(tmp_path):
+    times = []
+    clock = FakeClock()
+
+    def handler(request):
+        times.append(clock.now)
+        return ok(request)
+
+    fetcher, _, _ = make_fetcher(tmp_path, handler, clock=clock)
+    fetcher.get("https://example.com/a", "listing")
+    fetcher.post_json("https://example.com/b", {"n": 1}, "listing")
+    fetcher.post_json("https://example.com/b", {"n": 2}, "listing")
+    assert all(b - a >= 1.0 - 1e-9 for a, b in zip(times, times[1:], strict=False))
+
+
+@pytest.mark.parametrize("status", [429, 503])
+def test_post_json_retries_and_resends_the_body(tmp_path, status):
+    bodies = []
+
+    def handler(request):
+        bodies.append(request.content)
+        if len(bodies) < 3:
+            return httpx.Response(status, text="slow down")
+        return httpx.Response(200, text="done")
+
+    fetcher, _, clock = make_fetcher(tmp_path, handler)
+    assert fetcher.post_json("https://example.com/s", {"n": 1}, "listing") == "done"
+    assert len(bodies) == 3 and len(set(bodies)) == 1
+    assert [s for s in clock.sleeps if s >= 2.0][:2] == [2.0, 4.0]
+
+
+def test_post_json_cache_key_is_url_plus_body(tmp_path):
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        return httpx.Response(200, text=f"answer {len(calls)}")
+
+    fetcher, _, _ = make_fetcher(tmp_path, handler)
+    url = "https://example.com/s"
+    assert fetcher.post_json(url, {"a": 1, "b": 2}, "transaction") == "answer 1"
+    # same body, keys in another order: cached
+    assert fetcher.post_json(url, {"b": 2, "a": 1}, "transaction") == "answer 1"
+    # different body: a new request
+    assert fetcher.post_json(url, {"a": 1, "b": 3}, "transaction") == "answer 2"
+    # a GET of the same URL is a different key
+    assert fetcher.get(url, "transaction") == "answer 3"
+    sha = hashlib.sha1(Fetcher.post_key(url, {"a": 1, "b": 2}).encode()).hexdigest()
+    assert (tmp_path / "cache" / "example.com" / "2026-10-16" / f"{sha}.html.gz").exists()
+
+
+def test_post_json_follows_redirect_keeping_body_and_checking_robots(tmp_path):
+    seen = []
+
+    def handler(request):
+        seen.append((request.method, request.url.path, request.content))
+        if request.url.path == "/old":
+            return httpx.Response(307, headers={"location": "/new"})
+        return httpx.Response(200, text="moved")
+
+    fetcher, _, _ = make_fetcher(tmp_path, handler)
+    assert fetcher.post_json("https://example.com/old", {"n": 1}, "listing") == "moved"
+    assert seen[1][:2] == ("POST", "/new") and seen[1][2] == seen[0][2]
+    seen.clear()
+
+    def to_private(request):
+        return httpx.Response(307, headers={"location": "/private/x"})
+
+    fetcher2, requests2, _ = make_fetcher(tmp_path / "b", to_private)
+    with pytest.raises(RobotsDisallowed):
+        fetcher2.post_json("https://example.com/old", {"n": 1}, "listing")
+    assert len(page_requests(requests2)) == 1

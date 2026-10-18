@@ -1,4 +1,4 @@
-# Plan: Centadata per-flat sale history (2026-10-18)
+﻿# Plan: Centadata per-flat sale history (2026-10-18)
 
 **Goal.** Load every recorded sale per flat from Centadata, back to 1995, with dates, so that
 the growth study uses real dated pairs instead of estimated ones before 2018.
@@ -30,7 +30,7 @@ the growth study uses real dated pairs instead of estimated ones before 2018.
 
 ## Phase 1 – Centadata history (sonnet)
 
-- [ ] **Task 1: POST support in the fetcher**
+- [x] **Task 1: POST support in the fetcher**
   - Files: `src/hkestate/fetch.py`, `tests/test_fetch.py`
   - Done when: tests show that a JSON POST is checked against robots.txt, paced like a GET,
     retried on 429/5xx, cached under a key made of the URL plus the body, and sent with our

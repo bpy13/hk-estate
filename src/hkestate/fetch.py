@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import gzip
 import hashlib
+import json
 import logging
 import random
 import re
@@ -145,18 +146,39 @@ class Fetcher:
         return _decode(self.get_bytes(url, page_type))
 
     def get_bytes(self, url: str, page_type: str) -> bytes:
+        return self._fetch(url, page_type, None)
+
+    def post_json(self, url: str, body: dict, page_type: str) -> str:
+        """POST a JSON body and return the response text.
+
+        Treated exactly like a GET: robots.txt is checked for the URL, the host's delay and
+        retries apply, and the response is cached under a key made of the URL plus the body
+        (so the same question is never asked twice).
+        """
+        return _decode(self.post_json_bytes(url, body, page_type))
+
+    def post_json_bytes(self, url: str, body: dict, page_type: str) -> bytes:
+        return self._fetch(url, page_type, body)
+
+    @staticmethod
+    def post_key(url: str, body: dict) -> str:
+        """Cache key of a JSON POST: the URL plus the body in a fixed form."""
+        return url + "\n" + json.dumps(body, sort_keys=True, separators=(",", ":"))
+
+    def _fetch(self, url: str, page_type: str, body: dict | None) -> bytes:
         if page_type not in PAGE_LIFETIME_DAYS:
             raise ValueError(f"unknown page type {page_type!r}; use {sorted(PAGE_LIFETIME_DAYS)}")
         host = urlsplit(url).hostname or ""
-        cached = self._read_cache(host, url, PAGE_LIFETIME_DAYS[page_type])
+        key = url if body is None else self.post_key(url, body)
+        cached = self._read_cache(host, key, PAGE_LIFETIME_DAYS[page_type])
         if cached is not None:
             return cached
         if host in self._blocked:
             raise SourceBlocked(f"{host} blocked earlier in this run")
         if not self.allowed(url):
             raise RobotsDisallowed(url)
-        response = self._request(url, host)
-        self._write_cache(host, url, response.content)
+        response = self._request(url, host, body)
+        self._write_cache(host, key, response.content)
         return response.content
 
     def allowed(self, url: str) -> bool:
@@ -265,8 +287,8 @@ class Fetcher:
                 self._sleep(wait)
         self._last_request[host] = self._clock()
 
-    def _request(self, url: str, host: str) -> httpx.Response:
-        """GET a URL, following redirects by hand (at most MAX_REDIRECTS).
+    def _request(self, url: str, host: str, body: dict | None = None) -> httpx.Response:
+        """GET a URL (or POST a JSON body), following redirects by hand (at most MAX_REDIRECTS).
 
         Every hop gets the same treatment as a first request: the target's robots.txt is
         checked (a disallowed target is never requested: `RobotsDisallowed`) and its host's
@@ -277,7 +299,7 @@ class Fetcher:
             current_host = urlsplit(current).hostname or ""
             if current_host in self._blocked:
                 raise SourceBlocked(f"{current_host} blocked earlier in this run")
-            response = self._request_once(current, current_host)
+            response = self._request_once(current, current_host, body)
             location = response.headers.get("location")
             if response.status_code not in REDIRECTS or not location:
                 return response
@@ -292,10 +314,13 @@ class Fetcher:
             current = target
         raise FetchError(url, None, f"more than {MAX_REDIRECTS} redirects from {url}")
 
-    def _request_once(self, url: str, host: str) -> httpx.Response:
+    def _request_once(self, url: str, host: str, body: dict | None = None) -> httpx.Response:
         for attempt in range(MAX_RETRIES + 1):
             self._wait_for_host(host)
-            response = self._client.get(url)
+            if body is None:
+                response = self._client.get(url)
+            else:
+                response = self._client.post(url, json=body)
             self.requests_made += 1
             status = response.status_code
             if status == 403:
