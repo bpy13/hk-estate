@@ -1,4 +1,4 @@
-"""`hkestate` command line.
+﻿"""`hkestate` command line.
 
     hkestate backfill --estates taikoo-shing,goldwin-heights   (or --estates pilot)
     hkestate listings [--sources centanet,hse28,spacious]      listing snapshots
@@ -10,6 +10,7 @@
     hkestate train [--from-snapshot]           fair-price model + data/reports/model_eval.md
     hkestate rank                              ranked listings CSV in data/reports/
     hkestate report [--from-snapshot]          growth study, findings_<date>.md
+    hkestate check-blocked                      monthly: do blocked sites still refuse us?
     hkestate status
 
 Every run is logged to data/logs/<command>_<time>.log and to `run_log` in the database.
@@ -317,6 +318,16 @@ def _logged(args, command: str, work) -> int:
     return 0
 
 
+def cmd_check_blocked(args) -> int:
+    """Monthly: request robots.txt of each blocked site once and log what it answers."""
+    from hkestate import blocked_check
+    from hkestate.fetch import Fetcher
+
+    log = _logger("check-blocked")
+    with Fetcher() as f:
+        blocked_check.run_check(f, args.db, log)
+    return 0
+
 def cmd_train(args) -> int:
     """Fair-price model: snapshot the database, evaluate out of time, fit, write the report."""
     from hkestate import features, model
@@ -486,6 +497,8 @@ def main(argv: list[str] | None = None) -> int:
     u.add_argument("--estates", default="pilot", help="comma-separated names, or 'pilot'")
     u.set_defaults(func=cmd_update)
 
+    cb = sub.add_parser("check-blocked", help="monthly: is any blocked site's robots.txt open now?")
+    cb.set_defaults(func=cmd_check_blocked)
     pr = sub.add_parser("prune-cache", help="delete cached listing pages older than N days")
     pr.add_argument("--days", type=int, default=7)
     pr.set_defaults(func=cmd_prune)

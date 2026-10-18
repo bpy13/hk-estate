@@ -1,4 +1,4 @@
-# Operations
+﻿# Operations
 
 How the scheduled jobs run on the laptop, where to look when something goes wrong, and how
 to run things by hand. Commands assume the repo folder and the `hk-estate` conda env.
@@ -14,6 +14,7 @@ Registered for the current user by `scripts\register_task.ps1` (rerun it to upda
 | `weekly ricacorp` | Sundays 10:00 | `scripts\daily.ps1 -Command ricacorp` → `hkestate ricacorp` (a pass is about 7 hours; the task may run 14) |
 | `daily rank` | every day 14:00 | `scripts\daily.ps1 -Command rank` → `hkestate rank` (after the 08:00 listings, ~4.5 h; about 1 minute) |
 | `weekly train` | Sundays 12:00 | `scripts\daily.ps1 -Command train` → `hkestate train` (after the deal update; about 1 minute) |
+| `monthly blocked-check` | 1st of each month 09:00 | `scripts\daily.ps1 -Command check-blocked` → `hkestate check-blocked` (see below; a few seconds) |
 
 The wrapper runs `<env>\python.exe -m hkestate <command>`, not `hkestate.exe`: Windows
 Application Control (Device Guard) blocked the generated `hkestate.exe` launcher on
@@ -86,6 +87,23 @@ to 60 s, each wait logged as "database busy" in the task log). Only the 'file in
 is retried; any other error stops the job. `train`, `rank` and `report` read their data
 into memory in one session (a few minutes), close the file, then fit or score without it.
 
+## Monthly blocked-site check (`hkestate check-blocked`)
+
+Midland, Squarefoot, house730 and HKP (www.hkp.com.hk) answer 403 even for robots.txt, so
+we don't use them (docs/sources.md). Once a month the task requests each one's robots.txt a
+single time, with our normal User-Agent and the normal polite fetcher; nothing is done to get
+round a block. Per site it logs the status to `data\logs\check-blocked_<time>.log` and writes
+one `run_log` row (command `check-blocked`, `args` = the site, `message` = host and status).
+A site that now answers 200 gets the log line "now reachable, review docs/sources.md": read
+that site's robots.txt by hand and update docs/sources.md before using it. Anything else (403,
+5xx, network error) means nothing changed. Register just this task with
+`scripts\register_task.ps1 -Only 'monthly blocked-check'`.
+
+## Redirects
+
+The fetcher follows redirects itself, at most 5 hops. Every hop's host gets its robots.txt
+check and delay like a first request; a redirect into a disallowed path is not requested
+(`RobotsDisallowed`, logged as a warning). The cache is keyed by the original URL.
 ## Logs and checks
 
 - Task output: `data\logs\task_<command>_<time>.log` (written by `scripts\daily.ps1`).

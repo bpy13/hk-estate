@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   Registers the scheduled jobs for the current user (no password is stored).
 
@@ -12,11 +12,14 @@
   \hk-estate\weekly train     every Sunday at 12:00       scripts\daily.ps1 -Command train
                               (after the 07:00 deal update; before that day's rank)
 
+  \hk-estate\monthly blocked-check  the 1st of each month at 09:00  scripts\daily.ps1 -Command check-blocked
+                              (robots.txt of Midland, Squarefoot, house730, HKP; a few requests)
+
   All start as soon as possible after a missed start (laptop off or asleep), never run twice
   at once, and run only while the user is logged on. Rerunning this script replaces them.
   Remove with:  Unregister-ScheduledTask -TaskPath '\hk-estate\' -TaskName '<name>'
 #>
-param([string]$EnvName = 'hk-estate')
+param([string]$EnvName = 'hk-estate', [string]$Only = '')  # -Only 'task name' registers just that one
 
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
@@ -33,6 +36,7 @@ $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" 
 
 function Register-Job([string]$Name, [string]$Command, $Trigger, [string]$Description,
                       $JobSettings = $settings) {
+    if ($Only -and $Only -ne $Name) { return }
     $arguments = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$script`" " +
                  "-Python `"$python`" -Command $Command"
     $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $arguments `
@@ -61,6 +65,19 @@ Register-Job 'weekly train' 'train' `
     (New-ScheduledTaskTrigger -Weekly -DaysOfWeek Sunday -At '12:00') `
     'HK Estate: retrain the fair-price model on the newest data (model_eval.md).'
 
+# New-ScheduledTaskTrigger has no -Monthly in Windows PowerShell 5.1: register with a daily
+# trigger, then swap its <ScheduleByDay> for a "day 1 of every month" <ScheduleByMonth>.
+Register-Job 'monthly blocked-check' 'check-blocked' (New-ScheduledTaskTrigger -Daily -At '09:00') `
+    'HK Estate: request robots.txt of the blocked sites (Midland, Squarefoot, house730, HKP) once; log any that now answer 200.'
+if (-not $Only -or $Only -eq 'monthly blocked-check') {
+    $xml = Export-ScheduledTask -TaskPath '\hk-estate\' -TaskName 'monthly blocked-check'
+    $months = 'January February March April May June July August September October November December'.Split(' ') |
+        ForEach-Object { "<$_ />" }
+    $monthly = '<ScheduleByMonth><DaysOfMonth><Day>1</Day></DaysOfMonth><Months>' +
+        ($months -join '') + '</Months></ScheduleByMonth>'
+    $xml = $xml -replace '(?s)<ScheduleByDay>.*?</ScheduleByDay>', $monthly
+    Register-ScheduledTask -TaskPath '\hk-estate\' -TaskName 'monthly blocked-check' -Xml $xml -Force | Out-Null
+}
 Get-ScheduledTask -TaskPath '\hk-estate\' |
     Select-Object TaskPath, TaskName, State,
         @{n = 'Trigger'; e = { ($_.Triggers | ForEach-Object { $_.StartBoundary }) -join ', ' } },
