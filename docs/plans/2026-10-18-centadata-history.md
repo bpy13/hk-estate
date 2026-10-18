@@ -41,7 +41,7 @@ the growth study uses real dated pairs instead of estimated ones before 2018.
     testing 20, 50 and 100 with one request each. Record the result in `docs/sources.md`.
   - Done when: `docs/sources.md` has a "Centadata history" section with the call, the paging
     fields, the page size used, the robots.txt line, and the estimated run length.
-- [ ] **Task 3: `hkestate cd-history` loader**
+- [x] **Task 3: `hkestate cd-history` loader**
   - Files: `src/hkestate/sources/centadata_history.py`, `src/hkestate/cli.py`, `tests/`
   - Flat codes: take `cuntcode` from stored Centadata deals (`txn_raw.raw_json`), grouped
     by building. Estates go in order of flat count, largest first.

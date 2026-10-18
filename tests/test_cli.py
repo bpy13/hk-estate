@@ -1,4 +1,4 @@
-"""The `hkestate` command line on a small database."""
+﻿"""The `hkestate` command line on a small database."""
 
 from datetime import date, datetime
 from types import SimpleNamespace
@@ -52,3 +52,17 @@ def test_backfill_territory_without_any_estate_asks_for_a_list(tmp_path, monkeyp
                            max_hours=None)
     assert cli.cmd_backfill_territory(args) == 1
     assert "no 28Hse estates known" in capsys.readouterr().out
+
+
+def test_cd_history_is_a_command_and_refuses_a_second_copy(tmp_path, monkeypatch, capsys):
+    import os
+
+    from hkestate import locks
+
+    monkeypatch.setenv("HKESTATE_DATA_DIR", str(tmp_path))
+    path = locks.lock_path("cd-history")
+    path.parent.mkdir(parents=True)
+    # this test process is "the other job", seen from a child's point of view
+    monkeypatch.setattr(locks, "held_by", lambda name: os.getpid())
+    assert cli.main(["--db", str(tmp_path / "x.duckdb"), "cd-history", "--limit", "1"]) == 1
+    assert "not started" in capsys.readouterr().out

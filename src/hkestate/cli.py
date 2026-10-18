@@ -280,6 +280,24 @@ def cmd_backfill_territory(args) -> int:
         return 1
     return 0
 
+def cmd_cd_history(args) -> int:
+    """Centadata full per-flat sale history, largest estates first (resumable)."""
+    from hkestate.fetch import Fetcher
+    from hkestate.sources import centadata_history as ch
+
+    log = _logger("cd-history")
+    estates = None if args.estates == "all" else args.estates.split(",")
+    try:
+        with locks.hold("cd-history"):
+            with Fetcher(min_interval=ch.MIN_INTERVAL_S) as f:
+                ch.run_history(f, db_path=args.db, log=log, estates=estates, limit=args.limit,
+                               max_hours=args.max_hours)
+    except locks.LockBusy as e:
+        log(f"not started: {e}")
+        return 1
+    return 0
+
+
 def cmd_ricacorp(args) -> int:
     """Ricacorp estate pages: previous-deal pairs (Task 3.6); resumable within the week."""
     from hkestate.fetch import Fetcher
@@ -464,6 +482,13 @@ def main(argv: list[str] | None = None) -> int:
     rp.add_argument("--place-only", action="store_true",
                     help="no requests: place stored deals in buildings and write pairs")
     rp.set_defaults(func=cmd_ricacorp)
+    ch = sub.add_parser("cd-history",
+                        help="Centadata full per-flat sale history, largest estates first")
+    ch.add_argument("--estates", default="all",
+                    help="comma-separated estate groups (e.g. taikoo-shing), pilot, or all")
+    ch.add_argument("--limit", type=int, default=None, help="only the next N buildings")
+    ch.add_argument("--max-hours", type=float, default=None, help="stop after N hours")
+    ch.set_defaults(func=cmd_cd_history)
     t = sub.add_parser("train", help="fair-price model: evaluate, fit, write model_eval.md")
     t.add_argument("--from-snapshot", action="store_true",
                    help="reuse data/model/snapshot instead of reading the database")
