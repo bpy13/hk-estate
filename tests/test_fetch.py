@@ -390,3 +390,74 @@ def test_forget_deletes_the_cached_copy(tmp_path):
     assert fetcher.forget("https://example.com/big") == 0
     fetcher.get("https://example.com/big", "transaction")  # nothing cached: fetched again
     assert len(page_requests(requests)) == 2
+
+
+# ---- redirects: followed by hand, each hop checked against robots.txt and paced -------------
+
+
+def redirect(location, status=302):
+    return httpx.Response(status, headers={"location": location})
+
+
+def test_same_host_redirect_is_followed_and_cached_under_original_url(tmp_path):
+    def handler(request):
+        if request.url.path == "/old":
+            return redirect("/new")
+        return ok(request)
+
+    fetcher, requests, clock = make_fetcher(tmp_path, handler)
+    assert fetcher.get("https://example.com/old", "static") == "<html>ok</html>"
+    assert [r.url.path for r in page_requests(requests)] == ["/old", "/new"]
+    # the second hop waited for the host's 1 s delay
+    assert clock.sleeps and clock.sleeps[-1] >= 1.0
+    # cached under the original URL: no new request
+    n = len(requests)
+    fetcher.get("https://example.com/old", "static")
+    assert len(requests) == n
+
+
+def test_redirect_to_disallowed_path_is_not_requested(tmp_path):
+    fetcher, requests, _ = make_fetcher(tmp_path, lambda r: redirect("/private/x"))
+    with pytest.raises(RobotsDisallowed):
+        fetcher.get("https://example.com/old", "static")
+    assert [r.url.path for r in page_requests(requests)] == ["/old"]
+
+
+def test_cross_host_redirect_checks_other_hosts_robots_txt(tmp_path):
+    requests = []
+
+    def dispatch(request):
+        requests.append(request)
+        host, path = request.url.host, request.url.path
+        if path == "/robots.txt":
+            body = "User-agent: *\nDisallow: /secret/\n" if host == "other.com" else ROBOTS
+            return httpx.Response(200, text=body)
+        if host == "example.com":
+            return redirect("https://other.com/secret/a" if path == "/a" else "https://other.com/b")
+        return httpx.Response(200, text="<html>other</html>")
+
+    clock = FakeClock()
+    fetcher = Fetcher(cache_dir=tmp_path / "cache", transport=httpx.MockTransport(dispatch),
+                      sleep=clock.sleep, clock=clock.time, today=lambda: date(2026, 10, 16),
+                      jitter=lambda: 0.0)
+    assert fetcher.get("https://example.com/b", "static") == "<html>other</html>"
+    assert any(r.url.host == "other.com" and r.url.path == "/robots.txt" for r in requests)
+    with pytest.raises(RobotsDisallowed):
+        fetcher.get("https://example.com/a", "static")
+    assert not any(r.url.path == "/secret/a" for r in requests)
+
+
+def test_redirect_loop_gives_up_after_five_hops(tmp_path):
+    fetcher, requests, _ = make_fetcher(tmp_path, lambda r: redirect("/loop"))
+    with pytest.raises(FetchError, match="redirect"):
+        fetcher.get("https://example.com/loop", "static")
+    assert len(page_requests(requests)) == 6  # the original plus 5 hops
+
+
+def test_five_hops_is_allowed(tmp_path):
+    def handler(request):
+        n = int(request.url.path.strip("/") or 0)
+        return redirect(f"/{n + 1}") if n < 5 else ok(request)
+
+    fetcher, _, _ = make_fetcher(tmp_path, handler)
+    assert fetcher.get("https://example.com/0", "static") == "<html>ok</html>"

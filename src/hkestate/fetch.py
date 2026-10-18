@@ -1,9 +1,10 @@
-"""Polite HTTP fetcher: robots.txt, per-host rate limit, gzip page cache, back-off.
+﻿"""Polite HTTP fetcher: robots.txt, per-host rate limit, gzip page cache, back-off.
 
 Every page the project reads goes through `Fetcher.get`. It:
 - refuses any URL the site's robots.txt disallows for our user agent (`RobotsDisallowed`);
 - waits at least 1 s (or the site's robots.txt Crawl-delay, if longer) plus 0-0.5 s random
   jitter between requests to the same host;
+- follows redirects by hand (max 5), checking robots.txt and pacing for every hop;
 - returns a cached copy if one is younger than the page type's lifetime (no request made);
 - retries 429 and 5xx up to 3 times with exponential back-off (2 s, 4 s, 8 s);
 - raises `SourceBlocked` on 403 or a CAPTCHA/challenge page, and refuses that host for the
@@ -16,13 +17,14 @@ from __future__ import annotations
 
 import gzip
 import hashlib
+import logging
 import random
 import re
 import time
 from collections.abc import Callable
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import urljoin, urlsplit
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -49,6 +51,10 @@ ROBOTS_RETRIES = 2  # robots.txt: retries on 5xx or a network error before stayi
 BACKOFF_BASE_S = 2.0
 MAX_RETRY_AFTER_S = 120.0
 RETRYABLE = {429, 500, 502, 503, 504}
+REDIRECTS = {301, 302, 303, 307, 308}
+MAX_REDIRECTS = 5
+
+log = logging.getLogger(__name__)
 
 HK_TZ = ZoneInfo("Asia/Hong_Kong")
 
@@ -118,7 +124,7 @@ class Fetcher:
             transport=transport,
             timeout=timeout,
             headers={"User-Agent": USER_AGENT},
-            follow_redirects=True,
+            follow_redirects=False,  # redirects are followed by hand in _request
         )
         self._sleep = sleep
         self._clock = clock
@@ -239,7 +245,7 @@ class Fetcher:
             self._wait_for_host(host)
             self.requests_made += 1
             try:
-                response = self._client.get(origin + "/robots.txt")
+                response = self._client.get(origin + "/robots.txt", follow_redirects=True)
             except httpx.TransportError:
                 status, content = 0, b""
                 continue
@@ -260,6 +266,33 @@ class Fetcher:
         self._last_request[host] = self._clock()
 
     def _request(self, url: str, host: str) -> httpx.Response:
+        """GET a URL, following redirects by hand (at most MAX_REDIRECTS).
+
+        Every hop gets the same treatment as a first request: the target's robots.txt is
+        checked (a disallowed target is never requested: `RobotsDisallowed`) and its host's
+        delay applies. The caller keeps caching under the original URL.
+        """
+        current = url
+        for hop in range(MAX_REDIRECTS + 1):
+            current_host = urlsplit(current).hostname or ""
+            if current_host in self._blocked:
+                raise SourceBlocked(f"{current_host} blocked earlier in this run")
+            response = self._request_once(current, current_host)
+            location = response.headers.get("location")
+            if response.status_code not in REDIRECTS or not location:
+                return response
+            if hop == MAX_REDIRECTS:
+                break
+            target = urljoin(current, location)
+            if urlsplit(target).scheme not in ("http", "https"):
+                raise FetchError(url, response.status_code, f"redirect to {target!r} from {url}")
+            if not self.allowed(target):
+                log.warning("redirect %s -> %s refused: robots.txt disallows it", current, target)
+                raise RobotsDisallowed(target)
+            current = target
+        raise FetchError(url, None, f"more than {MAX_REDIRECTS} redirects from {url}")
+
+    def _request_once(self, url: str, host: str) -> httpx.Response:
         for attempt in range(MAX_RETRIES + 1):
             self._wait_for_host(host)
             response = self._client.get(url)
@@ -275,7 +308,7 @@ class Fetcher:
                 continue
             if status >= 400:
                 raise FetchError(url, status)
-            if looks_like_challenge(_decode(response.content)):
+            if status not in REDIRECTS and looks_like_challenge(_decode(response.content)):
                 self._blocked.add(host)
                 raise SourceBlocked(f"challenge/CAPTCHA page from {url}")
             return response
