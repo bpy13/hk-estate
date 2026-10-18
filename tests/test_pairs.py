@@ -187,3 +187,35 @@ def test_ricacorp_pair_repeating_a_real_pair_end_is_dropped():
     assert len(real) == 1
     p = pairs.ricacorp_pairs(dp, d, real=real)
     assert list(p["unit_id"]) == ["b|2|A"]
+
+
+def test_two_sale_centadata_history_makes_one_real_pair():
+    # a flat's whole Centadata history (1996 and 2011 sales), as the history loader stores it
+    d = frame(deal("b|27|H", "1996-09-20", 3_390_000, source="centadata"),
+              deal("b|27|H", "2011-03-04", 5_860_000, source="centadata", gain_pct=73.0))
+    p = pairs.real_pairs(d)
+    assert len(p) == 1
+    row = p.iloc[0]
+    assert row["pair_type"] == "real"
+    assert row["start_date"] == pd.Timestamp("1996-09-20")
+    assert row["end_date"] == pd.Timestamp("2011-03-04")
+    assert (row["start_source"], row["end_source"]) == ("centadata", "centadata")
+    assert row["years"] == pytest.approx(14.5, abs=0.05)
+
+
+def test_a_gain_pair_whose_start_date_is_now_known_is_not_a_gain_pair_any_more():
+    d = frame(
+        # held 14 years: a real pair; its "% change" no longer stands alone
+        deal("b|1|A", "1996-09-20", 3_390_000, source="centadata"),
+        deal("b|1|A", "2011-03-04", 5_860_000, source="centadata", gain_pct=73.0),
+        # held 2 years: too short for a real pair, but dated, so not an undated gain either
+        deal("b|2|A", "2019-01-10", 8_000_000, source="centadata"),
+        deal("b|2|A", "2021-01-10", 9_000_000, source="centadata", gain_pct=12.5),
+        # no earlier sale stored: still a gain pair
+        deal("b|3|A", "2020-01-10", 7_000_000, source="centadata", gain_pct=40.0),
+    )
+    real = pairs.real_pairs(d)
+    assert list(real["unit_id"]) == ["b|1|A"]
+    assert sorted(pairs.gain_pairs(d, exclude=real)["unit_id"]) == ["b|2|A", "b|3|A"]  # before
+    g = pairs.undated_gain_pairs(d, real)
+    assert list(g["unit_id"]) == ["b|3|A"]

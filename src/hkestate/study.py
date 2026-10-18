@@ -184,7 +184,7 @@ def run(raw: dict, m: model.FairPrice | None = None, test_predictions: pd.DataFr
     recorded = pd.concat([x for x in (real, rica) if not x.empty] or [real], ignore_index=True)
     gain_all = pairs.gain_pairs(deals)
     chk = pairs.gain_check(gain_all, real)
-    gain = pairs.gain_pairs(deals, exclude=recorded)
+    gain = pairs.undated_gain_pairs(deals, recorded)
 
     estimated = pd.DataFrame()
     if m is not None:

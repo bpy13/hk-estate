@@ -59,7 +59,7 @@ the growth study uses real dated pairs instead of estimated ones before 2018.
   - Done when: tests pass on trimmed fixtures, and
     `hkestate cd-history --estates taikoo-shing --limit 20` stores the 1996 sale of
     洞庭閣 27H. Check with a read-only query.
-- [ ] **Task 4: dated Centadata pairs in the growth study**
+- [x] **Task 4: dated Centadata pairs in the growth study**
   - Files: `src/hkestate/pairs.py`, tests
   - Consecutive dated sales of the same unit become `real` pairs, whatever the source.
     Duplicates of 28Hse deals are already removed by `txn_all`.

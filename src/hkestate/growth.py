@@ -63,8 +63,9 @@ def attribute_frame(p: pd.DataFrame) -> pd.DataFrame:
     d["mtr_near"] = (mtr < NEAR_MTR).astype(int)
     d["mtr_far"] = (mtr > FAR_MTR).astype(int)
     d["mtr_unknown"] = mtr.isna().astype(int)
+    # estate_units can be a nullable integer: an unknown size compares as NA, count it as "not big"
     d["big_estate"] = (pd.to_numeric(d.get("estate_units"), errors="coerce") >= BIG_ESTATE
-                       ).astype(int)
+                       ).fillna(False).astype(int)
     d["special_unit"] = d.get("special_unit", False).fillna(False).astype(bool).astype(int)
     facing = d.get("facing", pd.Series("unknown", index=d.index)).fillna("unknown")
     d["facing_known"] = (facing != "unknown").astype(int)

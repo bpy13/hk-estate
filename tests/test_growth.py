@@ -43,6 +43,14 @@ def test_attribute_frame_builds_dummies():
     assert d["size_small"].sum() == (p["area_sqft"] < 430).sum()
 
 
+def test_unknown_estate_size_counts_as_not_big():
+    # a nullable-integer estate_units with a missing value used to crash the report
+    p = synthetic_pairs(50)
+    p["estate_units"] = pd.array([5000, None] * 25, dtype="Int64")
+    d = growth.attribute_frame(p)
+    assert list(d["big_estate"][:2]) == [1, 0]
+
+
 def test_cluster_ols_matches_least_squares_coefficients():
     rng = np.random.default_rng(0)
     X = pd.DataFrame({"const": 1.0, "x": rng.normal(size=500)})
