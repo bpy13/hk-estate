@@ -294,3 +294,46 @@ Timings assume 1.4 s per page.
   the previous price for every flat with a latest deal (date unknown). Worth checking whether
   the parser keeps it.
 - The Wayback Machine holds page shells only; the deals were never in the archived HTML.
+
+## Centadata history (2026-10-18)
+
+Per-flat sale history from Centadata's own block pages' call. Plan:
+`docs/plans/2026-10-18-centadata-history.md`.
+
+- **Call:** `POST https://hk.centanet.com/findproperty/api/Transaction/Search`, JSON body
+  `{"cuntcodes": [<flat code>, ...], "size": 100, "offset": 0}`. No login. Our normal
+  User-Agent. Sent through the Fetcher (`post_json`), so robots.txt is checked, pacing and
+  retries apply, and each answer is cached under the URL plus the body.
+- **robots.txt:** for `User-agent: *` the file disallows `/icms`, `/home`,
+  `/oldfindproperty`, `/oldfindpropertyRedirect`, `/estate/hkChartAPi/PropertyPrice/GetAvgPrice`,
+  `/*Test`, `/twinview`, `/xianggang` and **`/centanetapi/api/`**, with `crawl-delay: 1`.
+  `/findproperty/api/` is not listed, so this call is allowed (`Fetcher.allowed` returned
+  True). It is a different path from the forbidden `/centanetapi/api/`.
+- **Paging fields:** found in the site's script (`fb20c4e.js`): the search state starts as
+  `{postType, day, sort: "InsOrRegDate", order: "Descending", size: 24}` and the pager sets
+  `offset = (page - 1) * size`; the script caps `offset + size` at 10,000. The answer is
+  `{"count": <all sales for these flats>, "data": [<up to size rows>]}`. Rows are newest first.
+  `day` is not needed: a call without it returned 1996 sales.
+- **Page size (one request each, 2026-10-18, 113 flats of one block, count 231):**
+
+  | size | offset | rows returned |
+  |---|---|---|
+  | 20 | 0 | 20 |
+  | 50 | 0 | 50 |
+  | 100 | 0 | 100 (about 200 kB) |
+  | 100 | 100 | 100 (offset works) |
+  | 500 | 0 | HTTP 500 (server refuses; not retried beyond the fetcher's 3 retries) |
+
+  **Page size used: 100.** The largest tested value the server honours. 200 and 300 were not
+  tried, to keep the number of probe requests down.
+- **Batch:** 40 flat codes per call (flats have 2 sales on average, so 40 codes is about 80
+  rows and mostly one page). 113 codes in one call also worked.
+- **Fields kept:** `id`, `insDate`, `regDate`, `transactionPrice`, `gainPercent`, `nArea`,
+  `gArea`, `nUnitPrice`, `gUnitPrice`, `prevInsDate`, `prevRegDate`, `prevTransactionPrice`,
+  `heldDay`, `cuntcode`, `yAxis`, `xAxis`, `buildingName`, `estateName`, `bigEstateName`,
+  `firstOrSecondHand`, `dataSource`. Everything else (pictures, floor plan links, map text)
+  is dropped. No agent or owner fields are in the answer.
+- **Run length:** 790,298 flat codes are stored today (the master pass is still adding). At
+  40 codes a call and about 1.15 calls per batch that is about 22,700 calls, at 4 s plus
+  jitter and response time (about 4.6 s) roughly **29 hours** (a day and a bit) for the whole
+  territory, longer as the master list grows. It is resumable, per building.

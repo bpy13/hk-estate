@@ -35,7 +35,7 @@ the growth study uses real dated pairs instead of estimated ones before 2018.
   - Done when: tests show that a JSON POST is checked against robots.txt, paced like a GET,
     retried on 429/5xx, cached under a key made of the URL plus the body, and sent with our
     User-Agent. pytest is green.
-- [ ] **Task 2: paging and batch size**
+- [x] **Task 2: paging and batch size**
   - Find the paging fields in the site's own script (`/findproperty/_nuxt/64295af.js` and
     `fb20c4e.js` are already in the cache). Pick the largest page size the server honours,
     testing 20, 50 and 100 with one request each. Record the result in `docs/sources.md`.
