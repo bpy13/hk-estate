@@ -485,3 +485,13 @@ def test_connect_waits_for_a_real_second_process(tmp_path, monkeypatch):
         con.close()
     finally:
         child.wait(timeout=30)
+
+
+def test_python_dash_m_hkestate_runs_the_cli(tmp_path):
+    """The scheduled tasks start `python.exe -m hkestate <command>` (not hkestate.exe)."""
+    import subprocess
+    import sys
+
+    out = subprocess.run([sys.executable, "-m", "hkestate", "--db", str(tmp_path / "t.duckdb"),
+                          "status"], capture_output=True, text=True, timeout=120)
+    assert out.returncode == 0, out.stderr

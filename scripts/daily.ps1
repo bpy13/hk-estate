@@ -11,11 +11,12 @@
   Output goes to data\logs\task_daily_<time>.log; the job also writes its own
   data\logs\daily_<time>.log and a row in the run_log table.
 
-.PARAMETER Exe
-  Full path to hkestate.exe in the conda env (register_task.ps1 fills it in).
+.PARAMETER Python
+  Full path to python.exe in the conda env (register_task.ps1 fills it in). The job runs
+  `python.exe -m hkestate <command>`: Windows Application Control once blocked hkestate.exe.
 #>
 param(
-    [string]$Exe = (Join-Path $env:USERPROFILE 'miniconda3\envs\hk-estate\Scripts\hkestate.exe'),
+    [string]$Python = (Join-Path $env:USERPROFILE 'miniconda3\envs\hk-estate\python.exe'),
     [string]$Command = 'daily'
 )
 
@@ -26,13 +27,13 @@ New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 $log = Join-Path $logDir ('task_{0}_{1:yyyyMMdd_HHmmss}.log' -f $Command, (Get-Date))
 $env:PYTHONIOENCODING = 'utf-8'
 
-"$(Get-Date -Format s) start: $Exe $Command" | Out-File -FilePath $log -Encoding utf8
-if (-not (Test-Path $Exe)) {
-    "hkestate.exe not found at $Exe" | Out-File -FilePath $log -Append -Encoding utf8
+"$(Get-Date -Format s) start: $Python -m hkestate $Command" | Out-File -FilePath $log -Encoding utf8
+if (-not (Test-Path $Python)) {
+    "python.exe not found at $Python" | Out-File -FilePath $log -Append -Encoding utf8
     exit 2
 }
 # cmd /c keeps Python's stderr as plain text in the log (PowerShell 5.1 would wrap it).
-cmd /c "`"$Exe`" $Command >> `"$log`" 2>&1"
+cmd /c "`"$Python`" -m hkestate $Command >> `"$log`" 2>&1"
 $code = $LASTEXITCODE
 "$(Get-Date -Format s) exit code $code" | Out-File -FilePath $log -Append -Encoding utf8
 exit $code

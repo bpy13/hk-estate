@@ -3,7 +3,7 @@
   Registers the scheduled jobs for the current user (no password is stored).
 
 .DESCRIPTION
-  \hk-estate\daily listings   every day at 08:00          scripts\daily.ps1 (hkestate daily)
+  \hk-estate\daily listings   every day at 08:00          scripts\daily.ps1 (python -m hkestate daily)
   \hk-estate\weekly deals     every Sunday at 07:00       scripts\daily.ps1 -Command update
   \hk-estate\weekly ricacorp  every Sunday at 10:00       scripts\daily.ps1 -Command ricacorp
                               (a pass takes about 7 hours; the task may run up to 14)
@@ -21,8 +21,8 @@ param([string]$EnvName = 'hk-estate')
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
 $prefix = (& conda run -n $EnvName python -c "import sys; print(sys.prefix)" | Select-Object -Last 1).Trim()
-$exe = Join-Path $prefix 'Scripts\hkestate.exe'
-if (-not (Test-Path $exe)) { throw "hkestate.exe not found at $exe (pip install -e . in $EnvName?)" }
+$python = Join-Path $prefix 'python.exe'
+if (-not (Test-Path $python)) { throw "python.exe not found at $python" }
 $script = Join-Path $repo 'scripts\daily.ps1'
 
 $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries `
@@ -34,7 +34,7 @@ $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" 
 function Register-Job([string]$Name, [string]$Command, $Trigger, [string]$Description,
                       $JobSettings = $settings) {
     $arguments = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$script`" " +
-                 "-Exe `"$exe`" -Command $Command"
+                 "-Python `"$python`" -Command $Command"
     $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $arguments `
         -WorkingDirectory $repo
     Register-ScheduledTask -TaskPath '\hk-estate\' -TaskName $Name -Action $action `

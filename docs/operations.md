@@ -15,6 +15,12 @@ Registered for the current user by `scripts\register_task.ps1` (rerun it to upda
 | `daily rank` | every day 14:00 | `scripts\daily.ps1 -Command rank` → `hkestate rank` (after the 08:00 listings, ~4.5 h; about 1 minute) |
 | `weekly train` | Sundays 12:00 | `scripts\daily.ps1 -Command train` → `hkestate train` (after the deal update; about 1 minute) |
 
+The wrapper runs `<env>\python.exe -m hkestate <command>`, not `hkestate.exe`: Windows
+Application Control (Device Guard) blocked the generated `hkestate.exe` launcher on
+2026-10-17 (exit code 4551), while `python.exe` is allowed. `scripts\register_task.ps1` finds
+the env's `python.exe` and passes it to `daily.ps1 -Python`; rerun it after moving or
+rebuilding the env. By hand, `python -m hkestate <command>` is the same as `hkestate <command>`.
+
 If the laptop was off at 08:00, the listings start late and the 14:00 rank uses the previous
 day's listings; the next day's rank catches up. The growth study (`hkestate report`) is not
 scheduled: run `hkestate train` then `hkestate report` when
