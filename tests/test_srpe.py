@@ -198,3 +198,67 @@ def test_client_checks_robots_before_login_and_every_request():
     assert asked[0] == srpe.DISCLAIMER_URL
     assert "DistrictAreaSearch" in asked[1] and "/download/" in asked[2]
     c.close()
+
+
+def test_price_cell_with_a_long_note_uses_only_the_first_amount():
+    row = ["01/02/2016", "", "", "L1", "5", "C", "", "$3,723,048.00 (see note 2: 2442 2024 1181)",
+           "", "", ""]
+    (deal,) = srpe.parse_register_rows([row])
+    assert deal.price_hkd == 3_723_048
+
+
+def test_absurd_price_is_a_skipped_row_not_a_crash():
+    # the 8805 case: digits of a note were joined into a 32-digit number
+    junk = ["01/02/2016", "", "", "L1", "5", "C", "", "24420241181016001436271182348288",
+            "", "", ""]
+    cheap = ["01/02/2016", "", "", "L1", "6", "C", "", "$50.00", "", "", ""]
+    skipped = []
+    assert srpe.parse_register_rows([junk, cheap, ROWS[2]], skipped)[0].price_hkd == 3_723_048
+    assert len(skipped) == 2
+
+
+def test_one_bad_register_does_not_end_the_run(tmp_path, monkeypatch):
+    import pdfplumber
+
+    monkeypatch.setenv("HKESTATE_DATA_DIR", str(tmp_path))
+    dbp = tmp_path / "t.duckdb"
+    with db.session(dbp) as con:
+        db.init_db(con)
+
+    class Pdf:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    monkeypatch.setattr(pdfplumber, "open", lambda p: Pdf())
+
+    def fake_deals(pdf, skipped=None):
+        if fake_deals.calls == 0:
+            fake_deals.calls += 1
+            raise RuntimeError("boom")
+        return srpe.parse_register_rows(ROWS)
+
+    fake_deals.calls = 0
+    monkeypatch.setattr(srpe, "register_deals", fake_deals)
+
+    class Client:
+        requests = 0
+
+        def login(self):
+            pass
+
+        def download(self, path):
+            return b"%PDF"
+
+        def post(self, endpoint, payload):
+            if endpoint.startswith("DistrictAreaSearch"):
+                return LIST_JSON
+            dev = payload["devId"]
+            return {"resultData": {**DETAIL_JSON["resultData"], "devId": dev}}
+
+    logs = []
+    stats = srpe.run_srpe(Client(), dbp, logs.append)
+    assert stats["failed_registers"] == 1 and stats["registers"] == 1
+    assert any("boom" in m for m in logs)

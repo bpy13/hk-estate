@@ -186,13 +186,21 @@ def _parse_row(row) -> RegisterDeal | None:
     else:
         block, floor, flat = _cell(row, 3), _cell(row, 4), _cell(row, 5)
         has_parking, price, related = bool(_cell(row, 6)), 7, 10
-    digits = re.sub(r"[^\d.]", "", _cell(row, price))
-    if not floor or not flat or not digits:
+    # Only the first amount: a cell sometimes carries a long note whose digits must not be joined.
+    amount = re.search(r"\d[\d,]*(?:\.\d+)?", _cell(row, price))
+    if not floor or not flat or not amount:
         return None
+    value = int(round(float(amount.group().replace(",", ""))))
+    if not MIN_PRICE_HKD <= value <= MAX_PRICE_HKD:
+        raise ValueError(f"price {value} is not a sensible sale price")
     return RegisterDeal(
-        pasp, asp, block, floor, flat.upper(), has_parking, int(round(float(digits))),
+        pasp, asp, block, floor, flat.upper(), has_parking, value,
         _cell(row, related).lower().startswith(("y", "是")))
 
+
+# A parsed price outside this range is a misread cell, not a sale (the row is skipped).
+MIN_PRICE_HKD = 100_000
+MAX_PRICE_HKD = 10_000_000_000
 
 # The house-sale register has 9 columns instead of the usual 11.
 _HOUSE_COLUMNS = 9
@@ -389,7 +397,7 @@ def run_srpe(client: SrpeClient, db_path=None, log=print, limit: int | None = No
         ensure_tables(con)
         run_id = db.start_run(con, COMMAND, f"limit={limit}" if limit else "")
     stats = {"developments": 0, "registers": 0, "deals": 0, "unmatched": 0,
-             "skipped_rows": 0}
+             "skipped_rows": 0, "failed_registers": 0}
     status, message = "ok", ""
     pdf_dir = get_data_dir() / "cache" / HOST / "pdf"
     pdf_dir.mkdir(parents=True, exist_ok=True)
@@ -414,26 +422,32 @@ def run_srpe(client: SrpeClient, db_path=None, log=print, limit: int | None = No
                 step = f"register:{dev.dev_id}:{detail.register_id}:{'m' if bids else 'u'}"
                 done = detail.register_id is None or db.step_done(con, COMMAND, step)
             if not done:
-                pdf_path = pdf_dir / f"{dev.dev_id}_{detail.register_file}"
-                if not pdf_path.exists():
-                    try:
-                        pdf_path.write_bytes(client.download(detail.download_path))
-                    except RobotsDisallowed:
-                        log(f"skipped register: robots.txt disallows {detail.download_path}")
-                        continue
-                bad_rows: list[tuple[int, str]] = []
-                with pdfplumber.open(pdf_path) as pdf:
-                    deals = register_deals(pdf, bad_rows)
-                for page_no, text in bad_rows:
-                    log(f"skipped row: development {dev.dev_id} {dev.name} page {page_no}: "
-                        f"{text[:300]!r}")
-                stats["skipped_rows"] += len(bad_rows)
-                with db.session(db_path) as con:
-                    added = store_deals(con, dev.dev_id, dev.name, bids, deals,
-                                        f"https://{HOST}{detail.download_path.split('?')[0]}")
-                    db.mark_step(con, COMMAND, step, run_id, f"{len(deals)} sales")
-                stats["registers"] += 1
-                stats["deals"] += added
+                try:
+                    pdf_path = pdf_dir / f"{dev.dev_id}_{detail.register_file}"
+                    if not pdf_path.exists():
+                        try:
+                            pdf_path.write_bytes(client.download(detail.download_path))
+                        except RobotsDisallowed:
+                            log(f"skipped register: robots.txt disallows {detail.download_path}")
+                            continue
+                    bad_rows: list[tuple[int, str]] = []
+                    with pdfplumber.open(pdf_path) as pdf:
+                        deals = register_deals(pdf, bad_rows)
+                    for page_no, text in bad_rows:
+                        log(f"skipped row: development {dev.dev_id} {dev.name} page {page_no}: "
+                            f"{text[:300]!r}")
+                    stats["skipped_rows"] += len(bad_rows)
+                    with db.session(db_path) as con:
+                        added = store_deals(con, dev.dev_id, dev.name, bids, deals,
+                                            f"https://{HOST}{detail.download_path.split('?')[0]}")
+                        db.mark_step(con, COMMAND, step, run_id, f"{len(deals)} sales")
+                    stats["registers"] += 1
+                    stats["deals"] += added
+                except Exception as e:  # one bad register must never end the whole run
+                    stats["failed_registers"] += 1
+                    log(f"FAILED register: development {dev.dev_id} {dev.name}: "
+                        f"{type(e).__name__}: {str(e)[:300]}")
+                    continue  # not marked done, so the next run tries it again
             stats["developments"] += 1
             stats["unmatched"] += not bids
             with db.session(db_path) as con:
