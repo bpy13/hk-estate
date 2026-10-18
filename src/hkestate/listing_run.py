@@ -676,8 +676,9 @@ def match_territory(db_path, today: date, log: Log = print) -> dict:
                 updates.append([bid, how, band, src, lid])
                 methods[how] = methods.get(how, 0) + 1
                 matched += bid is not None
-            con.executemany("UPDATE listing SET building_id = ?, match_method = ?, "
-                            "floor_band = ? WHERE source = ? AND listing_id = ?", updates)
+            if updates:  # executemany rejects an empty list
+                con.executemany("UPDATE listing SET building_id = ?, match_method = ?, "
+                                "floor_band = ? WHERE source = ? AND listing_id = ?", updates)
     with db.session(db_path) as con:
         total = con.execute("SELECT count(*), count(building_id) FROM listing "
                             "WHERE group_name = ?", [TERRITORY]).fetchone()

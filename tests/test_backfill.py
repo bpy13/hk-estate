@@ -258,3 +258,16 @@ def test_street_type_word_is_ignored_in_numbered_addresses():
     buildings = {"b1": ("第五期", "蘭秀街1號"), "b3": ("第五期", "蘭秀街3號"),
                  "b9": ("第五期", "恆柏街1號")}
     assert sorted(backfill.match_buildings("5期 蘭秀道1-3號", buildings)) == ["b1", "b3"]
+
+
+def test_grid_for_estate_with_no_flats_does_not_crash(dbpath, monkeypatch):
+    """An estate whose grid lists no flats (28Hse id 34052) used to raise on executemany([])."""
+    from types import SimpleNamespace
+
+    empty = SimpleNamespace(phases=[], blocks=[], units=[], current_state=None)
+    monkeypatch.setattr(hse28, "parse_history_page", lambda html: empty)
+    loader = backfill._Loader(FakeFetcher({EST.history_url(): "x"}), dbpath, lambda *a: None, 1)
+    loader.grid(EST, "test")
+    with db.session(dbpath) as con:
+        assert con.execute("SELECT count(*) FROM unit").fetchone()[0] == 0
+        assert con.execute("SELECT count(*) FROM estate").fetchone()[0] == 1

@@ -262,16 +262,17 @@ class _Loader:
                     "name_zh = excluded.name_zh, skipped_floors = excluded.skipped_floors",
                     [bid, e, p, norm_name(name), bkey, skipped],
                 )
-            con.executemany(
-                "INSERT INTO unit (unit_id, building_id, floor_label, floor_num, floor_kind, flat,"
-                " saleable_sqft, rooms, source_unit_key, src_deal_count, src_url) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO UPDATE SET "
-                "saleable_sqft = coalesce(excluded.saleable_sqft, unit.saleable_sqft), "
-                "rooms = coalesce(excluded.rooms, unit.rooms), "
-                "source_unit_key = excluded.source_unit_key, "
-                "src_deal_count = excluded.src_deal_count, src_url = excluded.src_url",
-                units,
-            )
+            if units:  # DuckDB's executemany rejects an empty list (an estate with no flats)
+                con.executemany(
+                    "INSERT INTO unit (unit_id, building_id, floor_label, floor_num, floor_kind,"
+                    " flat, saleable_sqft, rooms, source_unit_key, src_deal_count, src_url) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO UPDATE SET "
+                    "saleable_sqft = coalesce(excluded.saleable_sqft, unit.saleable_sqft), "
+                    "rooms = coalesce(excluded.rooms, unit.rooms), "
+                    "source_unit_key = excluded.source_unit_key, "
+                    "src_deal_count = excluded.src_deal_count, src_url = excluded.src_url",
+                    units,
+                )
         self.log(
             f"  grid: {len(phase_rows)} phases, {len(buildings)} buildings, {len(units)} flats, "
             f"{sum(u[9] for u in units)} deals held by 28Hse"

@@ -173,15 +173,17 @@ def store(con: duckdb.DuckDBPyConnection, spec: RvdFile, points: list[Point], ur
     con.execute("BEGIN")
     try:
         con.execute(f"DELETE FROM {spec.table} WHERE series = ?", [spec.series])
-        con.executemany(
-            f"INSERT INTO {spec.table} (series, freq, period, class, region, value, provisional,"
-            " few_deals, source_url, fetched_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            [
-                (p.series, p.freq, p.period, p.cls, p.region, p.value, p.provisional,
-                 p.few_deals, url, now)
-                for p in points
-            ],
-        )
+        if points:  # executemany rejects an empty list
+            con.executemany(
+                f"INSERT INTO {spec.table} (series, freq, period, class, region, value,"
+                " provisional, few_deals, source_url, fetched_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                [
+                    (p.series, p.freq, p.period, p.cls, p.region, p.value, p.provisional,
+                     p.few_deals, url, now)
+                    for p in points
+                ],
+            )
         con.execute("COMMIT")
     except BaseException:
         con.execute("ROLLBACK")
