@@ -80,7 +80,7 @@ hkestate report                              (growth study, Phase 5)
 | `sources/ricacorp.py` | Ricacorp estate pages (robots-allowed, never `/api/`): parsed deals in `ricacorp_deal`, placement in buildings, `txn_raw` rows (source `ricacorp`) and `deal_pair` previous-deal links; cached pages deleted after parsing |
 | `link.py` | links 28Hse estates/buildings (`h28-`) to master ones (`cd-`) in `source_map` and `hse28_estate`; `txn_all` reads it so both sources' deals share one unit |
 | `hse28_territory.py` | territory 28Hse backfill: estate list (sitemap, CSV, listing cards), largest-first order, resumable run |
-| `locks.py` | job lock files (`hse28`, `listings`) |
+| `locks.py` | job lock files (`hse28`, `listings`, `centanet`, `cd-history`, `model`) |
 | `maintenance.py` | deletes cached listing pages 7+ days old |
 | `features.py` | Phase 4 feature table: database extract/snapshot, one row per deal and per listing, model exclusions (parking, first-hand rule, houses, price check, quarantine), 28Hse agreement dates, RVD deflator |
 | `model.py` | fair-price LightGBM: time split, index-adjusted target, conformal intervals, comparables check, TreeSHAP reasons, `model_eval.md` |

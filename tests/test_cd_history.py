@@ -62,7 +62,9 @@ class FakeFetcher:
 
 
 @pytest.fixture
-def db_path(tmp_path):
+def db_path(tmp_path, monkeypatch):
+    # lock files under tmp_path: a real listing job's lock must not pause these tests
+    monkeypatch.setenv("HKESTATE_DATA_DIR", str(tmp_path))
     path = tmp_path / "t.duckdb"
     with db.session(path) as con:
         db.init_db(con)
@@ -342,11 +344,32 @@ def test_max_hours_stops_between_batches(db_path):
     assert len(f.calls) < 4
 
 
-def test_pauses_while_the_listings_lock_is_held(db_path, monkeypatch):
+def test_pauses_while_the_centanet_lock_is_held(db_path, monkeypatch):
     held = iter([1234, 1234, None])
-    monkeypatch.setattr(locks, "held_by", lambda name: next(held, None) if name == "listings"
+    monkeypatch.setattr(locks, "held_by", lambda name: next(held, None) if name == "centanet"
                         else None)
+    waits, logs = [], []
+    f = FakeFetcher(sales())
+    ch.run_history(f, db_path=db_path, log=logs.append, wait=waits.append, estates=["alpha"])
+    assert len(waits) == 2 and f.calls  # waited twice, then ran
+    assert sum("pausing" in m for m in logs) == 1  # one line per pause, not per wait
+
+
+def test_the_rest_of_the_listing_job_does_not_pause_it(db_path, monkeypatch):
+    # `listings` is held for the whole daily job (28Hse, Spacious too): not a reason to wait
+    monkeypatch.setattr(locks, "held_by", lambda name: 1234 if name == "listings" else None)
     waits = []
     f = FakeFetcher(sales())
     ch.run_history(f, db_path=db_path, log=lambda m: None, wait=waits.append, estates=["alpha"])
-    assert len(waits) == 2 and f.calls  # waited twice, then ran
+    assert waits == [] and f.calls
+
+
+def test_a_stale_centanet_lock_does_not_pause_it(db_path, monkeypatch):
+    path = locks.lock_path("centanet")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("999999")
+    monkeypatch.setattr(locks, "pid_alive", lambda pid: False)  # the listing job crashed
+    waits = []
+    f = FakeFetcher(sales())
+    ch.run_history(f, db_path=db_path, log=lambda m: None, wait=waits.append, estates=["alpha"])
+    assert waits == [] and f.calls

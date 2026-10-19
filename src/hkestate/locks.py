@@ -2,8 +2,11 @@
 
 `hse28` is held by anything that reads 28Hse for a long time (backfill, weekly update), so
 the daily listing job leaves 28Hse alone while one runs (28Hse rate-limits hard) instead of
-doubling the request rate. `daily` stops two daily jobs overlapping. A lock whose process has
-ended is stale and is taken over.
+doubling the request rate. `listings` stops two listing jobs overlapping. `centanet` is held
+by the listing job only while it reads Centanet (1 request a second); the other
+hk.centanet.com jobs (`cd-history`, the master pass) pause while it is held, so the host
+never sees more than about 1 request a second. A lock whose process has ended is stale and
+is taken over (and does not make anyone wait).
 """
 
 from __future__ import annotations
@@ -11,6 +14,8 @@ from __future__ import annotations
 import ctypes
 import os
 import sys
+import time
+from collections.abc import Callable
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -58,6 +63,19 @@ def held_by(name: str) -> int | None:
     except (OSError, ValueError, IndexError):
         return None
     return pid if pid != os.getpid() and pid_alive(pid) else None
+
+
+def wait_while_held(name: str, *, wait: Callable[[float], None] = time.sleep,
+                    poll_s: float = 60.0, on_pause: Callable[[int], None] | None = None) -> bool:
+    """Block while another live process holds the lock (a stale lock does not count).
+    `on_pause(pid)` is called once when the wait starts. Returns True if it waited."""
+    paused = False
+    while (pid := held_by(name)) is not None:
+        if not paused and on_pause is not None:
+            on_pause(pid)
+        paused = True
+        wait(poll_s)
+    return paused
 
 
 @contextmanager

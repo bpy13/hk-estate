@@ -109,7 +109,12 @@ cache pruning.)*
 - **Territory listing quality to check after the first full pass:** the match rate by method
   (`listing.match_method` for `group_name = 'territory'`), Spacious buildings with more listings
   than one page shows (only ~10-14 listings per building are seen), and the Centanet run length
-  (about 4.5 h a day at 2 s; lower `--centanet-budget` if it clashes with the master pass).
+  (about 3 h a day at 1 s since 2026-10-19; `cd-history` and the master pass pause while it
+  reads Centanet, so a long run delays them; lower `--centanet-budget` if that matters).
+- **Jobs started before 2026-10-19 still use the old locks.** A `cd-history` started earlier
+  pauses on the `listings` lock (the whole daily job), and an older listing run reads Centanet
+  at 2 s without holding the `centanet` lock. Both stay at or under ~1 request/s on
+  hk.centanet.com; restart them (when convenient) to get the new behaviour.
 - **海璇灣 I and II (Centadata phases 13A/13B) are not in the 28Hse LOHAS Park set.** 8 blocks,
   ~900 deals. The territory backfill picks them up if 28Hse has them as a separate estate.
 - **Retrain, re-rank and rerun the findings report when the backfill finishes.** `hkestate

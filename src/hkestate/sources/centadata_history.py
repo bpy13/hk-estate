@@ -40,10 +40,12 @@ COMMAND = "cd-history"
 API_URL = "https://hk.centanet.com/findproperty/api/Transaction/Search"
 PAGE_SIZE = 100  # the largest size the server honoured (500 gave HTTP 500)
 BATCH_CODES = 40  # flats have about 2 sales each, so a batch is mostly one page
-MIN_INTERVAL_S = 4.0  # hk.centanet.com is shared with the master pass (2 s) and listings
+MIN_INTERVAL_S = 4.0  # hk.centanet.com is shared with the master pass and listings
 MAX_CONSECUTIVE_ERRORS = 5
 MAX_OFFSET = 10_000  # the site's own script never asks past this
 LOCK_WAIT_S = 60.0
+# held by the listing job while it reads Centanet at 1 request a second: pause meanwhile
+CENTANET_LOCK = "centanet"
 
 KEEP_FIELDS = (
     "id", "cuntcode", "insDate", "regDate", "transactionPrice", "gainPercent", "nArea", "gArea",
@@ -226,8 +228,9 @@ def run_history(fetcher, db_path=None, log=print, estates: list[str] | None = No
                 wait=time.sleep, clock=time.monotonic) -> dict:
     """Load full sale histories, largest estates first; resumable per building.
 
-    `limit` counts buildings (this run). Pauses while the `listings` lock is held (the daily
-    listing job reads the same site), stops on 5 errors in a row, and writes a run_log row."""
+    `limit` counts buildings (this run). Pauses while the `centanet` lock is held (the listing
+    job is reading Centanet listings on the same host; its 28Hse and Spacious parts don't
+    pause us), stops on 5 errors in a row, and writes a run_log row."""
     with db.session(db_path) as con:
         db.init_db(con)
         all_estates = load_flats(con, estates)
@@ -253,7 +256,6 @@ def run_history(fetcher, db_path=None, log=print, estates: list[str] | None = No
     flats = {f.code: f for e in all_estates for b in e.buildings for f in b.flats}
     stats = {"buildings": 0, "batches": 0, "sales": 0, "deals": 0, "errors": 0, "stopped": ""}
     start, streak, status, message = clock(), 0, "ok", ""
-    paused = False
     try:
         for est, todo in plan:
             failed: set[str] = set()
@@ -261,12 +263,11 @@ def run_history(fetcher, db_path=None, log=print, estates: list[str] | None = No
                 if max_hours is not None and clock() - start > max_hours * 3600:
                     stats["stopped"] = "max-hours"
                     break
-                while locks.held_by("listings") is not None:
-                    if not paused:
-                        log("listings job is running: pausing")
-                        paused = True
-                    wait(LOCK_WAIT_S)
-                paused = False
+                if locks.wait_while_held(
+                        CENTANET_LOCK, wait=wait, poll_s=LOCK_WAIT_S,
+                        on_pause=lambda pid: log(f"Centanet listings running (process {pid}): "
+                                                 "pausing")):
+                    log("Centanet listings finished: resuming")
                 try:
                     items = fetch_sales(fetcher, codes)
                 except (FetchError, httpx.HTTPError, ValueError) as e:

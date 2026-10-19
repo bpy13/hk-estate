@@ -43,8 +43,10 @@ For each pilot estate group (`listing_run.PILOT`):
 
 1. **Centanet**: reads the detail sitemap (every live listing), then detail pages for new
    listings plus a rotating seventh of known ones (the sitemap's dates are useless, so this
-   is how price changes are caught: every listing is re-read within 7 days). 2 s between
-   requests, because the Centadata master crawl also uses hk.centanet.com.
+   is how price changes are caught: every listing is re-read within 7 days). 1 s between
+   requests, holding the `centanet` lock so the Centadata jobs on hk.centanet.com pause
+   (see Locks). Reads are recorded every 25 pages, so a run stopped midway doesn't read those
+   pages again.
 2. **28Hse**: the estate's search pages (sale and rent), and a detail page only for a new
    listing or a changed price. 4 s between requests (28Hse rate-limits hard).
 3. **Spacious**: the neighbourhood search pages (sale), cards only.
@@ -62,9 +64,10 @@ Later runs read only new and rotating pages (minutes).
 ## Territory listings (from 2026-10-16)
 
 `hkestate daily` now runs `--estates all`: the pilot groups plus a `territory` group. Per run:
-Centanet reads the whole sitemap but at most 8,000 detail pages (`--centanet-budget`; new
-listings first, then the oldest read) at 2 s: about 4.5 h, and about 6 days for the first full
-pass. Spacious reads up to 6,000 building sale pages (`--spacious-budget`) at 1 s: about 2 h.
+Centanet reads the whole sitemap but at most 30,000 detail pages (`--centanet-budget`; new
+listings first, then the oldest read) at 1 s. Raised from 8,000 on 2026-10-19 so the rest of
+the first pass (~26,000 pages, ~10 h) fits in one run; after that a run is about 6,000 pages
+(new plus a seventh of known), ~2.5 h. Spacious reads up to 6,000 building sale pages (`--spacious-budget`) at 1 s: about 2 h.
 28Hse is pilot only. Territory listings are matched to master (`cd-`) buildings from the
 Centanet block code, else by estate then block name; the rest stay unmatched until the master
 list covers their estate. Use `--estates pilot` for the quick pilot-only run.
@@ -80,6 +83,12 @@ whose process has ended is ignored.
   the day doesn't count towards delisting 28Hse listings.
 - `listings.lock`: held by `hkestate daily` / `hkestate listings`; a second listing run
   started meanwhile records `skipped` and exits.
+- `centanet.lock`: held by the listing job only while it reads Centanet (1 request a second,
+  the host's whole allowance), not during 28Hse, Spacious or matching. While it is held,
+  `hkestate cd-history` and `hkestate master` pause (checked every 60 s, logged once per
+  pause) and carry on when it is released. A stale `centanet.lock` (its process crashed)
+  makes nobody wait.
+- `cd-history.lock`: held by `hkestate cd-history`, so two copies cannot run.
 
 The database itself is shared: every job opens it only for short reads and writes, and a job
 that finds it busy retries for up to 30 minutes (`db.connect`: 5 s between tries, doubling
@@ -108,8 +117,9 @@ conda run -n hk-estate hkestate cd-history --max-hours 8         # stop after 8 
 - Progress is kept per building (`run_progress`, command `cd-history`): a restart skips
   finished buildings, and a rerun adds nothing that is already stored. A building whose batch
   failed is tried again on the next run.
-- `--limit N` counts buildings. The job **pauses while the `listings` lock is held** (the daily
-  listing job), stops after 5 errors in a row, stops for good on a 403 or challenge page, and
+- `--limit N` counts buildings. The job **pauses while the `centanet` lock is held** (the
+  listing job reading Centanet; its 28Hse and Spacious parts don't pause it), stops after 5
+  errors in a row, stops for good on a 403 or challenge page, and
   holds the `cd-history` lock so two copies cannot run. It writes a `run_log` row
   (command `cd-history`) and `data\logs\cd-history_<time>.log`.
 - After a load, run `hkestate train` and `hkestate report` to use the dated pairs.

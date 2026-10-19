@@ -35,3 +35,17 @@ def test_stale_lock_is_taken_over():
     assert locks.held_by("hse28") is None
     with locks.hold("hse28"):
         assert path.read_text().strip() == str(os.getpid())
+
+
+def test_wait_while_held_waits_until_free_and_skips_stale_locks(monkeypatch):
+    path = locks.lock_path("centanet")
+    path.parent.mkdir(parents=True)
+    path.write_text("999999999")  # stale: no wait
+    waits, pauses = [], []
+    assert locks.wait_while_held("centanet", wait=waits.append, on_pause=pauses.append) is False
+    assert waits == [] and pauses == []
+    alive = iter([True, True, True])  # live for three checks, then the job ends
+    monkeypatch.setattr(locks, "pid_alive", lambda pid: next(alive, False))
+    assert locks.wait_while_held("centanet", wait=waits.append, poll_s=5,
+                                 on_pause=pauses.append) is True
+    assert waits == [5, 5, 5] and pauses == [999999999]

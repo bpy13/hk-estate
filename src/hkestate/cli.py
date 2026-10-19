@@ -229,7 +229,8 @@ def cmd_master(args) -> int:
     from hkestate.sources import cd_master
 
     log = _logger("master")
-    # 2 s between requests: hk.centanet.com is shared with the Centanet listing scraper
+    # 2 s between requests, and a pause while the Centanet listing scraper (1 s) holds the
+    # `centanet` lock: hk.centanet.com is shared
     with Fetcher(min_interval=cd_master.MIN_INTERVAL_S) as f:
         cd_master.run_master(f, db_path=args.db, log=log, limit=args.limit)
     return 0

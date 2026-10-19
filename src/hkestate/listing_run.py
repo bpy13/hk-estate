@@ -4,6 +4,8 @@ Per source, per estate group:
 - Centanet: the detail sitemap lists every live listing; detail pages are read for new
   listings and, because the sitemap's lastmod is always today, for a rotating seventh of
   known listings each day (oldest read first), so every price is re-read within a week.
+  1 s per request, holding the `centanet` lock so the Centadata jobs on the same host pause.
+  Each batch of 25 pages records its reads, so a stopped run doesn't read them again.
 - 28Hse: the estate's search pages, every day; a detail page only for a new listing or a
   changed price. Skipped while another job holds the `hse28` lock (a backfill), since 28Hse
   rate-limits hard.
@@ -37,17 +39,21 @@ Log = Callable[[str], None]
 ROTATE_DAYS = 7  # every known Centanet listing is re-read at least this often
 PAGE_CAP = 60  # search pages per target, a safety stop
 MAX_ERROR_SHARE = 0.05  # more failed pages than this: the run doesn't count for delisting
-# hk.centanet.com also serves the Centadata master crawl (2 s per request, Phase 3). Two
-# processes at 2 s each keep the host at about 1 request a second in total.
-CENTANET_MIN_INTERVAL_S = 2.0
+# hk.centanet.com (robots crawl-delay 1) also serves the Centadata jobs (cd-history, the
+# master pass). They pause while the Centanet part of this run holds the `centanet` lock, so
+# the listings can take the host's whole 1 request a second.
+CENTANET_MIN_INTERVAL_S = 1.0
+CENTANET_LOCK = "centanet"
 # Circuit breaker: this many detail pages in a row failing (after the fetcher's own retries)
 # means the site is struggling or has stopped answering us; stop that source for the run.
 MAX_CONSECUTIVE_ERRORS = 5
 
 TERRITORY = "territory"  # every estate outside the pilot groups
 # Detail pages / building pages read per run for the territory (politeness and run length:
-# Centanet at 2 s is ~4.5 h for 8,000 pages; Spacious at 1 s is ~1.7 h for 6,000).
-CENTANET_TERRITORY_BUDGET = 8000
+# Spacious at 1 s is ~1.7 h for 6,000). Centanet's cap is above the first-pass backlog
+# (~26,000 pages on 2026-10-19, ~10 h at ~1.4 s a page); after that a run is new listings
+# plus a seventh of known ones (~6,000 pages, ~2.5 h), well under it.
+CENTANET_TERRITORY_BUDGET = 30000
 SPACIOUS_TERRITORY_BUDGET = 6000
 
 SP = "https://www.spacious.hk/zh-tw/%E9%A6%99%E6%B8%AF/n/"
@@ -173,20 +179,57 @@ class ListingRun:
         if items:
             with db.session(self.db_path) as con:
                 listings.store_raw(con, items, datetime.now(), group=group, page_type=page_type)
+                if page_type == "detail":
+                    # Progress lands batch by batch, so a stopped run doesn't read these pages
+                    # again. Listings new today have no `listing` row until `finish`; `_known`
+                    # finds them from their stored detail page instead.
+                    con.execute(
+                        "UPDATE listing SET last_detail_at = ? WHERE source = ? "
+                        "AND listing_id IN (SELECT unnest(?))",
+                        [self.now, items[0].source, sorted({x.listing_id for x in items})],
+                    )
 
     def _known(self, source: str) -> dict[str, tuple]:
+        """listing_id -> (last detail read, price) for every listing of the source: the
+        `listing` row, or for a listing whose run stopped before `finish` made that row (or
+        recorded its read), the time of its newest stored detail page (an unchanged re-read
+        stores nothing, so this can be earlier than the last read, never later)."""
         with db.session(self.db_path) as con:
             return {
                 r[0]: (r[1], r[2])
                 for r in con.execute(
-                    "SELECT listing_id, last_detail_at, price_hkd FROM listing WHERE source = ?",
-                    [source],
+                    """
+                    WITH d AS (
+                        SELECT listing_id, max(fetched_at) AS t,
+                               arg_max(price_hkd, fetched_at) AS price
+                        FROM listing_raw WHERE source = ? AND page_type = 'detail'
+                        GROUP BY listing_id)
+                    SELECT l.listing_id, coalesce(l.last_detail_at, d.t), l.price_hkd
+                    FROM listing l LEFT JOIN d USING (listing_id) WHERE l.source = ?
+                    UNION ALL
+                    SELECT listing_id, t, price FROM d WHERE listing_id NOT IN (
+                        SELECT listing_id FROM listing WHERE source = ?)
+                    """,
+                    [source, source, source],
                 ).fetchall()
             }
 
     # ---- Centanet --------------------------------------------------------------------------
 
     def centanet(self, groups: list[str]) -> None:
+        """Read Centanet holding the `centanet` lock: the Centadata jobs on the same host
+        pause meanwhile, so the 1 s pacing is the host's whole load."""
+        holder = locks.held_by(CENTANET_LOCK)
+        if holder is not None:
+            note = f"skipped: another Centanet listing job (process {holder}) is running"
+            self.log(f"centanet: {note}")
+            for g in groups:
+                self.results.append(SourceResult("centanet", g, complete=False, note=note))
+            return
+        with locks.hold(CENTANET_LOCK):
+            self._centanet(groups)
+
+    def _centanet(self, groups: list[str]) -> None:
         # every pilot estate name is recognised, so the territory never takes a pilot listing
         prefixes = {name: g for g, t in PILOT.items() for name in t.centanet}
         territory = TERRITORY in groups
@@ -217,10 +260,13 @@ class ListingRun:
             stale = [e for e in old[quota:]
                      if (self.now - known[e.listing_id][0]).days >= ROTATE_DAYS]
             todo = new + old[:quota] + stale
+            due = len(todo)
             if g == TERRITORY:  # new listings first, then the oldest-read; the rest tomorrow
                 todo = todo[: self.centanet_budget]
-            self.log(f"centanet {g}: {len(mine)} live, {len(new)} new, "
-                     f"{len(todo) - len(new)} re-read")
+            n_new = min(len(new), len(todo))  # new listings come first in todo
+            cut = f" ({due - len(todo)} left for later runs)" if due > len(todo) else ""
+            self.log(f"centanet {g}: {len(mine)} live, {len(new)} new; reading {n_new} new "
+                     f"+ {len(todo) - n_new} re-read{cut}")
             batch: list[Listing] = []
             gone: set[str] = set()
             for i, e in enumerate(todo, 1):

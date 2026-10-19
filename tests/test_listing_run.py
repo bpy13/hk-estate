@@ -125,6 +125,126 @@ def test_hse28_skipped_while_a_backfill_holds_the_lock(env, tmp_path):
     assert res["complete"] is False and "skipped" in res["note"]
 
 
+def _sitemap(ids, estate="太古城"):
+    locs = "".join(
+        f"<url><loc>https://hk.centanet.com/findproperty/detail/{estate}-x_{i}?theme=buy"
+        "</loc></url>" for i in ids)
+    return f'<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">{locs}</urlset>'
+
+
+class CentanetPages(FakeFetcher):
+    """The sitemap lists `ids`; every detail page is the fixture page (the id comes from the
+    url). `stop_at`: the n-th detail request raises KeyboardInterrupt (a stopped run)."""
+
+    def __init__(self, ids, stop_at=None, estate="太古城"):
+        super().__init__({})
+        self.xml, self.stop_at, self.n = _sitemap(ids, estate), stop_at, 0
+        self.html = read("centanet", "detail_sale.html")
+        self.lock_seen: list[bool] = []
+
+    def get(self, url, page_type):
+        self.asked.append(url)
+        self.lock_seen.append(locks.lock_path("centanet").exists())
+        if "sitemap" in url:
+            return self.xml
+        self.n += 1
+        if self.n == self.stop_at:
+            raise KeyboardInterrupt
+        return self.html
+
+
+IDS = [f"ZZC{i:03d}" for i in range(30)]
+
+
+def test_centanet_holds_the_centanet_lock_only_while_it_reads(env):
+    fake = CentanetPages(IDS[:2])
+    listing_run.run_listings(["taikoo-shing"], ["centanet", "spacious"], db_path=env,
+                             log=lambda m: None, fetcher=fake, now=datetime(2026, 10, 16, 8),
+                             today=TODAY)
+    centanet = [s for u, s in zip(fake.asked, fake.lock_seen, strict=True) if "centanet" in u]
+    others = [s for u, s in zip(fake.asked, fake.lock_seen, strict=True) if "centanet" not in u]
+    assert centanet and all(centanet)  # held for every Centanet request
+    assert others and not any(others)  # released before Spacious
+    assert not locks.lock_path("centanet").exists()
+
+
+def test_centanet_skipped_while_another_process_holds_the_centanet_lock(env):
+    import os
+    path = locks.lock_path("centanet")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(str(os.getppid()))
+    fake = CentanetPages(IDS[:2])
+    summary = listing_run.run_listings(
+        ["taikoo-shing"], ["centanet"], db_path=env, log=lambda m: None, fetcher=fake,
+        now=datetime(2026, 10, 16, 8), today=TODAY)
+    assert fake.asked == []
+    res = summary["sources"]["centanet"]["taikoo-shing"]
+    assert res["complete"] is False and "skipped" in res["note"]
+
+
+def test_a_stale_centanet_lock_is_taken_over(env, monkeypatch):
+    path = locks.lock_path("centanet")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("999999")
+    monkeypatch.setattr(locks, "pid_alive", lambda pid: False)  # its process has ended
+    fake = CentanetPages(IDS[:2])
+    listing_run.run_listings(["taikoo-shing"], ["centanet"], db_path=env, log=lambda m: None,
+                             fetcher=fake, now=datetime(2026, 10, 16, 8), today=TODAY)
+    assert len(fake.asked) == 3 and all(fake.lock_seen)
+    assert not path.exists()
+
+
+def test_a_stopped_run_keeps_the_reads_of_its_stored_batches(env):
+    """Known listings: last_detail_at is written with each batch of 25, not only at the end."""
+    old = datetime(2026, 10, 1)
+    with db.session(env) as con:
+        for lid in IDS:
+            con.execute("INSERT INTO listing (source, listing_id, group_name, status, "
+                        "last_detail_at) VALUES ('centanet', ?, 'taikoo-shing', 'active', ?)",
+                        [lid, old])
+    now = datetime(2026, 10, 16, 8)
+    fake = CentanetPages(IDS, stop_at=28)  # all 30 are due (read 15 days ago); stop at 28
+    with pytest.raises(KeyboardInterrupt):
+        listing_run.run_listings(["taikoo-shing"], ["centanet"], db_path=env,
+                                 log=lambda m: None, fetcher=fake, now=now, today=TODAY)
+    with db.session(env) as con:
+        read = dict(con.execute("SELECT listing_id, last_detail_at FROM listing").fetchall())
+    assert sum(t == now for t in read.values()) == 25
+    assert sum(t == old for t in read.values()) == 5
+    assert not locks.lock_path("centanet").exists()  # released on the way out
+
+
+def test_new_listings_read_by_a_stopped_run_are_not_read_again(env):
+    """New listings have no `listing` row until the run finishes: their stored detail pages
+    count as read."""
+    first = CentanetPages(IDS, stop_at=28)
+    with pytest.raises(KeyboardInterrupt):
+        listing_run.run_listings(["taikoo-shing"], ["centanet"], db_path=env,
+                                 log=lambda m: None, fetcher=first, today=TODAY)
+    second = CentanetPages(IDS)
+    logs: list[str] = []
+    listing_run.run_listings(["taikoo-shing"], ["centanet"], db_path=env, log=logs.append,
+                             fetcher=second, today=TODAY)
+    again = [u for u in second.asked if "sitemap" not in u]
+    assert len(again) == 5 and all(any(i in u for i in IDS[25:]) for u in again)
+    assert any("30 live, 5 new; reading 5 new + 0 re-read" in m for m in logs)
+    with db.session(env) as con:
+        assert con.execute("SELECT count(*) FROM listing").fetchone()[0] == 30
+    known = listing_run.ListingRun(db_path=env)._known("centanet")
+    assert len(known) == 30 and all(t is not None for t, _ in known.values())
+
+
+def test_territory_log_counts_new_and_re_reads_within_the_budget(env):
+    logs: list[str] = []
+    fake = CentanetPages(IDS[:5], estate="海景苑")
+    run = listing_run.ListingRun(db_path=env, log=logs.append, fetcher=fake, centanet_budget=3,
+                                 now=datetime(2026, 10, 16, 8), today=TODAY)
+    run.centanet([listing_run.TERRITORY])
+    line = next(m for m in logs if m.startswith("centanet territory:"))
+    assert "5 live, 5 new; reading 3 new + 0 re-read (2 left for later runs)" in line
+    assert len([u for u in fake.asked if "sitemap" not in u]) == 3
+
+
 def _hse_listing(i):
     from types import SimpleNamespace as NS
     return NS(listing_id=str(i), source_estate_key=None, price_hkd=1, url=f"detail-{i}",

@@ -220,8 +220,11 @@ Details and measurements in `docs/sources.md`. Supersedes parts of "Source roles
 - **Detail pages:** Centanet: new listings plus a rotating seventh of known ones a day.
   28Hse: only new listings or a changed price (search cards carry the rest). Spacious: none
   (cards have everything it offers; no floor or flat on Spacious anyway).
-- **Request pacing:** Centanet 2 s (hk.centanet.com is shared with the Phase 3 Centadata
-  crawl, which also uses 2 s, so the host sees ~1 request/s), 28Hse 4 s, Spacious 1 s.
+- **Request pacing:** Centanet 1 s, 28Hse 4 s, Spacious 1 s. hk.centanet.com (robots
+  crawl-delay 1) is shared with the Centadata jobs (`cd-history` 4 s, the master pass 2 s);
+  they pause while the listing job holds the `centanet` lock (only while it reads Centanet),
+  so the host sees at most ~1 request/s. (Until 2026-10-19 Centanet listings ran at 2 s
+  alongside the master pass at 2 s; owner approved 1 s once the master pass finished.)
 - **Rent listings** are collected too (Centanet and 28Hse), for current yields in Phase 5.
 - **Mei Foo address ranges:** Centanet names a block "百老匯街19-21號"; 28Hse lists one
   building per street number. A range listing is matched to the lowest number's building

@@ -197,6 +197,47 @@ def test_master_rows_record_exclusions(con):
     assert con.execute("SELECT count(*) FROM estate").fetchone()[0] == 0
 
 
+class Pages:
+    """Serves one estate page with two blocks; records each request."""
+
+    def __init__(self):
+        self.asked = []
+
+    def get(self, url, page_type):
+        self.asked.append(url)
+        if url == cm.SITEMAP_URL:
+            return SITEMAP
+        return nuxt_page(block_code="1-B1", blocks=[("1-B1", "1座"), ("1-B2", "2座")])
+
+
+def test_process_estate_pauses_before_every_page(tmp_path):
+    with db.session(tmp_path / "t.duckdb") as c:
+        db.init_db(c)
+        cm.ensure_tables(c)
+    f, order = Pages(), []
+    real_get = f.get
+    f.get = lambda url, pt: order.append("get") or real_get(url, pt)
+    cm.process_estate(f, tmp_path / "t.duckdb", "2-AAAAAAAAAA", "測試苑", pilot=False,
+                      overrides={}, pause=lambda: order.append("pause"))
+    assert order == ["pause", "get", "pause", "get"]  # the estate page, then block 1-B2
+
+
+def test_master_pass_waits_while_centanet_listings_run(tmp_path, monkeypatch):
+    from hkestate import locks
+    monkeypatch.setenv("HKESTATE_DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(cm, "pilot_codes", lambda f, log: set())
+    monkeypatch.setattr(cm, "load_overrides", lambda: {})
+    held = iter([1234, 1234])  # held at the start, then free for good
+    monkeypatch.setattr(locks, "held_by",
+                        lambda name: next(held, None) if name == "centanet" else None)
+    f, waits, logs = Pages(), [], []
+    real_get = f.get
+    f.get = lambda url, pt: (waits.append("get"), real_get(url, pt))[1]
+    cm.run_master(f, db_path=tmp_path / "t.duckdb", log=logs.append, wait=waits.append)
+    assert waits[:3] == [cm.LOCK_WAIT_S, cm.LOCK_WAIT_S, "get"]  # no request while held
+    assert sum("pausing" in m for m in logs) == 1
+
+
 def test_previous_deal_change_is_stored_with_the_latest_deal(con):
     deals = [("T9", "30", "B", 5_500_000, 405, 520, "2019-05-17T00:00:00", "2019-06-10T00:00:00")]
     html = nuxt_page(deals=deals).replace('"transactionPrice": 5500000',

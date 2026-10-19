@@ -165,7 +165,8 @@ def test_territory_run_records_matches_and_snapshots(tmp_path):
                            ).fetchone() == ("cd-1-N",)
 
 
-def test_territory_only_run_leaves_pilot_listings_alone(tmp_path):
+def test_territory_only_run_leaves_pilot_listings_alone(tmp_path, monkeypatch):
+    monkeypatch.setenv("HKESTATE_DATA_DIR", str(tmp_path))  # the `centanet` lock file
     path = tmp_path / "t.duckdb"
     with db.session(path) as con:
         db.init_db(con)
