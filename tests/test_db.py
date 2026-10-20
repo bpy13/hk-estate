@@ -451,6 +451,73 @@ def test_connect_gives_up_after_the_wait_limit(tmp_path, monkeypatch):
     assert 25 * 60 <= clock[0] <= 30 * 60  # waited about the 30 minutes, not 5
 
 
+def test_long_jobs_wait_for_the_file_for_ever(tmp_path, monkeypatch, capsys):
+    import duckdb
+
+    clock = [0.0]
+    real = duckdb.connect
+    tries = []
+
+    def busy_for_three_hours(path, *a, **k):
+        tries.append(1)
+        if clock[0] < 3 * 3600:
+            raise duckdb.IOException(LOCK_MSG)
+        return real(path, *a, **k)
+
+    monkeypatch.setattr(db.duckdb, "connect", busy_for_three_hours)
+    monkeypatch.setattr(db.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(db.time, "sleep", lambda s: clock.__setitem__(0, clock[0] + s))
+    monkeypatch.setattr(db, "_lock_wait_s", db.LOCK_WAIT_S)
+    db.set_lock_wait(None)  # what the CLI does for backfill-territory, cd-history, ...
+    db.connect(tmp_path / "x.duckdb").close()
+    assert clock[0] >= 3 * 3600
+    lines = capsys.readouterr().err.count("database busy")
+    assert lines < len(tries) - 1 and lines >= db.LOCK_LOG_EVERY_FIRST  # fewer lines later
+
+
+def test_the_cli_sets_the_long_wait_only_for_long_jobs(tmp_path, monkeypatch):
+    from hkestate import cli
+
+    seen = {}
+    monkeypatch.setattr(cli, "cmd_status", lambda args: seen.setdefault("status",
+                                                                       db.lock_wait()) and 0)
+    monkeypatch.setattr(cli, "cmd_cd_history", lambda args: seen.setdefault("cd",
+                                                                            db.lock_wait()) or 0)
+    cli.main(["--db", str(tmp_path / "x.duckdb"), "status"])
+    cli.main(["--db", str(tmp_path / "x.duckdb"), "cd-history"])
+    assert seen == {"status": db.LOCK_WAIT_S, "cd": None}
+    assert db.lock_wait() == db.LOCK_WAIT_S  # put back after the command
+
+
+def test_sessions_of_threads_in_one_process_take_turns(tmp_path):
+    """DuckDB lets threads of one process open the same file, but two writing the same row
+    at once get 'Conflict on update' (checked 2026-10-20); db.session serialises them."""
+    import threading
+
+    path = tmp_path / "t.duckdb"
+    with db.session(path) as con:
+        con.execute("CREATE TABLE u (k INTEGER PRIMARY KEY, v INTEGER)")
+        con.execute("INSERT INTO u VALUES (1, 0)")
+    errors = []
+
+    def work():
+        for _ in range(50):
+            try:
+                with db.session(path) as con:
+                    con.execute("UPDATE u SET v = v + 1 WHERE k = 1")
+            except Exception as e:  # noqa: BLE001
+                errors.append(e)
+
+    threads = [threading.Thread(target=work) for _ in range(3)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    with db.session(path) as con:
+        assert con.execute("SELECT v FROM u").fetchone()[0] == 150
+    assert errors == []
+
+
 def test_connect_does_not_retry_other_errors(tmp_path, monkeypatch):
     import duckdb
 

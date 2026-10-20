@@ -275,7 +275,7 @@ def test_only_instrument_date_missing_uses_registration_date(db_path):
 
 
 def test_errors_are_counted_and_the_failed_batch_is_retried_next_run(db_path):
-    err = FetchError("u", 500, "boom")
+    err = FetchError("u", 404, "gone")  # not throttling: the batch is left for the next run
     f = FakeFetcher(sales(), fail=lambda n: err if n == 1 else None)
     stats = run(db_path, f, estates=["alpha"])
     assert stats["errors"] == 1 and stats["buildings"] == 0
@@ -287,7 +287,7 @@ def test_errors_are_counted_and_the_failed_batch_is_retried_next_run(db_path):
 def test_a_failed_batch_keeps_its_building_unfinished_even_if_later_batches_work(
         db_path, monkeypatch):
     monkeypatch.setattr(ch, "BATCH_CODES", 1)
-    err = FetchError("u", 500, "boom")
+    err = FetchError("u", 404, "gone")
     f = FakeFetcher(sales(), fail=lambda n: err if n == 1 else None)
     stats = run(db_path, f, estates=["alpha"])  # batch 1 (CODEA1) fails, batch 2 works
     assert stats["buildings"] == 0 and stats["errors"] == 1
@@ -295,9 +295,9 @@ def test_a_failed_batch_keeps_its_building_unfinished_even_if_later_batches_work
         assert not db.step_done(con, ch.COMMAND, "h28-1-b1")
 
 
-def test_five_errors_in_a_row_stop_the_run_and_are_logged(db_path, monkeypatch):
+def test_five_non_throttle_errors_in_a_row_stop_the_run_and_are_logged(db_path, monkeypatch):
     monkeypatch.setattr(ch, "BATCH_CODES", 1)
-    err = FetchError("u", 500, "boom")
+    err = FetchError("u", 404, "gone")
     f = FakeFetcher(sales(), fail=lambda n: err)
     with pytest.raises(RuntimeError, match="5 errors in a row"):
         run(db_path, f)
@@ -308,9 +308,44 @@ def test_five_errors_in_a_row_stop_the_run_and_are_logged(db_path, monkeypatch):
     assert status == "failed" and "5 errors" in msg
 
 
-def test_a_success_resets_the_error_streak(db_path, monkeypatch):
+@pytest.mark.parametrize("status", [429, 503])
+def test_429s_do_not_stop_the_run_it_cools_down_and_retries_the_same_batch(
+        db_path, monkeypatch, status):
+    """2026-10-20: five 429s in a row ended the run. Now it waits and carries on."""
+    monkeypatch.setattr(ch, "BATCH_CODES", 1)
+    err = FetchError("u", status, "slow down")
+    f = FakeFetcher(sales(), fail=lambda n: err if n <= 12 else None)
+    waits, logs = [], []
+    stats = ch.run_history(f, db_path=db_path, log=logs.append, wait=waits.append)
+    assert stats["buildings"] == 4 and stats["deals"] == 8  # nothing lost
+    assert f.calls[0] == f.calls[12]  # the same batch was asked again until it worked
+    assert waits[:4] == [600, 1200, 1800, 1800]  # cool-downs (no fetcher cool-down here)
+    assert any("cooling down 10 min" in m for m in logs)
+
+
+def test_waits_out_the_fetchers_own_cool_down_without_sleeping_again(db_path, monkeypatch):
+    monkeypatch.setattr(ch, "BATCH_CODES", 1)
+    err = FetchError("https://hk.centanet.com/x", 429, "slow down")
+    f = FakeFetcher(sales(), fail=lambda n: err if n <= 3 else None)
+    f.cooldown_remaining = lambda url: 900.0  # the real fetcher waits before the next request
+    waits, logs = [], []
+    stats = ch.run_history(f, db_path=db_path, log=logs.append, wait=waits.append)
+    assert stats["buildings"] == 4 and waits == []
+    assert sum("waiting out the site's cool-down" in m for m in logs) == 3
+
+
+def test_a_batch_failing_with_500_is_tried_three_times_then_skipped(db_path, monkeypatch):
     monkeypatch.setattr(ch, "BATCH_CODES", 1)
     err = FetchError("u", 500, "boom")
+    f = FakeFetcher(sales(), fail=lambda n: err if n <= 3 else None)
+    stats = run(db_path, f)
+    assert f.calls[0] == f.calls[1] == f.calls[2] != f.calls[3]
+    assert stats["errors"] == 3 and stats["buildings"] == 3  # its building waits for a rerun
+
+
+def test_a_success_resets_the_error_streak(db_path, monkeypatch):
+    monkeypatch.setattr(ch, "BATCH_CODES", 1)
+    err = FetchError("u", 404, "gone")
     bad = {1, 2, 3, 4, 6, 7}  # never 5 in a row
     f = FakeFetcher(sales(), fail=lambda n: err if n in bad else None)
     stats = run(db_path, f)
@@ -344,32 +379,12 @@ def test_max_hours_stops_between_batches(db_path):
     assert len(f.calls) < 4
 
 
-def test_pauses_while_the_centanet_lock_is_held(db_path, monkeypatch):
-    held = iter([1234, 1234, None])
-    monkeypatch.setattr(locks, "held_by", lambda name: next(held, None) if name == "centanet"
-                        else None)
-    waits, logs = [], []
-    f = FakeFetcher(sales())
-    ch.run_history(f, db_path=db_path, log=logs.append, wait=waits.append, estates=["alpha"])
-    assert len(waits) == 2 and f.calls  # waited twice, then ran
-    assert sum("pausing" in m for m in logs) == 1  # one line per pause, not per wait
-
-
-def test_the_rest_of_the_listing_job_does_not_pause_it(db_path, monkeypatch):
-    # `listings` is held for the whole daily job (28Hse, Spacious too): not a reason to wait
-    monkeypatch.setattr(locks, "held_by", lambda name: 1234 if name == "listings" else None)
+def test_runs_alongside_centanet_listings_without_pausing(db_path, monkeypatch):
+    # since 2026-10-20 both run at once, each at its own pace (no pauses on the lock)
+    monkeypatch.setattr(locks, "held_by",
+                        lambda name: 1234 if name in ("centanet", "listings") else None)
     waits = []
     f = FakeFetcher(sales())
-    ch.run_history(f, db_path=db_path, log=lambda m: None, wait=waits.append, estates=["alpha"])
-    assert waits == [] and f.calls
-
-
-def test_a_stale_centanet_lock_does_not_pause_it(db_path, monkeypatch):
-    path = locks.lock_path("centanet")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("999999")
-    monkeypatch.setattr(locks, "pid_alive", lambda pid: False)  # the listing job crashed
-    waits = []
-    f = FakeFetcher(sales())
-    ch.run_history(f, db_path=db_path, log=lambda m: None, wait=waits.append, estates=["alpha"])
-    assert waits == [] and f.calls
+    stats = ch.run_history(f, db_path=db_path, log=lambda m: None, wait=waits.append,
+                           estates=["alpha"])
+    assert waits == [] and f.calls and stats["buildings"] == 1

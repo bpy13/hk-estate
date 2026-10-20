@@ -225,6 +225,7 @@ Details and measurements in `docs/sources.md`. Supersedes parts of "Source roles
   they pause while the listing job holds the `centanet` lock (only while it reads Centanet),
   so the host sees at most ~1 request/s. (Until 2026-10-19 Centanet listings ran at 2 s
   alongside the master pass at 2 s; owner approved 1 s once the master pass finished.)
+  *Superseded 2026-10-20: see "Pacing and recovery" below.*
 - **Rent listings** are collected too (Centanet and 28Hse), for current yields in Phase 5.
 - **Mei Foo address ranges:** Centanet names a block "百老匯街19-21號"; 28Hse lists one
   building per street number. A range listing is matched to the lowest number's building
@@ -351,6 +352,45 @@ Details and measurements in `docs/sources.md`. Supersedes parts of "Source roles
   = after-cost growth + that yield (no reinvestment, no leverage, gross of holding costs).
 - **Charts are hand-written SVG** (`charts.py`): matplotlib is not installed and Windows
   Application Control already blocks one compiled package here.
+
+## Pacing and recovery (2026-10-20)
+What happened: Centanet listings at 1 s got five HTTP 500s in a row after ~800 pages and the
+circuit breaker stopped Centanet for the day; cd-history (4 s) then got 429s and exited, and
+still got 429 on its first requests when restarted 11 hours later. The daily job died with
+exit 0xC000013A (a console Ctrl+C/close); the day before, all three long jobs died when
+`db.connect` gave up after 30 minutes.
+- **Adaptive pacing per host** (owner: "pick a pace, monitor, adjust when the site pushes
+  back"). Base gaps: Centanet listings 2 s (2 s had run 8,000 pages without trouble),
+  cd-history 6 s, master pass 4 s; others unchanged. A throttle signal (429/503, 5xx after
+  retries, timeout) multiplies the gap by 1.5 (cap 15 s); 429/503 also start a cool-down
+  (15 min, 30, 60, then 2 h each time, because the API throttle lasted hours), followed by a
+  single probe. After 500 good answers the gap steps 10% back towards the base, never below.
+  Process-local state; nothing is shared between jobs.
+- **Long jobs wait instead of dying** on throttling (cd-history, the backfills, Ricacorp,
+  the master pass): indefinitely, retrying the same item. An item failing with a plain 5xx
+  three times on its own is skipped for the next run (it may be that item, not the site).
+  The daily listing run cools down 10/20/30 min and gives up a source for the day after the
+  third. Non-throttle errors (404, bad answers) keep their old handling.
+- **Concurrent on hk.centanet.com, not exclusive pauses** (owner, replaces the `centanet`
+  lock pauses): listings 2 s + cd-history 6 s ≈ 0.67 requests a second (0.92 with the rare
+  master pass at 4 s), below the ~1 a second that ran for days. Host priority: the listings'
+  pace is the fastest; the slow-down handles any pushback. The `centanet` lock stays as a
+  marker around the Centanet part of the listing run.
+- **No Centanet or Spacious page cap** (owner). The 30,000 / 6,000 caps were a run-length
+  choice in the 2026-10-16 build plan, not a politeness limit; each daily run now reads every
+  due page however long it takes (first Centanet pass ~26,000 pages ≈ 14 h at 2 s, then ~6,000
+  a day). `--centanet-budget` / `--spacious-budget` remain as optional manual caps. The three
+  listing sources run in parallel threads (different hosts) so 28Hse and Spacious don't wait
+  behind Centanet; the finishing steps run after all three. The `daily listings` task may run
+  23 h. A time box was considered and dropped with the caps.
+- **DB lock waits**: the long jobs wait for the database file for ever (logging the first 10
+  waits, then every 10 minutes); short commands keep the 30-minute limit. Threads of one
+  process take turns in `db.session` (DuckDB allows it, but concurrent writes to a row fail
+  with "Conflict on update", checked 2026-10-20).
+- **Watchdog** every 15 minutes restarts a long job or today's daily run that died (lock
+  files + logs, never the database), with at most 3 restarts per job per day and a
+  crash-loop guard. The scheduled daily job's Python runs in its own console so a Ctrl+C
+  elsewhere can't reach it.
 
 ## Repository
 - **Public GitHub repo `hk-estate` on account `bpy13`** (2026-10-16). Because it is public:

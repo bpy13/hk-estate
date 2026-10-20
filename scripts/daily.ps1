@@ -11,6 +11,10 @@
   Output goes to data\logs\task_daily_<time>.log; the job also writes its own
   data\logs\daily_<time>.log and a row in the run_log table.
 
+  Python runs in its own hidden console (Start-Process), not in this script's console, so a
+  Ctrl+C or a closed console window elsewhere can't stop it (2026-10-20: the daily job died
+  with exit 0xC000013A). The script waits for it and returns its exit code.
+
 .PARAMETER Python
   Full path to python.exe in the conda env (register_task.ps1 fills it in). The job runs
   `python.exe -m hkestate <command>`: Windows Application Control once blocked hkestate.exe.
@@ -25,6 +29,8 @@ Set-Location $repo
 $logDir = Join-Path $repo 'data\logs'
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 $log = Join-Path $logDir ('task_{0}_{1:yyyyMMdd_HHmmss}.log' -f $Command, (Get-Date))
+$out = [IO.Path]::ChangeExtension($log, '.out')
+$err = [IO.Path]::ChangeExtension($log, '.err')
 $env:PYTHONIOENCODING = 'utf-8'
 
 "$(Get-Date -Format s) start: $Python -m hkestate $Command" | Out-File -FilePath $log -Encoding utf8
@@ -32,8 +38,17 @@ if (-not (Test-Path $Python)) {
     "python.exe not found at $Python" | Out-File -FilePath $log -Append -Encoding utf8
     exit 2
 }
-# cmd /c keeps Python's stderr as plain text in the log (PowerShell 5.1 would wrap it).
-cmd /c "`"$Python`" -m hkestate $Command >> `"$log`" 2>&1"
-$code = $LASTEXITCODE
+$arguments = @('-m', 'hkestate') + ($Command -split ' ')
+$p = Start-Process -FilePath $Python -ArgumentList $arguments -WorkingDirectory $repo `
+    -WindowStyle Hidden -RedirectStandardOutput $out -RedirectStandardError $err -PassThru
+$null = $p.Handle  # keeps the handle, so ExitCode is still there after the wait
+$p.WaitForExit()
+$code = $p.ExitCode
+foreach ($f in @($out, $err)) {
+    if ((Test-Path $f) -and (Get-Item $f).Length -gt 0) {
+        Get-Content -Path $f -Encoding utf8 | Out-File -FilePath $log -Append -Encoding utf8
+    }
+    Remove-Item -Path $f -ErrorAction SilentlyContinue
+}
 "$(Get-Date -Format s) exit code $code" | Out-File -FilePath $log -Append -Encoding utf8
 exit $code

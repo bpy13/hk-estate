@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sys
+import threading
 import time
 from collections.abc import Iterable, Mapping
 from contextlib import contextmanager
@@ -58,6 +59,24 @@ def default_db_path() -> Path:
 LOCK_WAIT_S = 30 * 60  # how long to wait for another process to let go of the file
 LOCK_BACKOFF_FIRST_S = 5.0
 LOCK_BACKOFF_MAX_S = 60.0
+LOCK_LOG_EVERY_FIRST = 10  # the first waits are each logged; after that ...
+LOCK_LOG_EVERY_S = 10 * 60  # ... one line every 10 minutes
+
+# How long `connect` waits when the caller doesn't say: LOCK_WAIT_S, or None (for ever).
+# The CLI sets None for the long resumable jobs (`set_lock_wait`), which must never die
+# because a short command holds the file for a while.
+_lock_wait_s: float | None = LOCK_WAIT_S
+_UNSET = object()
+
+
+def set_lock_wait(seconds: float | None) -> None:
+    """Default wait of `connect` for this process: seconds, or None to wait for ever."""
+    global _lock_wait_s
+    _lock_wait_s = seconds
+
+
+def lock_wait() -> float | None:
+    return _lock_wait_s
 
 
 def _is_lock_error(e: Exception) -> bool:
@@ -68,36 +87,53 @@ def _is_lock_error(e: Exception) -> bool:
 
 
 def connect(path: Path | str | None = None, *,
-            wait_s: float = LOCK_WAIT_S) -> duckdb.DuckDBPyConnection:
+            wait_s=_UNSET) -> duckdb.DuckDBPyConnection:
     """Open the database. DuckDB allows one process at a time, so if another command holds
-    the file we retry (5 s, doubling to 60 s between tries) for up to `wait_s` (30 minutes:
-    the scheduled train and rank hold it for several minutes). Each wait is logged to stderr,
-    which the task wrappers capture. Any other error is raised at once."""
+    the file we retry (5 s, doubling to 60 s between tries) for up to `wait_s` seconds
+    (default: `set_lock_wait`, normally 30 minutes, as the scheduled train and rank hold it
+    for several minutes; None waits for ever). The first waits are each logged to stderr,
+    which the task wrappers capture, then one line every 10 minutes. Any other error is
+    raised at once."""
+    if wait_s is _UNSET:
+        wait_s = _lock_wait_s
     path = Path(path) if path else default_db_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    deadline = time.monotonic() + wait_s
+    started = time.monotonic()
+    deadline = None if wait_s is None else started + wait_s
     delay = LOCK_BACKOFF_FIRST_S
+    waits, last_logged = 0, started
     while True:
         try:
             return duckdb.connect(str(path))
         except duckdb.IOException as e:
-            if not _is_lock_error(e) or time.monotonic() + delay > deadline:
+            now = time.monotonic()
+            if not _is_lock_error(e) or (deadline is not None and now + delay > deadline):
                 raise
-            print(f"{datetime.now():%Y-%m-%d %H:%M:%S} database busy (another process has "
-                  f"{path.name} open); retrying in {delay:.0f}s", file=sys.stderr, flush=True)
+            waits += 1
+            if waits <= LOCK_LOG_EVERY_FIRST or now - last_logged >= LOCK_LOG_EVERY_S:
+                last_logged = now
+                print(f"{datetime.now():%Y-%m-%d %H:%M:%S} database busy (another process "
+                      f"has {path.name} open, {(now - started) / 60:.0f} min so far); "
+                      f"retrying in {delay:.0f}s", file=sys.stderr, flush=True)
             time.sleep(delay)
             delay = min(delay * 2, LOCK_BACKOFF_MAX_S)
+
+
+_session_lock = threading.RLock()
 
 
 @contextmanager
 def session(path: Path | str | None = None):
     """A short-lived connection: long jobs open the file only while writing, so other
-    commands can use the database in between."""
-    con = connect(path)
-    try:
-        yield con
-    finally:
-        con.close()
+    commands can use the database in between. Within one process the sessions of different
+    threads take turns (the daily listing run reads its sources in parallel threads), so
+    two threads never write at once and can't hit a DuckDB transaction conflict."""
+    with _session_lock:
+        con = connect(path)
+        try:
+            yield con
+        finally:
+            con.close()
 
 
 def unit_id(building_id: str, floor_label: str, flat: str) -> str:

@@ -4,6 +4,7 @@
 
 .DESCRIPTION
   \hk-estate\daily listings   every day at 08:00          scripts\daily.ps1 (python -m hkestate daily)
+                              (may run up to 23 hours: every due Centanet page is read)
   \hk-estate\weekly deals     every Sunday at 07:00       scripts\daily.ps1 -Command update
   \hk-estate\weekly ricacorp  every Sunday at 10:00       scripts\daily.ps1 -Command ricacorp
                               (a pass takes about 7 hours; the task may run up to 14)
@@ -14,6 +15,9 @@
 
   \hk-estate\monthly blocked-check  the 1st of each month at 09:00  scripts\daily.ps1 -Command check-blocked
                               (robots.txt of Midland, Squarefoot, house730, HKP; a few requests)
+
+  \hk-estate\watchdog         every 15 minutes            scripts\watchdog.ps1 (python -m hkestate watchdog)
+                              (restarts long jobs / today's daily run that died; may run 10 min)
 
   All start as soon as possible after a missed start (laptop off or asleep), never run twice
   at once, and run only while the user is logged on. Rerunning this script replaces them.
@@ -46,8 +50,14 @@ function Register-Job([string]$Name, [string]$Command, $Trigger, [string]$Descri
         -Description $Description -Force | Out-Null
 }
 
+# The daily run reads every due Centanet page (no cap since 2026-10-20): the first pass is
+# ~14 h, so it may run up to 23 h (IgnoreNew: the next day's start is skipped while it runs).
+$dailySettings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries `
+    -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew `
+    -ExecutionTimeLimit (New-TimeSpan -Hours 23)
 Register-Job 'daily listings' 'daily' (New-ScheduledTaskTrigger -Daily -At '08:00') `
-    'HK Estate: snapshot pilot listings (Centanet, 28Hse, Spacious) and prune cached listing pages.'
+    'HK Estate: snapshot listings (Centanet, 28Hse, Spacious) and prune cached listing pages.' `
+    $dailySettings
 Register-Job 'weekly deals' 'update' (New-ScheduledTaskTrigger -Weekly -DaysOfWeek Sunday -At '07:00') `
     'HK Estate: read the newest 28Hse deal-list pages for the pilot estates.'
 
@@ -77,6 +87,24 @@ if (-not $Only -or $Only -eq 'monthly blocked-check') {
         ($months -join '') + '</Months></ScheduleByMonth>'
     $xml = $xml -replace '(?s)<ScheduleByDay>.*?</ScheduleByDay>', $monthly
     Register-ScheduledTask -TaskPath '\hk-estate\' -TaskName 'monthly blocked-check' -Xml $xml -Force | Out-Null
+}
+if (-not $Only -or $Only -eq 'watchdog') {
+    $wdScript = Join-Path $repo 'scripts\watchdog.ps1'
+    $wdArgs = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$wdScript`" " +
+              "-Python `"$python`""
+    $wdAction = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $wdArgs `
+        -WorkingDirectory $repo
+    # every 15 minutes from midnight today, for 10 years (an open-ended repetition is not
+    # accepted by every Windows build)
+    $wdTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date).Date `
+        -RepetitionInterval (New-TimeSpan -Minutes 15) -RepetitionDuration (New-TimeSpan -Days 3650)
+    $wdSettings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries `
+        -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew `
+        -ExecutionTimeLimit (New-TimeSpan -Minutes 10)
+    Register-ScheduledTask -TaskPath '\hk-estate\' -TaskName 'watchdog' -Action $wdAction `
+        -Trigger $wdTrigger -Settings $wdSettings -Principal $principal `
+        -Description 'HK Estate: restart backfill-territory, cd-history, ricacorp or today''s daily run if it died (log: data\logs\watchdog_<date>.log).' `
+        -Force | Out-Null
 }
 Get-ScheduledTask -TaskPath '\hk-estate\' |
     Select-Object TaskPath, TaskName, State,

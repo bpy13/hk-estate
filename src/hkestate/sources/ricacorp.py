@@ -34,6 +34,8 @@ from hkestate.backfill import match_buildings
 from hkestate.fetch import FetchError, SourceBlocked
 from hkestate.link import est_key, match_estate
 from hkestate.normalise import norm_name, parse_area, parse_floor, parse_price_hkd
+from hkestate.patience import RETRY, Patience
+from hkestate.patience import kind as patience_kind
 
 SOURCE = "ricacorp"
 COMMAND = "ricacorp"
@@ -424,7 +426,8 @@ def week_key(today: date) -> str:
 
 
 def run_ricacorp(fetcher, db_path=None, log=print, *, limit: int | None = None,
-                 max_hours: float | None = None, clock=None, today: date | None = None) -> dict:
+                 max_hours: float | None = None, clock=None, today: date | None = None,
+                 sleep=None) -> dict:
     """One pass over the estate pages, resumable within an ISO week (a new week starts a new
     pass). Each page is parsed, its rows stored and its cached copy deleted. Placement runs
     at the end (and can be rerun with `place_deals`)."""
@@ -450,26 +453,38 @@ def run_ricacorp(fetcher, db_path=None, log=print, *, limit: int | None = None,
     stats = {"pages": 0, "deals": 0, "new": 0, "errors": 0}
     status, message, streak = "ok", "", 0
     started = clock()
+    # throttling (429/503, 5xx, timeouts): wait and try the same page again (patience.py)
+    patience = Patience(log, what="ricacorp", fetcher=fetcher, sleep=sleep or time.sleep)
     try:
         for i, page in enumerate(todo, 1):
             if max_hours is not None and clock() - started > max_hours * 3600:
                 message = f"stopped after {max_hours} hours"
                 status = "partial"
                 break
-            try:
-                html = fetcher.get(page.url, "transaction")
-                deals = parse_estate_page(html, page.slug)
-            except SourceBlocked:
-                raise
-            except (FetchError, httpx.TransportError) as e:
-                stats["errors"] += 1
-                streak += 1
-                log(f"  {page.slug}: {type(e).__name__} {e}")
-                if streak >= MAX_CONSECUTIVE_ERRORS:
-                    raise RuntimeError(f"{streak} errors in a row; stopping (rerun)") from e
+            deals = None
+            while deals is None:
+                try:
+                    html = fetcher.get(page.url, "transaction")
+                    deals = parse_estate_page(html, page.slug)
+                except SourceBlocked:
+                    raise
+                except (FetchError, httpx.TransportError) as e:
+                    stats["errors"] += 1
+                    log(f"  {page.slug}: {type(e).__name__} {e}")
+                    if patience_kind(e) is not None:
+                        if patience.on_error(e) == RETRY:
+                            continue
+                    else:
+                        streak += 1
+                        if streak >= MAX_CONSECUTIVE_ERRORS:
+                            raise RuntimeError(
+                                f"{streak} errors in a row; stopping (rerun)") from e
+                    break
+                finally:
+                    fetcher.forget(page.url)  # 1 MB of markup; only the parsed rows are kept
+            if deals is None:
                 continue
-            finally:
-                fetcher.forget(page.url)  # 1 MB of markup; only the parsed rows are kept
+            patience.ok()
             streak = 0
             with db.session(db_path) as con:
                 stats["new"] += save_deals(con, page, deals, today)

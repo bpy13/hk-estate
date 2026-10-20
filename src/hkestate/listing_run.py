@@ -4,7 +4,9 @@ Per source, per estate group:
 - Centanet: the detail sitemap lists every live listing; detail pages are read for new
   listings and, because the sitemap's lastmod is always today, for a rotating seventh of
   known listings each day (oldest read first), so every price is re-read within a week.
-  1 s per request, holding the `centanet` lock so the Centadata jobs on the same host pause.
+  2 s per request (slower when the site pushes back), holding the `centanet` lock (a marker;
+  cd-history and the master pass run alongside at their own slower paces). Every due page
+  is read (no default cap).
   Each batch of 25 pages records its reads, so a stopped run doesn't read them again.
 - 28Hse: the estate's search pages, every day; a detail page only for a new listing or a
   changed price. Skipped while another job holds the `hse28` lock (a backfill), since 28Hse
@@ -15,12 +17,16 @@ A source that finished its whole scope records a run day; listings missing from 
 days in a row are delisted (listings.py). Then every listing in the group is matched to a
 building and floor band, cross-site duplicates are grouped, and same-flat relistings linked.
 
-The database is opened only in short sessions, so a backfill can share it.
+The three sources run at the same time, each in its own thread (different hosts); the
+finishing steps (run days, delisting, matching, flags) run after all of them are done.
+The database is opened only in short sessions (one at a time per process, db.session), so a
+backfill can share it.
 """
 
 from __future__ import annotations
 
 import math
+import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -32,6 +38,8 @@ from hkestate import db, flags, listings, locks, match
 from hkestate.backfill import BACKFILL_MIN_INTERVAL_S, PILOT_ESTATES
 from hkestate.fetch import Fetcher, FetchError, RobotsDisallowed, SourceBlocked, _hk_today
 from hkestate.listing_types import Listing
+from hkestate.patience import RETRY, STOP, Patience
+from hkestate.patience import kind as patience_kind
 from hkestate.sources import centanet, hse28_listings, spacious
 
 Log = Callable[[str], None]
@@ -39,22 +47,31 @@ Log = Callable[[str], None]
 ROTATE_DAYS = 7  # every known Centanet listing is re-read at least this often
 PAGE_CAP = 60  # search pages per target, a safety stop
 MAX_ERROR_SHARE = 0.05  # more failed pages than this: the run doesn't count for delisting
-# hk.centanet.com (robots crawl-delay 1) also serves the Centadata jobs (cd-history, the
-# master pass). They pause while the Centanet part of this run holds the `centanet` lock, so
-# the listings can take the host's whole 1 request a second.
-CENTANET_MIN_INTERVAL_S = 1.0
+# hk.centanet.com (robots crawl-delay 1) also serves the Centadata jobs (cd-history 6 s, the
+# master pass 4 s), which run at the same time (no pauses since 2026-10-20): 0.67 requests
+# a second with cd-history, 0.92 if the rare master pass runs too. The `centanet` lock is
+# held around the Centanet part as a marker.
+# 2 s base: at 1 s, Centanet answered five HTTP 500s in a row after ~800 pages (~23 min) on
+# 2026-10-20, and cd-history then drew 429s; 2 s had run 8,000 pages without trouble. The
+# fetcher slows down further by itself when the site pushes back.
+CENTANET_MIN_INTERVAL_S = 2.0
 CENTANET_LOCK = "centanet"
-# Circuit breaker: this many detail pages in a row failing (after the fetcher's own retries)
-# means the site is struggling or has stopped answering us; stop that source for the run.
+# Circuit breaker for errors that are not throttling (e.g. HTTP 400): this many detail pages
+# in a row failing means something is wrong; stop that source for the run.
 MAX_CONSECUTIVE_ERRORS = 5
+# Throttling (429/503, 5xx runs, timeouts): cool down 10, 20, 30 min and resume; after the
+# third cool-down the source is given up for the day (patience.py).
+MAX_COOLDOWNS = 3
+LISTING_COOLDOWNS_S = (10 * 60, 20 * 60, 30 * 60)
 
 TERRITORY = "territory"  # every estate outside the pilot groups
-# Detail pages / building pages read per run for the territory (politeness and run length:
-# Spacious at 1 s is ~1.7 h for 6,000). Centanet's cap is above the first-pass backlog
-# (~26,000 pages on 2026-10-19, ~10 h at ~1.4 s a page); after that a run is new listings
-# plus a seventh of known ones (~6,000 pages, ~2.5 h), well under it.
-CENTANET_TERRITORY_BUDGET = 30000
-SPACIOUS_TERRITORY_BUDGET = 6000
+# Optional caps on the territory pages read per run (None = read everything due). The caps
+# (30,000 Centanet, 6,000 Spacious) were a run-length choice of the 2026-10-16 build plan;
+# the owner removed them on 2026-10-20: every due page is read however long it takes (the
+# first Centanet pass ~26,000 pages, ~14 h at 2 s; later ~6,000 a day). The sources run in
+# parallel threads, so Spacious and 28Hse don't wait behind Centanet.
+CENTANET_TERRITORY_BUDGET: int | None = None
+SPACIOUS_TERRITORY_BUDGET: int | None = None
 
 SP = "https://www.spacious.hk/zh-tw/%E9%A6%99%E6%B8%AF/n/"
 SP_SALE = "/%E8%B2%B7%E6%A8%93"  # 買樓
@@ -135,10 +152,12 @@ def match_text(lst_estate: str | None, building_text: str | None) -> str | None:
 class ListingRun:
     def __init__(self, *, db_path=None, log: Log = print, fetcher=None, hse28_fetcher=None,
                  now: datetime | None = None, today: date | None = None,
-                 centanet_budget: int = CENTANET_TERRITORY_BUDGET,
-                 spacious_budget: int = SPACIOUS_TERRITORY_BUDGET):
+                 centanet_budget: int | None = CENTANET_TERRITORY_BUDGET,
+                 spacious_budget: int | None = SPACIOUS_TERRITORY_BUDGET,
+                 sleep: Callable[[float], None] = time.sleep):
         self.centanet_budget = centanet_budget
         self.spacious_budget = spacious_budget
+        self.sleep = sleep
         self.db_path = db_path
         self.log = log
         self.now = now or datetime.now()
@@ -150,23 +169,35 @@ class ListingRun:
 
     # ---- helpers -------------------------------------------------------------------------
 
+    # The listing fetchers use the daily run's short cool-downs (10/20/30 min) and make no
+    # probe of their own: after a 429 the item is retried by `_patience` (which counts the
+    # cool-downs and gives the source up for the day after MAX_COOLDOWNS).
+    @staticmethod
+    def _new_fetcher(min_interval: float = 1.0) -> Fetcher:
+        return Fetcher(min_interval=min_interval, cooldowns_s=LISTING_COOLDOWNS_S,
+                       throttle_probes=0)
+
     @property
     def fetcher(self):
         if self._fetcher is None:
-            self._fetcher = Fetcher()
+            self._fetcher = self._new_fetcher()
         return self._fetcher
 
     @property
     def centanet_fetcher(self):
         if self._centanet_fetcher is None:
-            self._centanet_fetcher = Fetcher(min_interval=CENTANET_MIN_INTERVAL_S)
+            self._centanet_fetcher = self._new_fetcher(CENTANET_MIN_INTERVAL_S)
         return self._centanet_fetcher
 
     @property
     def hse28_fetcher(self):
         if self._hse28_fetcher is None:
-            self._hse28_fetcher = Fetcher(min_interval=BACKFILL_MIN_INTERVAL_S)
+            self._hse28_fetcher = self._new_fetcher(BACKFILL_MIN_INTERVAL_S)
         return self._hse28_fetcher
+
+    def _patience(self, what: str, fetcher) -> Patience:
+        return Patience(self.log, what=what, fetcher=fetcher, sleep=self.sleep,
+                        cooldowns_s=LISTING_COOLDOWNS_S, max_cooldowns=MAX_COOLDOWNS)
 
     def close(self):
         seen = set()
@@ -218,7 +249,7 @@ class ListingRun:
 
     def centanet(self, groups: list[str]) -> None:
         """Read Centanet holding the `centanet` lock: the Centadata jobs on the same host
-        pause meanwhile, so the 1 s pacing is the host's whole load."""
+        pause meanwhile, so the listing pace is the host's whole load."""
         holder = locks.held_by(CENTANET_LOCK)
         if holder is not None:
             note = f"skipped: another Centanet listing job (process {holder}) is running"
@@ -245,6 +276,7 @@ class ListingRun:
         known = self._known("centanet")
         blocked = False
         breaker = _Breaker()
+        patience = self._patience("centanet", self.centanet_fetcher)
         for g in groups:
             res = SourceResult("centanet", g)
             mine = [e for e in entries if e.group == g]  # (entries of unrequested groups: skipped)
@@ -261,8 +293,8 @@ class ListingRun:
                      if (self.now - known[e.listing_id][0]).days >= ROTATE_DAYS]
             todo = new + old[:quota] + stale
             due = len(todo)
-            if g == TERRITORY:  # new listings first, then the oldest-read; the rest tomorrow
-                todo = todo[: self.centanet_budget]
+            if g == TERRITORY and self.centanet_budget is not None:
+                todo = todo[: self.centanet_budget]  # new first, then oldest-read; rest later
             n_new = min(len(new), len(todo))  # new listings come first in todo
             cut = f" ({due - len(todo)} left for later runs)" if due > len(todo) else ""
             self.log(f"centanet {g}: {len(mine)} live, {len(new)} new; reading {n_new} new "
@@ -273,30 +305,45 @@ class ListingRun:
                 if blocked:
                     res.complete = False
                     break
-                try:
-                    lst = centanet.parse_detail(
-                        self.centanet_fetcher.get(e.url, "listing"), e.url)
-                    lst.kind = e.kind
-                    batch.append(lst)
-                    res.detail_read.add(e.listing_id)
-                    breaker.ok()
-                except FetchError as ex:
-                    if ex.status in (404, 410):
-                        gone.add(e.listing_id)
-                        breaker.ok()  # the site answered
-                    else:
+                while True:
+                    try:
+                        lst = centanet.parse_detail(
+                            self.centanet_fetcher.get(e.url, "listing"), e.url)
+                        lst.kind = e.kind
+                        batch.append(lst)
+                        res.detail_read.add(e.listing_id)
+                        breaker.ok()
+                        patience.ok()
+                    except (FetchError, httpx.TransportError) as ex:
+                        if patience_kind(ex) is not None:
+                            action = patience.on_error(ex)
+                            if action == RETRY:
+                                continue  # same page again, after the cool-down
+                            res.errors += 1
+                            self.log(f"  centanet {e.listing_id}: {type(ex).__name__} {ex}")
+                            if action == STOP:
+                                res.note = f"stopped for the day: {patience.note}"
+                                res.complete = False
+                                self.log(f"centanet {res.note}")
+                                blocked = True
+                        elif ex.status in (404, 410):
+                            gone.add(e.listing_id)
+                            breaker.ok()  # the site answered
+                            patience.ok()
+                        else:
+                            res.errors += 1
+                            self.log(f"  centanet {e.listing_id}: {ex}")
+                            if breaker.fail():
+                                res.note = breaker.message
+                                self.log(f"centanet stopped for this run: {breaker.message}")
+                                blocked = True
+                    except RobotsDisallowed as ex:
                         res.errors += 1
-                        self.log(f"  centanet {e.listing_id}: {ex}")
-                        if breaker.fail():
-                            res.note = breaker.message
-                            self.log(f"centanet stopped for this run: {breaker.message}")
-                            blocked = True
-                except (RobotsDisallowed, httpx.TransportError) as ex:
-                    res.errors += 1
-                    self.log(f"  centanet {e.listing_id}: {type(ex).__name__}")
-                except SourceBlocked as ex:
-                    self.log(f"centanet blocked: {ex}")
-                    blocked = True
+                        self.log(f"  centanet {e.listing_id}: {type(ex).__name__}")
+                    except SourceBlocked as ex:
+                        self.log(f"centanet blocked: {ex}")
+                        blocked = True
+                    break
                 res.pages += 1
                 if len(batch) >= 25:
                     self._store(g, batch, "detail")
@@ -385,20 +432,33 @@ class ListingRun:
         self._store(g, items, "search")
         details, pending = [], []
         breaker = _Breaker()
+        patience = self._patience("hse28", f)
         for x in items:
             k = known.get(x.listing_id)
             if k is not None and k[1] == x.price_hkd:
                 continue  # known listing, same price: the search card is enough
-            try:
-                d = hse28_listings.parse_detail(f.get(x.url, "listing"), x.url, x.kind)
-            except (FetchError, RobotsDisallowed, httpx.TransportError) as e:
-                res.errors += 1
-                self.log(f"  hse28 detail {x.listing_id}: {e}")
-                if isinstance(e, FetchError) and e.status not in (404, 410) and breaker.fail():
-                    self._store(g, pending, "detail")
-                    raise SourceBlocked(breaker.message) from e
+            d = None
+            while True:
+                try:
+                    d = hse28_listings.parse_detail(f.get(x.url, "listing"), x.url, x.kind)
+                except (FetchError, RobotsDisallowed, httpx.TransportError) as e:
+                    action = patience.on_error(e) if patience_kind(e) is not None else None
+                    if action == RETRY:
+                        continue
+                    res.errors += 1
+                    self.log(f"  hse28 detail {x.listing_id}: {e}")
+                    if action == STOP:
+                        self._store(g, pending, "detail")
+                        raise SourceBlocked(f"stopped for the day: {patience.note}") from e
+                    if (action is None and isinstance(e, FetchError)
+                            and e.status not in (404, 410) and breaker.fail()):
+                        self._store(g, pending, "detail")
+                        raise SourceBlocked(breaker.message) from e
+                break
+            if d is None:
                 continue
             breaker.ok()
+            patience.ok()
             d.estate_name = d.estate_name or x.estate_name
             d.source_estate_key = x.source_estate_key
             d.text_for_flags = f"{d.text_for_flags} {x.text_for_flags}"
@@ -485,35 +545,54 @@ class ListingRun:
         pilot_seen = {i for r in self.results if r.source == "spacious" for i in r.seen}
         seen: dict[str, Listing] = {}
         breaker = _Breaker()
-        for k, (bid, url) in enumerate(plan, 1):
-            try:
-                count = 0
-                for _ in range(3):
-                    page = spacious.parse_search_page(self.fetcher.get(url, "listing"),
-                                                      "sale", url)
-                    mine = [x for x in page.listings if x.source_building_key == str(bid)]
-                    new = [x for x in mine if x.listing_id not in seen]
-                    for x in mine:
-                        if x.listing_id not in claimed and x.listing_id not in pilot_seen:
-                            seen[x.listing_id] = x
-                    count += len(new)
-                    res.pages += 1
-                    if not page.next_url or not new:
-                        break
-                    url = page.next_url
-            except SourceBlocked as e:
-                res.note = f"blocked: {e}"
-                self.log(f"spacious blocked: {e}")
+        patience = self._patience("spacious", self.fetcher)
+        stop = False
+        for k, (bid, first_url) in enumerate(plan, 1):
+            failed = False
+            while True:
+                url = first_url
+                try:
+                    count = 0
+                    for _ in range(3):
+                        page = spacious.parse_search_page(self.fetcher.get(url, "listing"),
+                                                          "sale", url)
+                        mine = [x for x in page.listings if x.source_building_key == str(bid)]
+                        new = [x for x in mine if x.listing_id not in seen]
+                        for x in mine:
+                            if x.listing_id not in claimed and x.listing_id not in pilot_seen:
+                                seen[x.listing_id] = x
+                        count += len(new)
+                        res.pages += 1
+                        if not page.next_url or not new:
+                            break
+                        url = page.next_url
+                except SourceBlocked as e:
+                    res.note = f"blocked: {e}"
+                    self.log(f"spacious blocked: {e}")
+                    stop = True
+                except (FetchError, RobotsDisallowed, httpx.TransportError) as e:
+                    action = patience.on_error(e) if patience_kind(e) is not None else None
+                    if action == RETRY:
+                        continue
+                    failed = True
+                    res.errors += 1
+                    self.log(f"  spacious building {bid}: {e}")
+                    if action == STOP:
+                        res.note = f"stopped for the day: {patience.note}"
+                        self.log(f"spacious {res.note}")
+                        stop = True
+                    elif (action is None and isinstance(e, FetchError)
+                          and e.status not in (404, 410) and breaker.fail()):
+                        res.note = breaker.message
+                        self.log(f"spacious stopped for this run: {breaker.message}")
+                        stop = True
                 break
-            except (FetchError, RobotsDisallowed, httpx.TransportError) as e:
-                res.errors += 1
-                self.log(f"  spacious building {bid}: {e}")
-                if isinstance(e, FetchError) and e.status not in (404, 410) and breaker.fail():
-                    res.note = breaker.message
-                    self.log(f"spacious stopped for this run: {breaker.message}")
-                    break
+            if stop:
+                break
+            if failed:
                 continue
             breaker.ok()
+            patience.ok()
             with db.session(self.db_path) as con:
                 spacious.record_read(con, bid, today, count)
             if k % 200 == 0:
@@ -675,14 +754,42 @@ def match_listings(con, groups: list[str], today: date) -> dict:
     return out
 
 
+def _run_sources(run: ListingRun, groups: list[str], sources: list[str],
+                 parallel: bool) -> None:
+    """Each source in its own thread (they are different hosts, each with its own fetcher
+    and pace), so a long Centanet pass doesn't hold up 28Hse and Spacious. Returns when all
+    are done; the first error any of them raised (including Ctrl+C) is raised then."""
+    if not parallel or len(sources) < 2:
+        for s in sources:
+            getattr(run, s)(groups)
+        return
+    errors: list[BaseException] = []
+
+    def work(s: str) -> None:
+        try:
+            getattr(run, s)(groups)
+        except BaseException as e:  # noqa: BLE001 - handed to the main thread
+            run.log(f"{s}: stopped by {type(e).__name__}: {e}")
+            errors.append(e)
+
+    threads = [threading.Thread(target=work, args=(s,), name=f"listings-{s}", daemon=True)
+               for s in sources]
+    for t in threads:
+        t.start()
+    for t in threads:
+        while t.is_alive():
+            t.join(1.0)  # a short join, so Ctrl+C still reaches the main thread
+    if errors:
+        raise errors[0]
+
+
 def run_listings(groups: list[str], sources: list[str], *, db_path=None, log: Log = print,
-                 **kw) -> dict:
+                 parallel: bool = True, **kw) -> dict:
     run = ListingRun(db_path=db_path, log=log, **kw)
     t0 = time.monotonic()
     try:
-        for s in sources:
-            getattr(run, s)(groups)
-        summary = run.finish()
+        _run_sources(run, groups, sources, parallel)
+        summary = run.finish()  # after every source: delisting, matching, flags
     finally:
         run.close()
     summary["elapsed_s"] = round(time.monotonic() - t0)

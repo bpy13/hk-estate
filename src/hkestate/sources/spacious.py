@@ -177,17 +177,17 @@ def add_buildings(con, pages: list[BuildingPage], day) -> int:
     return len(new)
 
 
-def plan_reads(con, budget: int) -> list[tuple[int, str]]:
+def plan_reads(con, budget: int | None) -> list[tuple[int, str]]:
     """Buildings to read this run: those that had listings first (oldest read first), then
-    never-read ones, then the longest unread."""
-    rows = con.execute(
-        """
+    never-read ones, then the longest unread. `budget` None: every building."""
+    sql = """
         SELECT building_id, url FROM spacious_building
         ORDER BY (coalesce(last_count, 0) > 0) DESC,   -- had listings: every run
                  (last_read IS NULL) DESC,             -- then never read
-                 last_read, building_id
-        LIMIT ?""", [budget]).fetchall()
-    return rows
+                 last_read, building_id"""
+    if budget is None:
+        return con.execute(sql).fetchall()
+    return con.execute(sql + " LIMIT ?", [budget]).fetchall()
 
 
 def record_read(con, building_id: int, day, count: int) -> None:

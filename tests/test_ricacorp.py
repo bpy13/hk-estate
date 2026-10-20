@@ -267,5 +267,33 @@ def test_timeout_on_one_page_is_counted_and_the_pass_goes_on(tmp_path):
 
     f = Fetcher(cache_dir=tmp_path / "cache", transport=httpx.MockTransport(handler),
                 sleep=lambda s: None, jitter=lambda: 0.0)
-    stats = rc.run_ricacorp(f, path, log=lambda *a: None, today=date(2026, 10, 16))
-    assert stats["pages"] == 1 and stats["errors"] == 1
+    stats = rc.run_ricacorp(f, path, log=lambda *a: None, today=date(2026, 10, 16),
+                            sleep=lambda s: None)
+    # the page is tried 3 times (a timeout may be throttling), then skipped
+    assert stats["pages"] == 1 and stats["errors"] == 3
+
+
+def test_429s_are_waited_out_and_the_same_page_is_read(tmp_path):
+    path = tmp_path / "t.duckdb"
+    with db.session(path) as con:
+        db.init_db(con)
+    answered = []
+
+    def handler(request):
+        p = request.url.path
+        if p == "/robots.txt":
+            return httpx.Response(200, text="User-agent: *\nDisallow: /api/\n")
+        if p.endswith("sitemap-0.xml"):
+            return httpx.Response(200, text=SITEMAP)
+        answered.append(str(request.url))
+        if len(answered) <= 3:
+            return httpx.Response(429)
+        return httpx.Response(200, text=PAGE)
+
+    slept = []
+    f = Fetcher(cache_dir=tmp_path / "cache", transport=httpx.MockTransport(handler),
+                sleep=slept.append, jitter=lambda: 0.0)
+    stats = rc.run_ricacorp(f, path, log=lambda *a: None, today=date(2026, 10, 16),
+                            sleep=lambda s: None)
+    assert stats["pages"] == 2 and answered[0] == answered[1] == answered[2] == answered[3]
+    assert 15 * 60 in [round(s) for s in slept]  # the fetcher's cool-down

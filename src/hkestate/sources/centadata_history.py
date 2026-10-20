@@ -31,8 +31,10 @@ from datetime import datetime
 
 import httpx
 
-from hkestate import db, locks
+from hkestate import db
 from hkestate.fetch import FetchError
+from hkestate.patience import RETRY, Patience
+from hkestate.patience import kind as patience_kind
 from hkestate.sources import centadata as cd
 
 SOURCE = cd.SOURCE
@@ -40,12 +42,14 @@ COMMAND = "cd-history"
 API_URL = "https://hk.centanet.com/findproperty/api/Transaction/Search"
 PAGE_SIZE = 100  # the largest size the server honoured (500 gave HTTP 500)
 BATCH_CODES = 40  # flats have about 2 sales each, so a batch is mostly one page
-MIN_INTERVAL_S = 4.0  # hk.centanet.com is shared with the master pass and listings
-MAX_CONSECUTIVE_ERRORS = 5
+# hk.centanet.com is shared with the master pass and listings, which run at the same time
+# (no pauses since 2026-10-20: listings 2 s + cd-history 6 s is about 0.67 requests a
+# second in all). 4 s drew HTTP 429 on 2026-10-20 and the API still answered 429 eleven
+# hours later: 6 s from then on, and the fetcher slows down further by itself when the site
+# pushes back.
+MIN_INTERVAL_S = 6.0
+MAX_CONSECUTIVE_ERRORS = 5  # non-throttle errors (404, bad answers) in a row: stop
 MAX_OFFSET = 10_000  # the site's own script never asks past this
-LOCK_WAIT_S = 60.0
-# held by the listing job while it reads Centanet at 1 request a second: pause meanwhile
-CENTANET_LOCK = "centanet"
 
 KEEP_FIELDS = (
     "id", "cuntcode", "insDate", "regDate", "transactionPrice", "gainPercent", "nArea", "gArea",
@@ -228,9 +232,11 @@ def run_history(fetcher, db_path=None, log=print, estates: list[str] | None = No
                 wait=time.sleep, clock=time.monotonic) -> dict:
     """Load full sale histories, largest estates first; resumable per building.
 
-    `limit` counts buildings (this run). Pauses while the `centanet` lock is held (the listing
-    job is reading Centanet listings on the same host; its 28Hse and Spacious parts don't
-    pause us), stops on 5 errors in a row, and writes a run_log row."""
+    `limit` counts buildings (this run). Runs alongside the Centanet listings (same host; the
+    two paces together stay under what worked for days) and writes a run_log row. `wait` is
+    the sleep used for its own cool-downs. When the site pushes back (429/503, 5xx, timeouts) it
+    waits and tries the same batch again, for as long as it takes (patience.py); a batch
+    that keeps failing with a 5xx on its own is skipped and its buildings stay unfinished."""
     with db.session(db_path) as con:
         db.init_db(con)
         all_estates = load_flats(con, estates)
@@ -256,6 +262,7 @@ def run_history(fetcher, db_path=None, log=print, estates: list[str] | None = No
     flats = {f.code: f for e in all_estates for b in e.buildings for f in b.flats}
     stats = {"buildings": 0, "batches": 0, "sales": 0, "deals": 0, "errors": 0, "stopped": ""}
     start, streak, status, message = clock(), 0, "ok", ""
+    patience = Patience(log, what="cd-history", fetcher=fetcher, sleep=wait)
     try:
         for est, todo in plan:
             failed: set[str] = set()
@@ -263,22 +270,27 @@ def run_history(fetcher, db_path=None, log=print, estates: list[str] | None = No
                 if max_hours is not None and clock() - start > max_hours * 3600:
                     stats["stopped"] = "max-hours"
                     break
-                if locks.wait_while_held(
-                        CENTANET_LOCK, wait=wait, poll_s=LOCK_WAIT_S,
-                        on_pause=lambda pid: log(f"Centanet listings running (process {pid}): "
-                                                 "pausing")):
-                    log("Centanet listings finished: resuming")
-                try:
-                    items = fetch_sales(fetcher, codes)
-                except (FetchError, httpx.HTTPError, ValueError) as e:
-                    stats["errors"] += 1
-                    streak += 1
-                    failed |= touched
-                    log(f"  {est.estate_id}: {type(e).__name__} {e}")
-                    if streak >= MAX_CONSECUTIVE_ERRORS:
-                        raise RuntimeError(f"{streak} errors in a row; stopping (rerun)") from e
+                items = None
+                while items is None:
+                    try:
+                        items = fetch_sales(fetcher, codes)
+                    except (FetchError, httpx.HTTPError, ValueError) as e:
+                        stats["errors"] += 1
+                        log(f"  {est.estate_id}: {type(e).__name__} {e}")
+                        if patience_kind(e) is not None:
+                            if patience.on_error(e) == RETRY:
+                                continue  # same batch again (after the cool-down)
+                        else:  # 404, a parse error: as before, 5 in a row stop the run
+                            streak += 1
+                            if streak >= MAX_CONSECUTIVE_ERRORS:
+                                raise RuntimeError(
+                                    f"{streak} errors in a row; stopping (rerun)") from e
+                        failed |= touched
+                        break
+                if items is None:
                     continue
                 streak = 0
+                patience.ok()
                 with db.session(db_path) as con:
                     stats["deals"] += store_sales(con, items, flats)
                     for bid in finished:

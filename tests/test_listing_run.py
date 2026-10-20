@@ -160,7 +160,7 @@ def test_centanet_holds_the_centanet_lock_only_while_it_reads(env):
     fake = CentanetPages(IDS[:2])
     listing_run.run_listings(["taikoo-shing"], ["centanet", "spacious"], db_path=env,
                              log=lambda m: None, fetcher=fake, now=datetime(2026, 10, 16, 8),
-                             today=TODAY)
+                             today=TODAY, parallel=False)
     centanet = [s for u, s in zip(fake.asked, fake.lock_seen, strict=True) if "centanet" in u]
     others = [s for u, s in zip(fake.asked, fake.lock_seen, strict=True) if "centanet" not in u]
     assert centanet and all(centanet)  # held for every Centanet request
@@ -252,20 +252,27 @@ def _hse_listing(i):
 
 
 class FailingDetails(FakeFetcher):
-    """Search pages work; every detail page fails with a 500 once retries are used up."""
+    """Search pages work; detail pages fail with `status` (the first `fail_n`, or all)."""
+
+    def __init__(self, pages, status=400, fail_n=None):
+        super().__init__(pages)
+        self.status, self.fail_n, self.n = status, fail_n, 0
 
     def get(self, url, page_type):
         self.asked.append(url)
         if "detail" in url:
-            raise FetchError(url, 500)
+            self.n += 1
+            if self.fail_n is None or self.n <= self.fail_n:
+                raise FetchError(url, self.status)
+            return read("centanet", "detail_sale.html")
         return "<html></html>"
 
 
-def test_centanet_stops_after_five_consecutive_fetch_errors(env):
+def _failing_centanet(**kw):
     locs = "".join(
         f"<url><loc>https://hk.centanet.com/findproperty/detail/太古城-x_ZZB{i:03d}?theme=buy"
         "</loc></url>" for i in range(12))
-    fake = FailingDetails({})
+    fake = FailingDetails({}, **kw)
     real_get = fake.get
 
     def get(url, page_type):
@@ -274,12 +281,47 @@ def test_centanet_stops_after_five_consecutive_fetch_errors(env):
         return real_get(url, page_type)
 
     fake.get = get
+    return fake
+
+
+def test_centanet_stops_after_five_consecutive_non_throttle_errors(env):
+    fake = _failing_centanet(status=400)
     summary = listing_run.run_listings(
         ["taikoo-shing"], ["centanet"], db_path=env, log=lambda m: None, fetcher=fake,
         hse28_fetcher=fake, now=datetime(2026, 10, 16, 8), today=TODAY)
     assert len([u for u in fake.asked if "ZZB" in u]) == 5
     res = summary["sources"]["centanet"]["taikoo-shing"]
     assert res["complete"] is False and "5 consecutive" in res["note"]
+
+
+@pytest.mark.parametrize(("status", "fail_n", "slept", "seen"), [
+    (429, 2, [600, 1200], 12),  # the same page again after each cool-down
+    (500, 5, [600], 11),  # page 1 failed 3 times (skipped); 5 in a row: a cool-down
+])
+def test_centanet_cools_down_and_resumes_when_throttled(env, status, fail_n, slept, seen):
+    """2026-10-20: five 500s in a row stopped Centanet for the day. Now it cools down
+    (10 min, 20 min ...) and carries on."""
+    fake = _failing_centanet(status=status, fail_n=fail_n)
+    sleeps, logs = [], []
+    summary = listing_run.run_listings(
+        ["taikoo-shing"], ["centanet"], db_path=env, log=logs.append, fetcher=fake,
+        now=datetime(2026, 10, 16, 8), today=TODAY, sleep=sleeps.append)
+    res = summary["sources"]["centanet"]["taikoo-shing"]
+    assert res["note"] == "" and res["new"] == seen
+    assert sleeps == slept
+    assert any("cooling down 10 min" in m for m in logs)
+
+
+@pytest.mark.parametrize("status", [429, 503, 500])
+def test_centanet_gives_up_for_the_day_after_three_cool_downs(env, status):
+    fake = _failing_centanet(status=status)
+    sleeps, logs = [], []
+    summary = listing_run.run_listings(
+        ["taikoo-shing"], ["centanet"], db_path=env, log=logs.append, fetcher=fake,
+        now=datetime(2026, 10, 16, 8), today=TODAY, sleep=sleeps.append)
+    res = summary["sources"]["centanet"]["taikoo-shing"]
+    assert res["complete"] is False and "gave up after 3 cool-downs" in res["note"]
+    assert sleeps == [600, 1200, 1800]  # 10, 20, 30 min, then it stopped
 
 
 def test_hse28_stops_after_five_consecutive_fetch_errors(env, monkeypatch):
@@ -295,3 +337,70 @@ def test_hse28_stops_after_five_consecutive_fetch_errors(env, monkeypatch):
     assert len([u for u in fake.asked if u.startswith("detail-")]) == 5
     res = summary["sources"]["hse28"]["taikoo-shing"]
     assert res["complete"] is False and "5 consecutive" in res["note"]
+
+
+def test_hse28_gives_up_for_the_day_after_three_cool_downs(env, monkeypatch):
+    from types import SimpleNamespace as NS
+    monkeypatch.setattr(listing_run.hse28_listings, "parse_search_page",
+                        lambda text, kind: NS(listings=[_hse_listing(i) for i in range(12)],
+                                              next_url=None))
+    monkeypatch.setattr(listing_run.ListingRun, "_store", lambda *a, **k: None)
+    fake = FailingDetails({}, status=429)
+    sleeps = []
+    summary = listing_run.run_listings(
+        ["taikoo-shing"], ["hse28"], db_path=env, log=lambda m: None, fetcher=fake,
+        hse28_fetcher=fake, now=datetime(2026, 10, 16, 8), today=TODAY, sleep=sleeps.append)
+    assert sleeps == [600, 1200, 1800]
+    res = summary["sources"]["hse28"]["taikoo-shing"]
+    assert res["complete"] is False and "gave up after 3 cool-downs" in res["note"]
+
+
+def test_territory_reads_every_due_page_by_default(env):
+    fake = CentanetPages(IDS[:5], estate="海景苑")
+    run = listing_run.ListingRun(db_path=env, log=lambda m: None, fetcher=fake,
+                                 now=datetime(2026, 10, 16, 8), today=TODAY)
+    assert run.centanet_budget is None
+    run.centanet([listing_run.TERRITORY])
+    assert len([u for u in fake.asked if "sitemap" not in u]) == 5
+
+
+def test_sources_run_at_the_same_time_and_finish_waits_for_all(env, monkeypatch):
+    """Centanet can't finish until Spacious has made a request: only possible in parallel."""
+    import threading
+
+    spacious_asked = threading.Event()
+    order = []
+
+    class Gate(CentanetPages):
+        def get(self, url, page_type):
+            if "centanet" in url and "sitemap" not in url:
+                assert spacious_asked.wait(10), "Spacious did not run alongside Centanet"
+            elif "centanet" not in url:
+                spacious_asked.set()
+                order.append("spacious")
+                return "<html></html>"
+            order.append("centanet")
+            return super().get(url, page_type)
+
+    real_finish = listing_run.ListingRun.finish
+
+    def finish(self):
+        order.append("finish")
+        return real_finish(self)
+
+    monkeypatch.setattr(listing_run.ListingRun, "finish", finish)
+    fake = Gate(IDS[:2])
+    summary = listing_run.run_listings(
+        ["taikoo-shing"], ["centanet", "spacious"], db_path=env, log=lambda m: None,
+        fetcher=fake, now=datetime(2026, 10, 16, 8), today=TODAY)
+    assert order[-1] == "finish" and order.count("finish") == 1
+    assert summary["sources"]["centanet"]["taikoo-shing"]["new"] == 2
+
+
+def test_an_error_in_one_source_thread_is_raised_after_the_others_finish(env):
+    fake = CentanetPages(IDS[:3], stop_at=2)  # Centanet's 2nd detail page: Ctrl+C
+    with pytest.raises(KeyboardInterrupt):
+        listing_run.run_listings(["taikoo-shing"], ["centanet", "spacious"], db_path=env,
+                                 log=lambda m: None, fetcher=fake, today=TODAY)
+    assert any("spacious" in u for u in fake.asked)  # Spacious still ran to its end
+    assert not locks.lock_path("centanet").exists()

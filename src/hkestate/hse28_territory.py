@@ -181,7 +181,8 @@ def run_territory(
     clock=time.monotonic,
 ) -> dict:
     """Backfill the unfinished estates in order. Stops after `max_estates` / `max_hours`
-    (checked between estates) or when the site keeps refusing; rerun to resume."""
+    (checked between estates) or on a block (403/challenge); 429s, 5xx and network errors
+    are waited out (`_Loader.get`). Rerun to resume."""
     with db.session(db_path) as con:
         db.init_db(con)
         link.ensure_tables(con)
@@ -192,7 +193,8 @@ def run_territory(
     log(f"{len(todo)} estates to do; name matching {counts}")
     own = fetcher is None
     fetcher = fetcher or Fetcher(min_interval=BACKFILL_MIN_INTERVAL_S)
-    loader = _Loader(fetcher, db_path, log, run_id, pause=pause)
+    # patient: throttling is waited out for as long as it takes, the run never stops on it
+    loader = _Loader(fetcher, db_path, log, run_id, pause=pause, patient=True)
     stats = {"estates": 0, "gone": 0, "errors": 0, "linked": 0}
     status, message = "ok", ""
     started = clock()

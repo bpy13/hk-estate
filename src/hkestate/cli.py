@@ -11,6 +11,7 @@
     hkestate rank                              ranked listings CSV in data/reports/
     hkestate report [--from-snapshot]          growth study, findings_<date>.md
     hkestate check-blocked                      monthly: do blocked sites still refuse us?
+    hkestate watchdog [--dry-run]              every 15 min: restart jobs that died
     hkestate status
 
 Every run is logged to data/logs/<command>_<time>.log and to `run_log` in the database.
@@ -19,11 +20,33 @@ Every run is logged to data/logs/<command>_<time>.log and to `run_log` in the da
 from __future__ import annotations
 
 import argparse
+import json
+import logging
 import sys
 from datetime import datetime
 
 from hkestate import db, locks
 from hkestate.config import get_data_dir
+
+# Long resumable jobs: they wait for the database file for as long as it takes (db.connect)
+# instead of giving up after 30 minutes.
+LONG_JOBS = {"backfill", "backfill-territory", "cd-history", "ricacorp", "master", "srpe"}
+
+_argv: list[str] = []  # this run's arguments, written to the log (the watchdog reuses them)
+
+
+class _FetchLogHandler(logging.Handler):
+    """Puts the fetcher's pacing messages (slowing down, cool-downs) in the job's log."""
+
+    def __init__(self, log):
+        super().__init__(logging.INFO)
+        self._log = log
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            self._log(record.getMessage())
+        except Exception:  # noqa: BLE001 - logging must never stop a job
+            pass
 
 
 def _logger(command: str):
@@ -41,6 +64,14 @@ def _logger(command: str):
             print(line.encode("ascii", "replace").decode(), flush=True)
 
     log(f"log file: {path}")
+    if _argv:
+        log(f"command line: {json.dumps(_argv, ensure_ascii=False)}")
+    fetch_log = logging.getLogger("hkestate.fetch")
+    for h in [h for h in fetch_log.handlers if isinstance(h, _FetchLogHandler)]:
+        fetch_log.removeHandler(h)
+    fetch_log.addHandler(_FetchLogHandler(log))
+    fetch_log.setLevel(logging.INFO)
+    fetch_log.propagate = False
     return log
 
 
@@ -62,6 +93,7 @@ def cmd_backfill(args) -> int:
                 log=log,
                 refresh=args.refresh,
                 skip_flats=args.skip_flats,
+                patient=True,  # wait out throttling instead of stopping
             )
     except locks.LockBusy as e:
         log(f"not started: {e}")
@@ -117,7 +149,8 @@ def _listings(args, command: str, sources: list[str], prune: bool) -> int:
         with locks.hold("listings"):
             summary = listing_run.run_listings(
                 groups, sources, db_path=args.db, log=log,
-                centanet_budget=args.centanet_budget, spacious_budget=args.spacious_budget)
+                centanet_budget=args.centanet_budget, spacious_budget=args.spacious_budget,
+                parallel=not args.sequential)
         for src, per_group in summary["sources"].items():
             for g, s in per_group.items():
                 log(f"{src} {g}: {s}")
@@ -229,8 +262,8 @@ def cmd_master(args) -> int:
     from hkestate.sources import cd_master
 
     log = _logger("master")
-    # 2 s between requests, and a pause while the Centanet listing scraper (1 s) holds the
-    # `centanet` lock: hk.centanet.com is shared
+    # 4 s between requests: hk.centanet.com is shared with the listings and cd-history,
+    # which run at the same time
     with Fetcher(min_interval=cd_master.MIN_INTERVAL_S) as f:
         cd_master.run_master(f, db_path=args.db, log=log, limit=args.limit)
     return 0
@@ -310,9 +343,13 @@ def cmd_ricacorp(args) -> int:
             db.init_db(con)
             ricacorp.place_deals(con, log=log)
         return 0
-    with Fetcher(min_interval=ricacorp.MIN_INTERVAL_S) as f:
-        ricacorp.run_ricacorp(f, db_path=args.db, log=log, limit=args.limit,
-                              max_hours=args.max_hours)
+    try:
+        with locks.hold("ricacorp"), Fetcher(min_interval=ricacorp.MIN_INTERVAL_S) as f:
+            ricacorp.run_ricacorp(f, db_path=args.db, log=log, limit=args.limit,
+                                  max_hours=args.max_hours)
+    except locks.LockBusy as e:
+        log(f"not started: {e}")
+        return 1
     return 0
 
 def _logged(args, command: str, work) -> int:
@@ -429,15 +466,27 @@ def cmd_status(args) -> int:
     return 0
 
 
+def cmd_watchdog(args) -> int:
+    """Every 15 minutes (scheduled): restart a long job or today's daily run that died."""
+    from hkestate import watchdog
+
+    watchdog.run(dry_run=args.dry_run)
+    return 0
+
+
 def _budgets(parser) -> None:
     from hkestate import listing_run
 
     parser.add_argument("--centanet-budget", type=int,
                         default=listing_run.CENTANET_TERRITORY_BUDGET,
-                        help="territory detail pages read per run (new listings first)")
+                        help="optional cap on territory detail pages read per run (new "
+                             "listings first); default: every due page")
     parser.add_argument("--spacious-budget", type=int,
                         default=listing_run.SPACIOUS_TERRITORY_BUDGET,
-                        help="territory Spacious building pages read per run")
+                        help="optional cap on territory Spacious building pages per run; "
+                             "default: every building")
+    parser.add_argument("--sequential", action="store_true",
+                        help="read the sources one after another instead of in parallel")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -529,8 +578,22 @@ def main(argv: list[str] | None = None) -> int:
     pr.add_argument("--days", type=int, default=7)
     pr.set_defaults(func=cmd_prune)
 
+    wd = sub.add_parser("watchdog",
+                        help="restart long jobs and today's daily run if they died (no DB)")
+    wd.add_argument("--dry-run", action="store_true",
+                    help="log the decisions, start nothing")
+    wd.set_defaults(func=cmd_watchdog)
+
+    argv = sys.argv[1:] if argv is None else list(argv)
     args = p.parse_args(argv)
-    return args.func(args)
+    _argv[:] = argv
+    # the long jobs wait for the database file for as long as it takes; others 30 minutes
+    before = db.lock_wait()
+    db.set_lock_wait(None if args.command in LONG_JOBS else db.LOCK_WAIT_S)
+    try:
+        return args.func(args)
+    finally:
+        db.set_lock_wait(before)
 
 
 if __name__ == "__main__":

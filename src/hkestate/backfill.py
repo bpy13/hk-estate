@@ -137,8 +137,9 @@ def match_building(location: str, buildings: dict[str, tuple[str, str]]) -> str 
 
 class _Loader:
     def __init__(self, fetcher, db_path, log: Log, run_id: int, pause=time.sleep,
-                 page_type: str = "transaction"):
+                 page_type: str = "transaction", patient: bool = False):
         self.pause = pause
+        self.patient = patient  # wait out throttling for ever instead of stopping
         self.page_type = page_type  # cache lifetime: 'listing' (1 day) forces a fresh read
         self.f = fetcher
         self.db_path = db_path
@@ -150,22 +151,37 @@ class _Loader:
 
     def get(self, url: str) -> str:
         """Fetch a page. A network error, or the site still answering 429/5xx after the
-        fetcher's own back-off, gets a long cool-down and another try; after BUSY_LIMIT
-        tries the run stops with SourceBusy (rerun later: it resumes)."""
-        for attempt in range(1, BUSY_LIMIT + 1):
+        fetcher's own back-off, gets a long cool-down and another try (none of our own when
+        the fetcher already has a cool-down pending for the host).
+
+        Not patient (the weekly update): after BUSY_LIMIT tries the run stops with SourceBusy
+        (rerun later: it resumes). Patient (the backfills): 429/503 and network errors are
+        waited out for as long as it takes; another 5xx BUSY_LIMIT times on the same page
+        raises its FetchError (the estate is retried on the next run)."""
+        attempt = 0
+        while True:
+            attempt += 1
             try:
                 return self.f.get(url, self.page_type)
             except httpx.TransportError as e:
-                reason = type(e).__name__
+                reason, err, throttled = type(e).__name__, e, True
             except FetchError as e:
                 if e.status != 429 and (e.status or 0) < 500:
                     raise
-                reason = f"HTTP {e.status}"
-            if attempt == BUSY_LIMIT:
+                reason, err, throttled = f"HTTP {e.status}", e, e.status in (429, 503)
+            if attempt >= BUSY_LIMIT and not (self.patient and throttled):
+                if self.patient:
+                    self.log(f"  {reason} {attempt} times on one page; leaving the estate "
+                             f"for the next run: {url}")
+                    raise err
                 raise SourceBusy(f"{reason} {BUSY_LIMIT} times in a row: {url}")
+            left = getattr(self.f, "cooldown_remaining", lambda u: 0.0)(url)
+            if left > 0:
+                self.log(f"  site busy ({reason}); waiting out the cool-down "
+                         f"({left / 60:.0f} min): {url}")
+                continue
             self.log(f"  site busy ({reason}); pausing {COOLDOWN_S // 60} min: {url}")
             self.pause(COOLDOWN_S)
-        raise AssertionError("unreachable")
 
     def done(self, key: str) -> bool:
         with db.session(self.db_path) as con:
@@ -509,8 +525,10 @@ def backfill_estates(
     refresh: bool = False,
     skip_flats: bool = False,
     pause=time.sleep,
+    patient: bool = False,
 ) -> int:
-    """Load every estate in `estates` (group name -> 28Hse estates). Returns rows added."""
+    """Load every estate in `estates` (group name -> 28Hse estates). Returns rows added.
+    `patient`: wait out throttling for as long as it takes (`_Loader.get`)."""
     with db.session(db_path) as con:
         db.init_db(con)
         con.execute(
@@ -525,7 +543,7 @@ def backfill_estates(
         run_id = db.start_run(con, COMMAND, json.dumps(sorted(estates), ensure_ascii=False))
     own_fetcher = fetcher is None
     fetcher = fetcher or Fetcher(min_interval=BACKFILL_MIN_INTERVAL_S)
-    loader = _Loader(fetcher, db_path, log, run_id, pause=pause)
+    loader = _Loader(fetcher, db_path, log, run_id, pause=pause, patient=patient)
     status, message = "ok", ""
     try:
         for group, refs in estates.items():

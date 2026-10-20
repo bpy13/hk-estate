@@ -6,9 +6,21 @@ Every page the project reads goes through `Fetcher.get`. It:
   jitter between requests to the same host;
 - follows redirects by hand (max 5), checking robots.txt and pacing for every hop;
 - returns a cached copy if one is younger than the page type's lifetime (no request made);
-- retries 429 and 5xx up to 3 times with exponential back-off (2 s, 4 s, 8 s);
+- retries 500/502/504 up to 3 times with exponential back-off (2 s, 4 s, 8 s);
+- adapts the pace per host when the site pushes back (see "Adaptive pacing" below);
 - raises `SourceBlocked` on 403 or a CAPTCHA/challenge page, and refuses that host for the
   rest of the run, so we never try to get around a block.
+
+Adaptive pacing (process-local, per host). The base gap is the configured `min_interval`
+(never below 1 s or the robots.txt Crawl-delay). A throttle signal (HTTP 429 or 503, a 5xx
+still failing after the retries, or a timeout) multiplies the host's gap by 1.5, up to 15 s.
+A 429/503 also starts a cool-down for the host (15 min, then 30, 60, then 2 h each time;
+Retry-After is honoured if longer): the next request to that host waits until it is over and
+is a single probe. `throttle_probes` (default 1) is how many probes one call makes before it
+raises FetchError; a caller that retries the item later still waits out the cool-down.
+After 500 good answers in a row the gap steps 10% back towards the base, never below it.
+Each change is logged once (logger `hkestate.fetch`), e.g. "hk.centanet.com: slowing to
+3.0 s after HTTP 429".
 
 Downloaded pages are untrusted data: they are only stored and parsed, never executed.
 """
@@ -24,6 +36,7 @@ import re
 import time
 from collections.abc import Callable
 from datetime import date, datetime, timedelta
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 from urllib.parse import urljoin, urlsplit
 from zoneinfo import ZoneInfo
@@ -51,9 +64,19 @@ MAX_RETRIES = 3
 ROBOTS_RETRIES = 2  # robots.txt: retries on 5xx or a network error before staying away
 BACKOFF_BASE_S = 2.0
 MAX_RETRY_AFTER_S = 120.0
-RETRYABLE = {429, 500, 502, 503, 504}
+RETRYABLE = {500, 502, 504}  # retried with back-off inside one call
+THROTTLED = {429, 503}  # cool-down, then a single probe
 REDIRECTS = {301, 302, 303, 307, 308}
 MAX_REDIRECTS = 5
+# Adaptive pacing (module docstring). Centanet's Transaction/Search API kept answering 429
+# 11 hours after the first ones (2026-10-20), so repeated cool-downs grow to 2 hours.
+SLOWDOWN_FACTOR = 1.5
+MAX_INTERVAL_S = 15.0
+SPEEDUP_AFTER = 500  # good answers in a row before the gap steps back down
+SPEEDUP_FACTOR = 0.9
+COOLDOWN_RESET_AFTER = 100  # good answers in a row before cool-downs start again at the first
+COOLDOWNS_S = (15 * 60, 30 * 60, 60 * 60, 120 * 60)  # the last one repeats
+MAX_COOLDOWN_S = 120 * 60  # Retry-After is honoured up to this
 
 log = logging.getLogger(__name__)
 
@@ -91,6 +114,22 @@ def _hk_today() -> date:
     return datetime.now(HK_TZ).date()
 
 
+def _retry_after_s(response: httpx.Response) -> float | None:
+    """Retry-After in seconds (a number or an HTTP date), or None."""
+    value = response.headers.get("retry-after", "").strip()
+    if not value:
+        return None
+    if value.isdigit():
+        return float(value)
+    try:
+        when = parsedate_to_datetime(value)
+    except (TypeError, ValueError):
+        return None
+    if when.tzinfo is None:
+        return None
+    return max(0.0, (when - datetime.now(when.tzinfo)).total_seconds())
+
+
 def looks_like_challenge(text: str) -> bool:
     head = text[:20000]
     return bool(_CHALLENGE_TITLE.search(head)) or any(m in head for m in _CHALLENGE_MARKERS)
@@ -116,10 +155,18 @@ class Fetcher:
         today: Callable[[], date] = _hk_today,
         jitter: Callable[[], float] | None = None,
         min_interval: float = MIN_INTERVAL_S,
+        cooldowns_s: tuple[float, ...] = COOLDOWNS_S,
+        throttle_probes: int = 1,
     ):
         # Long runs can ask for a wider gap than the 1 s minimum (some sites answer 429
         # after a long stretch at 1 request/s). robots.txt Crawl-delay still wins if longer.
         self.min_interval = max(min_interval, MIN_INTERVAL_S)
+        self.cooldowns_s = tuple(cooldowns_s)
+        self.throttle_probes = throttle_probes
+        self._pace: dict[str, float] = {}  # per host: the adapted gap, when above the base
+        self._ok_streak: dict[str, int] = {}
+        self._cooldowns: dict[str, int] = {}  # per host: cool-downs since the last good run
+        self._cooldown_until: dict[str, float] = {}
         self.cache_dir = Path(cache_dir) if cache_dir else get_data_dir() / "cache"
         self._client = httpx.Client(
             transport=transport,
@@ -278,14 +325,72 @@ class Fetcher:
 
     # ---- requests -----------------------------------------------------------------------
 
+    def base_interval(self, host: str) -> float:
+        """The configured gap for the host (robots.txt Crawl-delay if longer)."""
+        return max(self._min_interval.get(host, 0.0), self.min_interval)
+
+    def interval(self, host: str) -> float:
+        """The gap in use now: the base, or more after the site pushed back."""
+        return max(self.base_interval(host), self._pace.get(host, 0.0))
+
+    def cooldown_remaining(self, url_or_host: str) -> float:
+        """Seconds until the host's cool-down is over (0 if none)."""
+        host = urlsplit(url_or_host).hostname or url_or_host
+        return max(0.0, self._cooldown_until.get(host, 0.0) - self._clock())
+
     def _wait_for_host(self, host: str) -> None:
+        left = self.cooldown_remaining(host)
+        if left > 0:
+            self._sleep(left)
+            log.info("%s: cool-down over; probing with one request", host)
         last = self._last_request.get(host)
         if last is not None:
-            interval = max(self._min_interval.get(host, 0.0), self.min_interval)
-            wait = last + interval + self._jitter() - self._clock()
+            wait = last + self.interval(host) + self._jitter() - self._clock()
             if wait > 0:
                 self._sleep(wait)
         self._last_request[host] = self._clock()
+
+    # ---- adaptive pacing ----------------------------------------------------------------
+
+    def _slow_down(self, host: str, reason: str) -> None:
+        old = self.interval(host)
+        new = min(max(old * SLOWDOWN_FACTOR, self.base_interval(host)), MAX_INTERVAL_S)
+        self._ok_streak[host] = 0
+        if new > old:
+            self._pace[host] = new
+            log.warning("%s: slowing to %.1f s after %s", host, new, reason)
+
+    def _start_cooldown(self, host: str, status: int, response: httpx.Response) -> None:
+        n = self._cooldowns.get(host, 0)
+        self._cooldowns[host] = n + 1
+        if not self.cooldowns_s:
+            return
+        cool = float(self.cooldowns_s[min(n, len(self.cooldowns_s) - 1)])
+        retry_after = _retry_after_s(response)
+        if retry_after is not None:
+            cool = max(cool, min(retry_after, MAX_COOLDOWN_S))
+        self._cooldown_until[host] = self._clock() + cool
+        until = datetime.now() + timedelta(seconds=cool)
+        log.warning("%s: HTTP %s; cooling down %.0f min (until %s), then one probe request",
+                    host, status, cool / 60, f"{until:%H:%M}")
+
+    def _answered(self, host: str) -> None:
+        """A good answer: count towards stepping the gap back down."""
+        streak = self._ok_streak.get(host, 0) + 1
+        self._ok_streak[host] = streak
+        if streak >= COOLDOWN_RESET_AFTER:
+            self._cooldowns.pop(host, None)
+        pace = self._pace.get(host)
+        if pace is None or streak < SPEEDUP_AFTER:
+            return
+        self._ok_streak[host] = 0
+        base = self.base_interval(host)
+        new = max(base, pace * SPEEDUP_FACTOR)
+        if new <= base:
+            self._pace.pop(host, None)
+        else:
+            self._pace[host] = new
+        log.info("%s: speeding up to %.1f s", host, new)
 
     def _request(self, url: str, host: str, body: dict | None = None) -> httpx.Response:
         """GET a URL (or POST a JSON body), following redirects by hand (at most MAX_REDIRECTS).
@@ -315,36 +420,51 @@ class Fetcher:
         raise FetchError(url, None, f"more than {MAX_REDIRECTS} redirects from {url}")
 
     def _request_once(self, url: str, host: str, body: dict | None = None) -> httpx.Response:
-        for attempt in range(MAX_RETRIES + 1):
+        retries = probes = 0
+        while True:
             self._wait_for_host(host)
-            if body is None:
-                response = self._client.get(url)
-            else:
-                response = self._client.post(url, json=body)
+            try:
+                if body is None:
+                    response = self._client.get(url)
+                else:
+                    response = self._client.post(url, json=body)
+            except httpx.TimeoutException:
+                self.requests_made += 1
+                self._slow_down(host, "a timeout")
+                raise
             self.requests_made += 1
             status = response.status_code
             if status == 403:
                 self._blocked.add(host)
                 raise SourceBlocked(f"403 from {url}")
-            if status in RETRYABLE:
-                if attempt == MAX_RETRIES:
-                    raise FetchError(url, status, f"{status} after {MAX_RETRIES} retries: {url}")
-                self._sleep(self._backoff(attempt, response))
+            if status in THROTTLED:
+                self._slow_down(host, f"HTTP {status}")
+                self._start_cooldown(host, status, response)
+                if probes >= self.throttle_probes:
+                    raise FetchError(url, status, f"{status} (cooling down): {url}")
+                probes += 1
                 continue
+            if status in RETRYABLE:
+                if retries == MAX_RETRIES:
+                    self._slow_down(host, f"HTTP {status} {MAX_RETRIES + 1} times")
+                    raise FetchError(url, status, f"{status} after {MAX_RETRIES} retries: {url}")
+                self._sleep(self._backoff(retries, response))
+                retries += 1
+                continue
+            self._answered(host)  # the site answered normally (a 404 counts)
             if status >= 400:
                 raise FetchError(url, status)
             if status not in REDIRECTS and looks_like_challenge(_decode(response.content)):
                 self._blocked.add(host)
                 raise SourceBlocked(f"challenge/CAPTCHA page from {url}")
             return response
-        raise AssertionError("unreachable")
 
     @staticmethod
     def _backoff(attempt: int, response: httpx.Response) -> float:
         delay = BACKOFF_BASE_S * (2**attempt)
-        retry_after = response.headers.get("retry-after", "")
-        if retry_after.isdigit():
-            delay = max(delay, min(float(retry_after), MAX_RETRY_AFTER_S))
+        retry_after = _retry_after_s(response)
+        if retry_after is not None:
+            delay = max(delay, min(retry_after, MAX_RETRY_AFTER_S))
         return delay
 
     # ---- cache --------------------------------------------------------------------------

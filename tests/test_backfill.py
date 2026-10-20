@@ -199,6 +199,28 @@ def test_rate_limited_flat_page_is_retried_not_marked_done(dbpath):
     assert "u172141:2019-04-02" in ids  # the retry after the pause got the page
 
 
+def test_a_patient_backfill_waits_out_any_number_of_429s(dbpath):
+    f = FakeFetcher(site(), busy=[UNIT_URL])
+    f.busy[UNIT_URL] = 20  # far more than BUSY_LIMIT
+    pauses = []
+    backfill.backfill_estates({"test": [EST]}, fetcher=f, db_path=dbpath,
+                              log=lambda *a: None, pause=pauses.append, patient=True)
+    assert len(pauses) == 20
+    with db.session(dbpath) as con:
+        ids = {r[0] for r in con.execute("SELECT source_id FROM txn_raw").fetchall()}
+    assert "u172141:2019-04-02" in ids
+
+
+def test_a_patient_backfill_skips_the_fetchers_pause_when_a_cool_down_is_pending(dbpath):
+    f = FakeFetcher(site(), busy=[UNIT_URL])
+    f.busy[UNIT_URL] = 5
+    f.cooldown_remaining = lambda url: 900.0  # the real fetcher waits before the next request
+    pauses = []
+    backfill.backfill_estates({"test": [EST]}, fetcher=f, db_path=dbpath,
+                              log=lambda *a: None, pause=pauses.append, patient=True)
+    assert pauses == []
+
+
 def test_repeated_rate_limits_stop_the_run_for_a_later_resume(dbpath):
     f = FakeFetcher(site(), busy=[UNIT_URL])
     f.busy[UNIT_URL] = 99

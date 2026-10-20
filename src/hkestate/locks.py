@@ -3,10 +3,11 @@
 `hse28` is held by anything that reads 28Hse for a long time (backfill, weekly update), so
 the daily listing job leaves 28Hse alone while one runs (28Hse rate-limits hard) instead of
 doubling the request rate. `listings` stops two listing jobs overlapping. `centanet` is held
-by the listing job only while it reads Centanet (1 request a second); the other
-hk.centanet.com jobs (`cd-history`, the master pass) pause while it is held, so the host
-never sees more than about 1 request a second. A lock whose process has ended is stale and
-is taken over (and does not make anyone wait).
+by the listing job only while it reads Centanet: a marker (other jobs on hk.centanet.com,
+`cd-history` and the master pass, no longer pause for it since 2026-10-20; each keeps its
+own slower pace). `cd-history` holds `cd-history` and `ricacorp` holds `ricacorp`, so
+two copies cannot run (and the watchdog can tell they are alive). A lock whose process has
+ended is stale and is taken over (and does not make anyone wait).
 """
 
 from __future__ import annotations

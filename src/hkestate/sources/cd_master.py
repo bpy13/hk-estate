@@ -30,20 +30,20 @@ from urllib.parse import unquote
 
 import httpx
 
-from hkestate import db, locks
+from hkestate import db
 from hkestate.config import get_data_dir
 from hkestate.fetch import FetchError, SourceBlocked
 from hkestate.normalise import infer_skipped, norm_name, parse_floor, saleable_to_gross
+from hkestate.patience import RETRY, Patience
+from hkestate.patience import kind as patience_kind
 from hkestate.sources import centadata as cd
 
 COMMAND = "master"
 SITEMAP_URL = "https://hk.centanet.com/sitemap-index/estate/sitemap_estate_zh_hk.xml"
-MIN_INTERVAL_S = 2.0  # hk.centanet.com is shared with the Centanet listing scraper
+# hk.centanet.com is shared with the Centanet listings (2 s) and cd-history (6 s), which
+# run at the same time (no pauses since 2026-10-20). A rare manual job, so a slow 4 s.
+MIN_INTERVAL_S = 4.0
 MAX_CONSECUTIVE_ERRORS = 8
-# The Centanet listing scraper runs at 1 request a second while it holds this lock, the
-# host's whole allowance: the pass pauses before each page while it is held.
-CENTANET_LOCK = "centanet"
-LOCK_WAIT_S = 60.0
 
 MASTER_DDL = [
     """
@@ -365,7 +365,7 @@ def _fetch_page(fetcher, name: str, code: str):
 def process_estate(fetcher, db_path, code: str, name: str, *, pilot: bool,
                    overrides: dict[str, str], pause=None) -> tuple[str | None, int, int]:
     """Read one `2-` page (and its blocks); returns (exclusion reason, blocks, deals added).
-    `pause()` is called before each page (it waits while Centanet listings run)."""
+    `pause()`, if given, is called before each page."""
     pause = pause or (lambda: None)
     pause()
     url, html = _fetch_page(fetcher, name, code)
@@ -401,15 +401,8 @@ def process_estate(fetcher, db_path, code: str, name: str, *, pilot: bool,
 def run_master(fetcher, db_path=None, log=print, limit: int | None = None,
                wait=time.sleep) -> dict:
     """Walk every estate in the sitemap; resumable through run_progress (one step per code).
-    Pauses while the `centanet` lock is held (Centanet listings use the same host)."""
-
-    def pause() -> None:
-        if locks.wait_while_held(
-                CENTANET_LOCK, wait=wait, poll_s=LOCK_WAIT_S,
-                on_pause=lambda pid: log(f"Centanet listings running (process {pid}): pausing")):
-            log("Centanet listings finished: resuming")
-
-    pause()
+    Runs alongside the Centanet listings and cd-history (same host, each at its own pace);
+    throttling is waited out (`wait` sleeps the job's own cool-downs)."""
     xml = fetcher.get(SITEMAP_URL, "static")
     estates = [(c, n) for c, n in sitemap_estates(xml) if c.startswith("2-")]
     overrides = load_overrides()
@@ -426,21 +419,34 @@ def run_master(fetcher, db_path=None, log=print, limit: int | None = None,
     log(f"{len(estates)} estates in the sitemap, {len(done)} done, {len(todo)} to do")
     stats = {"estates": 0, "excluded": 0, "blocks": 0, "deals": 0, "errors": 0}
     streak, status, message = 0, "ok", ""
+    # throttling (429/503, 5xx, timeouts): wait and try the same estate again (patience.py)
+    patience = Patience(log, what="master", fetcher=fetcher, sleep=wait)
     try:
         for i, (code, name) in enumerate(todo, 1):
-            try:
-                reason, blocks, added = process_estate(
-                    fetcher, db_path, code, name, pilot=code in pilot, overrides=overrides,
-                    pause=pause)
-            except SourceBlocked:
-                raise
-            except (FetchError, httpx.HTTPError, cd.NotData, KeyError, ValueError) as e:
-                stats["errors"] += 1
-                streak += 1
-                log(f"  {code} {name}: {type(e).__name__} {e}")
-                if streak >= MAX_CONSECUTIVE_ERRORS:
-                    raise RuntimeError(f"{streak} errors in a row; stopping (rerun)") from e
+            skipped = False
+            while True:
+                try:
+                    reason, blocks, added = process_estate(
+                        fetcher, db_path, code, name, pilot=code in pilot,
+                        overrides=overrides)
+                except SourceBlocked:
+                    raise
+                except (FetchError, httpx.HTTPError, cd.NotData, KeyError, ValueError) as e:
+                    stats["errors"] += 1
+                    log(f"  {code} {name}: {type(e).__name__} {e}")
+                    if patience_kind(e) is not None:
+                        if patience.on_error(e) == RETRY:
+                            continue
+                    else:
+                        streak += 1
+                        if streak >= MAX_CONSECUTIVE_ERRORS:
+                            raise RuntimeError(
+                                f"{streak} errors in a row; stopping (rerun)") from e
+                    skipped = True
+                break
+            if skipped:
                 continue
+            patience.ok()
             streak = 0
             stats["estates"] += 1
             stats["excluded"] += reason is not None

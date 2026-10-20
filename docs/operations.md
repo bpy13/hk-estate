@@ -9,12 +9,18 @@ Registered for the current user by `scripts\register_task.ps1` (rerun it to upda
 
 | Task (folder `\hk-estate\`) | When | Runs |
 |---|---|---|
-| `daily listings` | every day 08:00 | `scripts\daily.ps1` → `hkestate daily` |
+| `daily listings` | every day 08:00 | `scripts\daily.ps1` → `hkestate daily` (may run up to 23 h: every due Centanet page is read) |
+| `watchdog` | every 15 minutes | `scripts\watchdog.ps1` → `hkestate watchdog` (restarts jobs that died; see Watchdog) |
 | `weekly deals` | Sundays 07:00 | `scripts\daily.ps1 -Command update` → `hkestate update` |
 | `weekly ricacorp` | Sundays 10:00 | `scripts\daily.ps1 -Command ricacorp` → `hkestate ricacorp` (a pass is about 7 hours; the task may run 14) |
 | `daily rank` | every day 14:00 | `scripts\daily.ps1 -Command rank` → `hkestate rank` (after the 08:00 listings, ~4.5 h; about 1 minute) |
 | `weekly train` | Sundays 12:00 | `scripts\daily.ps1 -Command train` → `hkestate train` (after the deal update; about 1 minute) |
 | `monthly blocked-check` | 1st of each month 09:00 | `scripts\daily.ps1 -Command check-blocked` → `hkestate check-blocked` (see below; a few seconds) |
+
+`daily.ps1` starts Python in its own hidden console (`Start-Process`) and waits for it, so a
+Ctrl+C or a closed console window elsewhere can't stop the job (the daily job died that way
+on 2026-10-20, exit 0xC000013A); the exit code is still the job's. Python's output lands in
+the task log when the job ends.
 
 The wrapper runs `<env>\python.exe -m hkestate <command>`, not `hkestate.exe`: Windows
 Application Control (Device Guard) blocked the generated `hkestate.exe` launcher on
@@ -23,7 +29,10 @@ the env's `python.exe` and passes it to `daily.ps1 -Python`; rerun it after movi
 rebuilding the env. By hand, `python -m hkestate <command>` is the same as `hkestate <command>`.
 
 If the laptop was off at 08:00, the listings start late and the 14:00 rank uses the previous
-day's listings; the next day's rank catches up. The growth study (`hkestate report`) is not
+day's listings; the next day's rank catches up. A long Centanet pass (the first one is about
+14 hours) is still running at 14:00: rank then uses what is stored so far. The task may run
+23 hours and never twice at once, so a run still going at 08:00 the next day makes that
+day's start be skipped. The growth study (`hkestate report`) is not
 scheduled: run `hkestate train` then `hkestate report` when
 the territory backfill finishes, or whenever a fresh findings report is wanted.
 
@@ -39,17 +48,28 @@ Remove one with `Unregister-ScheduledTask -TaskPath '\hk-estate\' -TaskName 'dai
 
 ## What the daily job does (`hkestate daily`)
 
-For each pilot estate group (`listing_run.PILOT`):
+For each pilot estate group (`listing_run.PILOT`). The three sources are different hosts and
+run **at the same time, each in its own thread**, so 28Hse and Spacious don't wait behind a
+long Centanet pass; steps 4-5 run once all three are done. Database writes from the threads
+take turns (`db.session` holds a per-process lock: DuckDB lets threads open the same file
+but two writing the same row at once fail with "Conflict on update"). `--sequential` runs
+them one after another.
 
 1. **Centanet**: reads the detail sitemap (every live listing), then detail pages for new
    listings plus a rotating seventh of known ones (the sitemap's dates are useless, so this
-   is how price changes are caught: every listing is re-read within 7 days). 1 s between
-   requests, holding the `centanet` lock so the Centadata jobs on hk.centanet.com pause
-   (see Locks). Reads are recorded every 25 pages, so a run stopped midway doesn't read those
-   pages again.
+   is how price changes are caught: every listing is re-read within 7 days). 2 s between
+   requests (slower when the site pushes back, see Pacing), holding the `centanet` lock as a
+   marker (see Locks). Reads are recorded every 25 pages, so a run stopped midway doesn't
+   read those pages again.
 2. **28Hse**: the estate's search pages (sale and rent), and a detail page only for a new
    listing or a changed price. 4 s between requests (28Hse rate-limits hard).
 3. **Spacious**: the neighbourhood search pages (sale), cards only.
+
+When a site pushes back (429/503, a run of 5xx, timeouts) a source cools down 10, 20, then
+30 minutes and carries on from the same page; after the third cool-down it gives up for the
+day (noted in `run_log`, status `partial`). Other errors (e.g. HTTP 400) five pages in a row
+still stop that source for the run; 404 means the listing is gone.
+
 4. Stores changed listings in `listing_raw`, updates `listing`, writes one
    `listing_snapshot` row per listing per HK day, marks listings missing from 3 run days in
    a row as delisted, matches every listing to a building and floor band, groups cross-site
@@ -58,17 +78,18 @@ For each pilot estate group (`listing_run.PILOT`):
 6. Deletes cached listing pages 7 or more days old (`data\cache\<site>\<date>\`): they show
    agents' names and phones, which are never stored in the database.
 
-A first run reads every pilot listing's detail page (about 2,500 on Centanet: ~1.5 hours).
+A first run reads every pilot listing's detail page (about 2,500 on Centanet: ~1.5 hours at 2 s).
 Later runs read only new and rotating pages (minutes).
 
 ## Territory listings (from 2026-10-16)
 
-`hkestate daily` now runs `--estates all`: the pilot groups plus a `territory` group. Per run:
-Centanet reads the whole sitemap but at most 30,000 detail pages (`--centanet-budget`; new
-listings first, then the oldest read) at 1 s. Raised from 8,000 on 2026-10-19 so the rest of
-the first pass (~26,000 pages, ~10 h) fits in one run; after that a run is about 6,000 pages
-(new plus a seventh of known), ~2.5 h. Spacious reads up to 6,000 building sale pages (`--spacious-budget`) at 1 s: about 2 h.
-28Hse is pilot only. Territory listings are matched to master (`cd-`) buildings from the
+`hkestate daily` now runs `--estates all`: the pilot groups plus a `territory` group. Per run
+Centanet reads the whole sitemap and **every due detail page** (new listings first, then the
+oldest read) at 2 s: the first pass is about 26,000 pages (~14 h), after that about 6,000 a
+day (new plus a seventh of known, ~3.5 h). Spacious reads every building sale page at 1 s.
+There is no cap by default since 2026-10-20 (owner's decision; the earlier caps of 30,000 and
+6,000 were a run-length choice); `--centanet-budget N` / `--spacious-budget N` set one for a
+manual run. 28Hse is pilot only. Territory listings are matched to master (`cd-`) buildings from the
 Centanet block code, else by estate then block name; the rest stay unmatched until the master
 list covers their estate. Use `--estates pilot` for the quick pilot-only run.
 
@@ -83,17 +104,24 @@ whose process has ended is ignored.
   the day doesn't count towards delisting 28Hse listings.
 - `listings.lock`: held by `hkestate daily` / `hkestate listings`; a second listing run
   started meanwhile records `skipped` and exits.
-- `centanet.lock`: held by the listing job only while it reads Centanet (1 request a second,
-  the host's whole allowance), not during 28Hse, Spacious or matching. While it is held,
-  `hkestate cd-history` and `hkestate master` pause (checked every 60 s, logged once per
-  pause) and carry on when it is released. A stale `centanet.lock` (its process crashed)
-  makes nobody wait.
+- `centanet.lock`: held by the listing job only while it reads Centanet; a second Centanet
+  listing run skips Centanet while it is held. Since 2026-10-20 it is only a marker for the
+  other hk.centanet.com jobs: `hkestate cd-history` (6 s) and `hkestate master` (4 s) no
+  longer pause for it and run alongside the listings (2 s), together about 0.67 requests a
+  second (0.92 with the rare master pass), below the ~1 a second that ran for days.
 - `cd-history.lock`: held by `hkestate cd-history`, so two copies cannot run.
+- `ricacorp.lock`: held by `hkestate ricacorp` (from 2026-10-20), likewise.
+
+The watchdog uses these locks to tell a live job from a dead one (a job sleeping through a
+cool-down holds its lock, so it counts as running).
 
 The database itself is shared: every job opens it only for short reads and writes, and a job
-that finds it busy retries for up to 30 minutes (`db.connect`: 5 s between tries, doubling
-to 60 s, each wait logged as "database busy" in the task log). Only the 'file in use' error
-is retried; any other error stops the job. `train`, `rank` and `report` read their data
+that finds it busy retries (`db.connect`: 5 s between tries, doubling to 60 s; the first 10
+waits are logged as "database busy" in the task log, then one line every 10 minutes).
+Short and interactive commands give up after 30 minutes. The long jobs (`backfill`,
+`backfill-territory`, `cd-history`, `ricacorp`, `master`) **wait for as long as it takes**:
+on 2026-10-19 all three long jobs died after 30 minutes of another process holding the
+file. Only the 'file in use' error is retried; any other error stops the job. `train`, `rank` and `report` read their data
 into memory in one session (a few minutes), close the file, then fit or score without it.
 
 ## Centadata sale history (`hkestate cd-history`)
@@ -112,17 +140,80 @@ conda run -n hk-estate hkestate cd-history --max-hours 8         # stop after 8 
   master pass (`hkestate master`) must have covered an estate first. A flat whose latest deal
   matched 28Hse in the pilot cross-check was not stored as a Centadata row, so it has no
   code yet (open item).
-- One call carries up to 40 flats and returns 100 rows a page; 4 s between calls (the master
-  pass and the Centanet listings share this host). Every answer is cached.
+- One call carries up to 40 flats and returns 100 rows a page; 6 s between calls (4 s drew
+  429s on 2026-10-20; the master pass and the Centanet listings share this host and run at
+  the same time). Every answer is cached.
 - Progress is kept per building (`run_progress`, command `cd-history`): a restart skips
   finished buildings, and a rerun adds nothing that is already stored. A building whose batch
   failed is tried again on the next run.
-- `--limit N` counts buildings. The job **pauses while the `centanet` lock is held** (the
-  listing job reading Centanet; its 28Hse and Spacious parts don't pause it), stops after 5
-  errors in a row, stops for good on a 403 or challenge page, and
+- `--limit N` counts buildings. When the site pushes back (429/503, 5xx, timeouts) the job
+  **waits and asks for the same batch again, for as long as it takes** (see Pacing; on
+  2026-10-20 the Transaction/Search API still answered 429 eleven hours after the first
+  ones). A batch that fails with a 5xx three times on its own is skipped (its buildings are
+  retried on the next run). Five other errors in a row (404, bad answers) stop the run; a
+  403 or challenge page stops it for good. It
   holds the `cd-history` lock so two copies cannot run. It writes a `run_log` row
   (command `cd-history`) and `data\logs\cd-history_<time>.log`.
 - After a load, run `hkestate train` and `hkestate report` to use the dated pairs.
+
+## Pacing and throttling (from 2026-10-20)
+
+Each job sets a base gap per host (never below 1 s or the robots.txt Crawl-delay): Centanet
+listings 2 s, cd-history 6 s, master pass 4 s, 28Hse 4 s, Ricacorp 3 s, Spacious 1 s. The
+fetcher adapts it per host, within the process (`fetch.py`):
+
+- **Slow down**: HTTP 429 or 503, a 5xx still failing after its 3 retries, or a timeout
+  multiplies the host's gap by 1.5 (at most 15 s). Logged once: `hk.centanet.com: slowing to
+  3.0 s after HTTP 429`.
+- **Cool down** (429/503 only): the host gets a cool-down of 15 min, then 30, 60, then 2 h
+  each time (Retry-After is honoured if longer, up to 2 h). The next request waits it out
+  and is a single probe. Logged: `... HTTP 429; cooling down 15 min (until 19:15), then one
+  probe request`. The daily listing run uses 10/20/30 min instead and gives up a source for
+  the day after the third.
+- **Speed up**: after 500 good answers in a row the gap steps 10% back towards the base,
+  never below it (`speeding up to 2.7 s`). After 100 good answers the cool-downs start again
+  at the first.
+
+The long jobs (`cd-history`, `backfill-territory`, `backfill`, `ricacorp`, `master`) never
+exit on throttling: they wait and retry the same item (`patience.py`). Only one item failing
+with a 5xx three times on its own is skipped, for the next run. These messages are in the
+job's own log.
+
+## Watchdog (`hkestate watchdog`, every 15 minutes)
+
+Restarts a job that died instead of waiting for someone to notice. It never opens the
+database: it reads lock files, the jobs' logs and `data\watchdog_state.json`.
+
+- Watched: `backfill-territory` (lock `hse28`), `cd-history` (lock `cd-history`), `ricacorp`
+  (lock `ricacorp`), and today's `daily`.
+- **Running** = a live process holds the job's lock (a job asleep in a cool-down holds it),
+  or its newest log was written in the last 45 minutes. **Dead** = not running and the newest
+  log has no normal ending: `done: {...}` (cd-history), `ok:`/`partial: {...}`
+  (backfill-territory, ricacorp), `daily: ok|partial|skipped` (daily). A log of a run that
+  never started ("not started", "daily: skipped") is passed over. A source block (403) counts
+  as an ending: blocked jobs are not restarted.
+- A dead job is started again with the same arguments as the dead run (each log now has a
+  `command line:` line; older logs get the defaults), detached from any console:
+  `python.exe -m hkestate ...`, output in `data\logs\<job>_watchdog_<time>.out/.err`.
+- `ricacorp` is only resumed within the ISO week of its last pass (the Sunday task starts a
+  new pass). `daily` is only rerun for a run started today (HK date) and only between 08:00
+  and 20:00; a rerun doesn't read again the pages already read today.
+- At most 3 watchdog restarts per job per day. A job that dies within 10 minutes of a
+  restart 3 times in a row is left alone: the log says `GIVING UP` with the job's name. Fix
+  the cause, then delete that job's entry from `data\watchdog_state.json` (or start the job
+  yourself; once it is seen running or finished the watchdog resumes).
+- Every decision is one line in `data\logs\watchdog_<YYYYmmdd>.log`; a crash of the watchdog
+  itself goes to `data\logs\watchdog_<YYYYmmdd>.err`.
+
+Register it (once; `MultipleInstances IgnoreNew`, only while logged on, 10-minute limit):
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\watchdog.ps1 -Register
+# same as: scripts\register_task.ps1 -Only watchdog
+```
+
+Try it without starting anything: `conda run -n hk-estate hkestate watchdog --dry-run`, then
+read today's `watchdog_<date>.log`.
 
 ## Monthly blocked-site check (`hkestate check-blocked`)
 

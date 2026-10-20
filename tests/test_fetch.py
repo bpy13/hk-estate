@@ -300,7 +300,7 @@ def test_cache_file_is_gzip_under_host_date_sha1(tmp_path):
     assert gzip.decompress(path.read_bytes()) == b"<html>ok</html>"
 
 
-@pytest.mark.parametrize("status", [429, 500, 503])
+@pytest.mark.parametrize("status", [500, 502, 504])
 def test_retryable_errors_back_off_exponentially_then_succeed(tmp_path, status):
     calls = []
 
@@ -322,13 +322,138 @@ def test_gives_up_after_three_retries(tmp_path):
 
     def handler(request):
         calls.append(1)
-        return httpx.Response(503)
+        return httpx.Response(500)
 
     fetcher, _, _ = make_fetcher(tmp_path, handler)
     with pytest.raises(FetchError) as excinfo:
         fetcher.get("https://example.com/x", "static")
-    assert excinfo.value.status == 503
+    assert excinfo.value.status == 500
     assert len(calls) == 4  # first try + 3 retries
+
+
+# ---- adaptive pacing ---------------------------------------------------------------------
+
+
+def _gaps(times):
+    return [round(b - a, 6) for a, b in zip(times, times[1:], strict=False)]
+
+
+def paced_fetcher(tmp_path, answers, *, min_interval=2.0, **kw):
+    """Fetcher whose page requests get the statuses in `answers` (then 200); returns
+    (fetcher, request times, clock)."""
+    clock = FakeClock()
+    times = []
+    answers = list(answers)
+
+    def dispatch(request):
+        if request.url.path == "/robots.txt":
+            return httpx.Response(200, text=ROBOTS)
+        times.append(clock.now)
+        if answers:
+            a = answers.pop(0)
+            return a if isinstance(a, httpx.Response) else httpx.Response(a)
+        return httpx.Response(200, text="<html>ok</html>")
+
+    f = Fetcher(cache_dir=tmp_path / "cache", transport=httpx.MockTransport(dispatch),
+                sleep=clock.sleep, clock=clock.time, today=lambda: date(2026, 10, 16),
+                jitter=lambda: 0.0, min_interval=min_interval, **kw)
+    return f, times, clock
+
+
+def test_429_slows_the_host_down_cools_down_and_probes_once(tmp_path, caplog):
+    import logging
+    caplog.set_level(logging.INFO, logger="hkestate.fetch")
+    f, times, clock = paced_fetcher(tmp_path, [429])
+    assert f.get("https://example.com/a", "listing") == "<html>ok</html>"
+    assert f.interval("example.com") == pytest.approx(3.0)  # 2 s x 1.5
+    assert _gaps(times) == [15 * 60]  # the first cool-down, then one probe that worked
+    msgs = [r.getMessage() for r in caplog.records]
+    assert "example.com: slowing to 3.0 s after HTTP 429" in msgs
+    assert any("cooling down 15 min" in m for m in msgs)
+    f.get("https://example.com/b", "listing")
+    assert _gaps(times)[-1] == pytest.approx(3.0)  # the next request uses the new gap
+
+
+def test_retry_after_longer_than_the_cool_down_is_honoured(tmp_path):
+    f, times, _ = paced_fetcher(
+        tmp_path, [httpx.Response(429, headers={"retry-after": "3600"})])
+    f.get("https://example.com/a", "listing")
+    assert _gaps(times) == [3600]
+
+
+def test_repeated_429s_grow_the_cool_down_to_two_hours_and_cap_the_gap(tmp_path):
+    f, times, clock = paced_fetcher(tmp_path, [429] * 6)
+    with pytest.raises(FetchError) as e1:
+        f.get("https://example.com/a", "listing")  # 429, cool-down 15 min, probe 429
+    assert e1.value.status == 429
+    assert f.cooldown_remaining("https://example.com/a") == 30 * 60  # next one pending
+    with pytest.raises(FetchError):
+        f.get("https://example.com/a", "listing")
+    with pytest.raises(FetchError):
+        f.get("https://example.com/a", "listing")
+    assert _gaps(times)[:5] == [15 * 60, 30 * 60, 60 * 60, 120 * 60, 120 * 60]
+    assert f.interval("example.com") == 15.0  # 2 x 1.5^6 > 15: capped
+    assert f.get("https://example.com/a", "listing") == "<html>ok</html>"  # after 2 h
+
+
+def test_no_probe_of_its_own_with_throttle_probes_0(tmp_path):
+    f, times, _ = paced_fetcher(tmp_path, [429], throttle_probes=0, cooldowns_s=(600,))
+    with pytest.raises(FetchError):
+        f.get("https://example.com/a", "listing")
+    assert len(times) == 1 and f.cooldown_remaining("example.com") == 600
+    f.get("https://example.com/a", "listing")  # the caller's retry waits it out
+    assert _gaps(times) == [600]
+
+
+def test_5xx_after_retries_slows_down_without_a_cool_down(tmp_path):
+    f, times, _ = paced_fetcher(tmp_path, [500] * 4)
+    with pytest.raises(FetchError):
+        f.get("https://example.com/a", "listing")
+    assert f.interval("example.com") == pytest.approx(3.0)
+    assert f.cooldown_remaining("example.com") == 0
+
+
+def test_timeout_slows_the_host_down_and_is_raised(tmp_path):
+    clock = FakeClock()
+
+    def dispatch(request):
+        if request.url.path == "/robots.txt":
+            return httpx.Response(200, text=ROBOTS)
+        raise httpx.ReadTimeout("slow")
+
+    f = Fetcher(cache_dir=tmp_path / "cache", transport=httpx.MockTransport(dispatch),
+                sleep=clock.sleep, clock=clock.time, jitter=lambda: 0.0, min_interval=2.0)
+    with pytest.raises(httpx.ReadTimeout):
+        f.get("https://example.com/a", "listing")
+    assert f.interval("example.com") == pytest.approx(3.0)
+
+
+def test_speeds_back_up_after_a_success_streak_but_never_below_the_base(
+        tmp_path, monkeypatch, caplog):
+    import logging
+
+    from hkestate import fetch
+    caplog.set_level(logging.INFO, logger="hkestate.fetch")
+    monkeypatch.setattr(fetch, "SPEEDUP_AFTER", 3)
+    f, times, _ = paced_fetcher(tmp_path, [429])
+    f.get("https://example.com/p0", "listing")  # 429 then ok: 3.0 s (streak 1)
+    assert f.interval("example.com") == pytest.approx(3.0)
+    for i in range(1, 3):
+        f.get(f"https://example.com/p{i}", "listing")
+    assert f.interval("example.com") == pytest.approx(2.7)  # 3 good answers: -10%
+    assert any(r.getMessage() == "example.com: speeding up to 2.7 s" for r in caplog.records)
+    for i in range(3, 40):
+        f.get(f"https://example.com/p{i}", "listing")
+    assert f.interval("example.com") == 2.0  # back at the base, not below
+    assert min(_gaps(times)[1:]) >= 2.0 - 1e-9
+
+
+def test_pacing_is_per_host(tmp_path):
+    f, times, _ = paced_fetcher(tmp_path, [429])
+    f.get("https://example.com/a", "listing")
+    assert f.interval("example.com") == pytest.approx(3.0)
+    assert f.interval("other.example") == 2.0
+    assert f.cooldown_remaining("other.example") == 0
 
 
 def test_403_raises_source_blocked_and_host_stays_blocked(tmp_path):
@@ -501,7 +626,7 @@ def test_post_json_is_paced_like_a_get(tmp_path):
     assert all(b - a >= 1.0 - 1e-9 for a, b in zip(times, times[1:], strict=False))
 
 
-@pytest.mark.parametrize("status", [429, 503])
+@pytest.mark.parametrize("status", [500, 502])
 def test_post_json_retries_and_resends_the_body(tmp_path, status):
     bodies = []
 
@@ -515,6 +640,22 @@ def test_post_json_retries_and_resends_the_body(tmp_path, status):
     assert fetcher.post_json("https://example.com/s", {"n": 1}, "listing") == "done"
     assert len(bodies) == 3 and len(set(bodies)) == 1
     assert [s for s in clock.sleeps if s >= 2.0][:2] == [2.0, 4.0]
+
+
+@pytest.mark.parametrize("status", [429, 503])
+def test_post_json_probe_after_a_cool_down_resends_the_body(tmp_path, status):
+    bodies = []
+
+    def handler(request):
+        bodies.append(request.content)
+        if len(bodies) < 2:
+            return httpx.Response(status, text="slow down")
+        return httpx.Response(200, text="done")
+
+    fetcher, _, clock = make_fetcher(tmp_path, handler)
+    assert fetcher.post_json("https://example.com/s", {"n": 1}, "listing") == "done"
+    assert len(bodies) == 2 and len(set(bodies)) == 1
+    assert 15 * 60 in [round(s) for s in clock.sleeps]
 
 
 def test_post_json_cache_key_is_url_plus_body(tmp_path):

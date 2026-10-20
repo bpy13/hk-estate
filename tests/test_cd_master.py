@@ -222,20 +222,39 @@ def test_process_estate_pauses_before_every_page(tmp_path):
     assert order == ["pause", "get", "pause", "get"]  # the estate page, then block 1-B2
 
 
-def test_master_pass_waits_while_centanet_listings_run(tmp_path, monkeypatch):
+def test_master_pass_runs_alongside_centanet_listings(tmp_path, monkeypatch):
+    # since 2026-10-20 no pause on the `centanet` lock: each job keeps its own pace
     from hkestate import locks
     monkeypatch.setenv("HKESTATE_DATA_DIR", str(tmp_path))
     monkeypatch.setattr(cm, "pilot_codes", lambda f, log: set())
     monkeypatch.setattr(cm, "load_overrides", lambda: {})
-    held = iter([1234, 1234])  # held at the start, then free for good
-    monkeypatch.setattr(locks, "held_by",
-                        lambda name: next(held, None) if name == "centanet" else None)
-    f, waits, logs = Pages(), [], []
+    monkeypatch.setattr(locks, "held_by", lambda name: 1234 if name == "centanet" else None)
+    f, waits = Pages(), []
+    cm.run_master(f, db_path=tmp_path / "t.duckdb", log=lambda m: None, wait=waits.append)
+    assert waits == [] and len(f.asked) >= 2
+
+
+def test_master_pass_cools_down_and_retries_the_same_estate_on_429(tmp_path, monkeypatch):
+    from hkestate.fetch import FetchError
+    monkeypatch.setenv("HKESTATE_DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(cm, "pilot_codes", lambda f, log: set())
+    monkeypatch.setattr(cm, "load_overrides", lambda: {})
+    f, waits = Pages(), []
     real_get = f.get
-    f.get = lambda url, pt: (waits.append("get"), real_get(url, pt))[1]
-    cm.run_master(f, db_path=tmp_path / "t.duckdb", log=logs.append, wait=waits.append)
-    assert waits[:3] == [cm.LOCK_WAIT_S, cm.LOCK_WAIT_S, "get"]  # no request while held
-    assert sum("pausing" in m for m in logs) == 1
+    fails = iter([True, True])
+
+    def get(url, pt):
+        if url != cm.SITEMAP_URL and next(fails, False):
+            f.asked.append(url)
+            raise FetchError(url, 429)
+        return real_get(url, pt)
+
+    f.get = get
+    stats = cm.run_master(f, db_path=tmp_path / "t.duckdb", log=lambda m: None,
+                          wait=waits.append)
+    assert waits == [600, 1200] and stats["errors"] == 2 and stats["estates"] >= 1
+    pages = [u for u in f.asked if u != cm.SITEMAP_URL]
+    assert pages[0] == pages[1] == pages[2]  # the same estate page until it worked
 
 
 def test_previous_deal_change_is_stored_with_the_latest_deal(con):

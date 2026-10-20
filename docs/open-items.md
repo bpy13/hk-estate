@@ -6,6 +6,14 @@ here; a limit or trap we live with goes in `known-issues.md`. Each item in one p
 ## Blockers
 
 ## Waiting on the user
+- **Register the new tasks (2026-10-20).** `scripts\register_task.ps1` (all) or
+  `-Only 'daily listings'` (now 23 h limit) and `scripts\watchdog.ps1 -Register` (watchdog
+  every 15 min). Then check `data\logs\watchdog_<date>.log` after a day. Running jobs started
+  before this change keep the old code (no adaptive pacing, 30-min DB wait) until restarted.
+- **Spacious uncapped run length is unmeasured (2026-10-20).** Without the 6,000 cap the
+  Spacious territory pass reads every building page in `spacious_building` at 1 s each run;
+  it runs in parallel with Centanet, but if the building list is large (tens of thousands)
+  the daily job's length is set by Spacious. Check the first uncapped run's log.
 *(Settled 2026-10-16 and moved to decisions.md: pre-2018 history (every free source, plus
 estimated pairs, Ricacorp pairs as Task 3.6, Centadata % change); MTR station centres; listing
 cache pruning.)*
