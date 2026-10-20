@@ -361,7 +361,7 @@ exit 0xC000013A (a console Ctrl+C/close); the day before, all three long jobs di
 `db.connect` gave up after 30 minutes.
 - **Adaptive pacing per host** (owner: "pick a pace, monitor, adjust when the site pushes
   back"). Base gaps: Centanet listings 2 s (2 s had run 8,000 pages without trouble),
-  cd-history 6 s (3 s while no Centanet listing run holds the `centanet` lock), master pass 4 s; others unchanged. A throttle signal (429/503, 5xx after
+  cd-history 2 s (owner, 2026-10-20: two jobs at 2 s is ~1 request a second, as listings + master ran for days), master pass 4 s; others unchanged. A throttle signal (429/503, 5xx after
   retries, timeout) multiplies the gap by 1.5 (cap 15 s); 429/503 also start a cool-down
   (15 min, 30, 60, then 2 h each time, because the API throttle lasted hours), followed by a
   single probe. After 100 good answers the gap steps 25% back towards the base, never below.
@@ -372,7 +372,7 @@ exit 0xC000013A (a console Ctrl+C/close); the day before, all three long jobs di
   The daily listing run cools down 10/20/30 min and gives up a source for the day after the
   third. Non-throttle errors (404, bad answers) keep their old handling.
 - **Concurrent on hk.centanet.com, not exclusive pauses** (owner, replaces the `centanet`
-  lock pauses): listings 2 s + cd-history 6 s ≈ 0.67 requests a second (0.92 with the rare
+  lock pauses): listings 2 s + cd-history 2 s ≈ 1 request a second (0.92 with the rare
   master pass at 4 s), below the ~1 a second that ran for days. Host priority: the listings'
   pace is the fastest; the slow-down handles any pushback. The `centanet` lock stays as a
   marker around the Centanet part of the listing run.

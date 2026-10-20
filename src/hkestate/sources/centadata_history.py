@@ -42,12 +42,11 @@ COMMAND = "cd-history"
 API_URL = "https://hk.centanet.com/findproperty/api/Transaction/Search"
 PAGE_SIZE = 100  # the largest size the server honoured (500 gave HTTP 500)
 BATCH_CODES = 40  # flats have about 2 sales each, so a batch is mostly one page
-# hk.centanet.com is shared with the master pass and listings, which run at the same time
-# (no pauses since 2026-10-20: listings 2 s + cd-history 6 s is about 0.67 requests a
-# second in all). 4 s drew HTTP 429 on 2026-10-20 and the API still answered 429 eleven
-# hours later: 6 s from then on, and the fetcher slows down further by itself when the site
-# pushes back.
-MIN_INTERVAL_S = 6.0
+# hk.centanet.com is shared with the listings (2 s) and the master pass, which run at the same
+# time: two jobs at 2 s is about 1 request a second, robots.txt's crawl-delay, and listings
+# plus the master pass ran like that for days without trouble (2026-10-16 to 19). The 2026-10-20
+# 429s followed one job at a 1 s gap. The fetcher slows down by itself if the site pushes back.
+MIN_INTERVAL_S = 2.0
 MAX_CONSECUTIVE_ERRORS = 5  # non-throttle errors (404, bad answers) in a row: stop
 MAX_OFFSET = 10_000  # the site's own script never asks past this
 
