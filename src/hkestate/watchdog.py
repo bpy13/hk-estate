@@ -6,9 +6,10 @@ It never opens the database: it reads lock files (data/locks/), the jobs' own lo
 
 A job is **alive** if a live process holds its lock file (the same stale-lock rule as
 locks.py), or its newest log was written in the last 45 minutes and comes from a run started
-by older code (no "command line:" line; such runs may hold no lock of their own). A job sleeping through a cool-down holds its lock, so it is
-alive. A job is **dead** if it is not alive and its newest log (ignoring "not started" and
-"skipped" runs) has no normal ending: it crashed, was killed, or was stopped by Ctrl+C.
+by older code (no "command line:" line; such runs may hold no lock of their own). A job
+sleeping through a cool-down holds its lock, so it is alive. A job is **dead** if it is not
+alive and its newest log (ignoring "not started" and "skipped" runs) has no normal ending:
+it crashed, was killed, or was stopped by Ctrl+C.
 
 Jobs watched:
 - `backfill-territory` (lock hse28; ends "ok: {...}" / "partial: {...}", or "source blocked")
