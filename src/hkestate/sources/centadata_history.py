@@ -31,7 +31,7 @@ from datetime import datetime
 
 import httpx
 
-from hkestate import db
+from hkestate import db, locks
 from hkestate.fetch import FetchError
 from hkestate.patience import RETRY, Patience
 from hkestate.patience import kind as patience_kind
@@ -48,6 +48,9 @@ BATCH_CODES = 40  # flats have about 2 sales each, so a batch is mostly one page
 # hours later: 6 s from then on, and the fetcher slows down further by itself when the site
 # pushes back.
 MIN_INTERVAL_S = 6.0
+# While no Centanet listing run holds the `centanet` lock, cd-history has the host to itself
+# and goes faster (checked before each batch).
+ALONE_INTERVAL_S = 3.0
 MAX_CONSECUTIVE_ERRORS = 5  # non-throttle errors (404, bad answers) in a row: stop
 MAX_OFFSET = 10_000  # the site's own script never asks past this
 
@@ -227,6 +230,16 @@ def _batches(estate: Estate, todo: list[Building], size: int):
                {bid for bid, _ in chunk})
 
 
+def _set_pace(fetcher, log) -> None:
+    """6 s while a Centanet listing run shares the host, 3 s while cd-history has it alone.
+    Only the base changes; a slow-down after HTTP 429 still applies on top."""
+    want = MIN_INTERVAL_S if locks.held_by("centanet") is not None else ALONE_INTERVAL_S
+    if getattr(fetcher, "min_interval", want) != want:
+        fetcher.min_interval = want
+        log(f"hk.centanet.com: base gap {want:.0f} s "
+            f"({'listings running' if want == MIN_INTERVAL_S else 'host to itself'})")
+
+
 def run_history(fetcher, db_path=None, log=print, estates: list[str] | None = None,
                 limit: int | None = None, max_hours: float | None = None,
                 wait=time.sleep, clock=time.monotonic) -> dict:
@@ -270,6 +283,7 @@ def run_history(fetcher, db_path=None, log=print, estates: list[str] | None = No
                 if max_hours is not None and clock() - start > max_hours * 3600:
                     stats["stopped"] = "max-hours"
                     break
+                _set_pace(fetcher, log)
                 items = None
                 while items is None:
                     try:

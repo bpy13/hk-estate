@@ -388,3 +388,19 @@ def test_runs_alongside_centanet_listings_without_pausing(db_path, monkeypatch):
     stats = ch.run_history(f, db_path=db_path, log=lambda m: None, wait=waits.append,
                            estates=["alpha"])
     assert waits == [] and f.calls and stats["buildings"] == 1
+
+
+def test_pace_is_6_s_beside_listings_and_3_s_alone(monkeypatch):
+    from types import SimpleNamespace
+
+    from hkestate import locks
+    from hkestate.sources import centadata_history as ch
+    f, msgs = SimpleNamespace(min_interval=6.0), []
+    monkeypatch.setattr(locks, "held_by", lambda name: None)
+    ch._set_pace(f, msgs.append)
+    assert f.min_interval == 3.0 and len(msgs) == 1
+    ch._set_pace(f, msgs.append)
+    assert len(msgs) == 1  # logged only on a change
+    monkeypatch.setattr(locks, "held_by", lambda name: 1234 if name == "centanet" else None)
+    ch._set_pace(f, msgs.append)
+    assert f.min_interval == 6.0 and "listings running" in msgs[-1]
