@@ -440,8 +440,8 @@ def test_speeds_back_up_after_a_success_streak_but_never_below_the_base(
     assert f.interval("example.com") == pytest.approx(3.0)
     for i in range(1, 3):
         f.get(f"https://example.com/p{i}", "listing")
-    assert f.interval("example.com") == pytest.approx(2.7)  # 3 good answers: -10%
-    assert any(r.getMessage() == "example.com: speeding up to 2.7 s" for r in caplog.records)
+    assert f.interval("example.com") == pytest.approx(2.25)  # 3 good answers: -25%
+    assert any(r.getMessage() == "example.com: speeding up to 2.2 s" for r in caplog.records)
     for i in range(3, 40):
         f.get(f"https://example.com/p{i}", "listing")
     assert f.interval("example.com") == 2.0  # back at the base, not below

@@ -364,7 +364,7 @@ exit 0xC000013A (a console Ctrl+C/close); the day before, all three long jobs di
   cd-history 6 s, master pass 4 s; others unchanged. A throttle signal (429/503, 5xx after
   retries, timeout) multiplies the gap by 1.5 (cap 15 s); 429/503 also start a cool-down
   (15 min, 30, 60, then 2 h each time, because the API throttle lasted hours), followed by a
-  single probe. After 500 good answers the gap steps 10% back towards the base, never below.
+  single probe. After 100 good answers the gap steps 25% back towards the base, never below.
   Process-local state; nothing is shared between jobs.
 - **Long jobs wait instead of dying** on throttling (cd-history, the backfills, Ricacorp,
   the master pass): indefinitely, retrying the same item. An item failing with a plain 5xx

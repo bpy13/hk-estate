@@ -1,4 +1,4 @@
-﻿"""Polite HTTP fetcher: robots.txt, per-host rate limit, gzip page cache, back-off.
+"""Polite HTTP fetcher: robots.txt, per-host rate limit, gzip page cache, back-off.
 
 Every page the project reads goes through `Fetcher.get`. It:
 - refuses any URL the site's robots.txt disallows for our user agent (`RobotsDisallowed`);
@@ -18,7 +18,7 @@ A 429/503 also starts a cool-down for the host (15 min, then 30, 60, then 2 h ea
 Retry-After is honoured if longer): the next request to that host waits until it is over and
 is a single probe. `throttle_probes` (default 1) is how many probes one call makes before it
 raises FetchError; a caller that retries the item later still waits out the cool-down.
-After 500 good answers in a row the gap steps 10% back towards the base, never below it.
+After 100 good answers in a row the gap steps 25% back towards the base, never below it.
 Each change is logged once (logger `hkestate.fetch`), e.g. "hk.centanet.com: slowing to
 3.0 s after HTTP 429".
 
@@ -72,8 +72,8 @@ MAX_REDIRECTS = 5
 # 11 hours after the first ones (2026-10-20), so repeated cool-downs grow to 2 hours.
 SLOWDOWN_FACTOR = 1.5
 MAX_INTERVAL_S = 15.0
-SPEEDUP_AFTER = 500  # good answers in a row before the gap steps back down
-SPEEDUP_FACTOR = 0.9
+SPEEDUP_AFTER = 100  # good answers in a row before the gap steps back down
+SPEEDUP_FACTOR = 0.75  # 15 s back to 2 s in ~700 good answers (0.9 per 500 took ~16 h)
 COOLDOWN_RESET_AFTER = 100  # good answers in a row before cool-downs start again at the first
 COOLDOWNS_S = (15 * 60, 30 * 60, 60 * 60, 120 * 60)  # the last one repeats
 MAX_COOLDOWN_S = 120 * 60  # Retry-After is honoured up to this

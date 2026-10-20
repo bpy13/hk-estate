@@ -170,7 +170,7 @@ fetcher adapts it per host, within the process (`fetch.py`):
   and is a single probe. Logged: `... HTTP 429; cooling down 15 min (until 19:15), then one
   probe request`. The daily listing run uses 10/20/30 min instead and gives up a source for
   the day after the third.
-- **Speed up**: after 500 good answers in a row the gap steps 10% back towards the base,
+- **Speed up**: after 100 good answers in a row the gap steps 25% back towards the base,
   never below it (`speeding up to 2.7 s`). After 100 good answers the cool-downs start again
   at the first.
 
