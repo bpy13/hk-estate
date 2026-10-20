@@ -159,7 +159,7 @@ conda run -n hk-estate hkestate cd-history --max-hours 8         # stop after 8 
 ## Pacing and throttling (from 2026-10-20)
 
 Each job sets a base gap per host (never below 1 s or the robots.txt Crawl-delay): Centanet
-listings 2 s, cd-history 6 s, master pass 4 s, 28Hse 4 s, Ricacorp 3 s, Spacious 1 s. The
+listings 2 s, cd-history 6 s beside a listing run and 3 s with the host to itself, master pass 4 s, 28Hse 4 s, Ricacorp 3 s, Spacious 1 s. The
 fetcher adapts it per host, within the process (`fetch.py`):
 
 - **Slow down**: HTTP 429 or 503, a 5xx still failing after its 3 retries, or a timeout
