@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import random
 import sys
 import threading
 import time
@@ -57,8 +58,10 @@ def default_db_path() -> Path:
 
 
 LOCK_WAIT_S = 30 * 60  # how long to wait for another process to let go of the file
-LOCK_BACKOFF_FIRST_S = 5.0
-LOCK_BACKOFF_MAX_S = 60.0
+# Short waits: with five jobs taking turns on the file, a 60 s back-off left jobs asleep long
+# after the file was free (2026-10-20). Up to 5 s plus jitter so they don't retry in step.
+LOCK_BACKOFF_FIRST_S = 1.0
+LOCK_BACKOFF_MAX_S = 5.0
 LOCK_LOG_EVERY_FIRST = 10  # the first waits are each logged; after that ...
 LOCK_LOG_EVERY_S = 10 * 60  # ... one line every 10 minutes
 
@@ -89,7 +92,8 @@ def _is_lock_error(e: Exception) -> bool:
 def connect(path: Path | str | None = None, *,
             wait_s=_UNSET) -> duckdb.DuckDBPyConnection:
     """Open the database. DuckDB allows one process at a time, so if another command holds
-    the file we retry (5 s, doubling to 60 s between tries) for up to `wait_s` seconds
+    the file we retry (1 s, doubling to 5 s between tries, plus up to 1 s of jitter) for up
+    to `wait_s` seconds
     (default: `set_lock_wait`, normally 30 minutes, as the scheduled train and rank hold it
     for several minutes; None waits for ever). The first waits are each logged to stderr,
     which the task wrappers capture, then one line every 10 minutes. Any other error is
@@ -115,7 +119,7 @@ def connect(path: Path | str | None = None, *,
                 print(f"{datetime.now():%Y-%m-%d %H:%M:%S} database busy (another process "
                       f"has {path.name} open, {(now - started) / 60:.0f} min so far); "
                       f"retrying in {delay:.0f}s", file=sys.stderr, flush=True)
-            time.sleep(delay)
+            time.sleep(delay + random.random())
             delay = min(delay * 2, LOCK_BACKOFF_MAX_S)
 
 

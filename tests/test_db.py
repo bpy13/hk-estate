@@ -408,7 +408,7 @@ LOCK_MSG = ("IO Error: Cannot open file: The process cannot access the file beca
             "being used by another process.")
 
 
-def test_connect_backs_off_from_5s_to_60s_and_logs_each_wait(tmp_path, monkeypatch, capsys):
+def test_connect_backs_off_from_1s_to_5s_and_logs_each_wait(tmp_path, monkeypatch, capsys):
     import duckdb
 
     sleeps = []
@@ -431,7 +431,8 @@ def test_connect_backs_off_from_5s_to_60s_and_logs_each_wait(tmp_path, monkeypat
 
     monkeypatch.setattr(db.time, "sleep", fake_sleep)
     db.connect(tmp_path / "x.duckdb").close()
-    assert sleeps == [5, 10, 20, 40, 60, 60, 60]
+    base = [1, 2, 4, 5, 5, 5, 5]
+    assert all(b <= s < b + 1 for s, b in zip(sleeps, base, strict=True))  # + jitter < 1 s
     assert capsys.readouterr().err.count("database busy") == 7
 
 
