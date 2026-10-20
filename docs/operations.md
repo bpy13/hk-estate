@@ -44,6 +44,12 @@ password is stored). Check them with:
 Get-ScheduledTask -TaskPath '\hk-estate\' | Get-ScheduledTaskInfo
 ```
 
+Each task runs `conhost.exe --headless powershell.exe ...`, so no window appears. Started
+directly, `powershell.exe -WindowStyle Hidden` flashes a window and takes the focus on
+Windows 11, where new consoles open in Windows Terminal (since 2026-10-20). Because of this,
+the task's "Last Run Result" is always 0 (conhost's own exit code). A job's real exit code is
+the last line of its `data\logs\task_<command>_<time>.log`.
+
 Remove one with `Unregister-ScheduledTask -TaskPath '\hk-estate\' -TaskName 'daily listings'`.
 
 ## What the daily job does (`hkestate daily`)

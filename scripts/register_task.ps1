@@ -38,13 +38,19 @@ $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatt
 $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" `
     -LogonType Interactive -RunLevel Limited
 
+# `conhost.exe --headless` runs PowerShell with no window at all. Started directly,
+# powershell.exe -WindowStyle Hidden still flashes a window and takes the focus on
+# Windows 11, where new consoles open in Windows Terminal (which ignores -WindowStyle).
+function New-HiddenAction([string]$PsArguments) {
+    New-ScheduledTaskAction -Execute 'conhost.exe' `
+        -Argument "--headless powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden $PsArguments" `
+        -WorkingDirectory $repo
+}
+
 function Register-Job([string]$Name, [string]$Command, $Trigger, [string]$Description,
                       $JobSettings = $settings) {
     if ($Only -and $Only -ne $Name) { return }
-    $arguments = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$script`" " +
-                 "-Python `"$python`" -Command $Command"
-    $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $arguments `
-        -WorkingDirectory $repo
+    $action = New-HiddenAction "-File `"$script`" -Python `"$python`" -Command $Command"
     Register-ScheduledTask -TaskPath '\hk-estate\' -TaskName $Name -Action $action `
         -Trigger $Trigger -Settings $JobSettings -Principal $principal `
         -Description $Description -Force | Out-Null
@@ -90,10 +96,7 @@ if (-not $Only -or $Only -eq 'monthly blocked-check') {
 }
 if (-not $Only -or $Only -eq 'watchdog') {
     $wdScript = Join-Path $repo 'scripts\watchdog.ps1'
-    $wdArgs = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$wdScript`" " +
-              "-Python `"$python`""
-    $wdAction = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $wdArgs `
-        -WorkingDirectory $repo
+    $wdAction = New-HiddenAction "-File `"$wdScript`" -Python `"$python`""
     # every 15 minutes from midnight today, for 10 years (an open-ended repetition is not
     # accepted by every Windows build)
     $wdTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date).Date `
