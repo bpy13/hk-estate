@@ -70,6 +70,8 @@ TERRITORY = "territory"  # every estate outside the pilot groups
 # the owner removed them on 2026-10-20: every due page is read however long it takes (the
 # first Centanet pass ~26,000 pages, ~14 h at 2 s; later ~6,000 a day). The sources run in
 # parallel threads, so Spacious and 28Hse don't wait behind Centanet.
+# Spacious has no "due" rule like Centanet's, so with no budget it reads a seventh of its
+# buildings a run (oldest read first; see _spacious_quota), not all ~33,500 (~27 h).
 CENTANET_TERRITORY_BUDGET: int | None = None
 SPACIOUS_TERRITORY_BUDGET: int | None = None
 
@@ -519,6 +521,14 @@ class ListingRun:
             self.log(f"spacious {g}: {len(items)} listings from {res.pages} pages")
             self.results.append(res)
 
+    def _spacious_quota(self, n_buildings: int) -> int:
+        """Building pages this run: the --spacious-budget if given, else a seventh of all
+        buildings (every building read about weekly). A full pass of ~33,500 pages at ~1 s
+        plus response time is ~27 h, longer than a day."""
+        if self.spacious_budget is not None:
+            return self.spacious_budget
+        return math.ceil(n_buildings / ROTATE_DAYS)
+
     def _spacious_territory(self) -> None:
         """Building sale pages (a neighbourhood page shows only its first ~14 listings).
         Budgeted per run: buildings that had listings first, then never-read ones."""
@@ -527,7 +537,7 @@ class ListingRun:
         with db.session(self.db_path) as con:
             spacious.ensure_tables(con)
             n = con.execute("SELECT count(*) FROM spacious_building").fetchone()[0]
-            plan = spacious.plan_reads(con, self.spacious_budget) if n else []
+            plan = spacious.plan_reads(con, self._spacious_quota(n)) if n else []
             claimed = {r[0] for r in con.execute(
                 "SELECT listing_id FROM listing WHERE source = 'spacious' AND "
                 "group_name <> ?", [TERRITORY]).fetchall()}
@@ -540,7 +550,7 @@ class ListingRun:
                 return
             with db.session(self.db_path) as con:
                 added = spacious.add_buildings(con, pages, today)
-                plan = spacious.plan_reads(con, self.spacious_budget)
+                plan = spacious.plan_reads(con, self._spacious_quota(added))
             self.log(f"spacious: {added} buildings in the sitemap")
         pilot_seen = {i for r in self.results if r.source == "spacious" for i in r.seen}
         seen: dict[str, Listing] = {}
