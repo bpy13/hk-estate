@@ -413,18 +413,29 @@ def test_5xx_after_retries_slows_down_without_a_cool_down(tmp_path):
     assert f.cooldown_remaining("example.com") == 0
 
 
-def test_timeout_slows_the_host_down_and_is_raised(tmp_path):
+def test_three_timeouts_in_a_row_slow_the_host_down_one_does_not(tmp_path):
     clock = FakeClock()
 
     def dispatch(request):
         if request.url.path == "/robots.txt":
             return httpx.Response(200, text=ROBOTS)
+        if request.url.path == "/ok":
+            return httpx.Response(200, text="fine")
         raise httpx.ReadTimeout("slow")
 
     f = Fetcher(cache_dir=tmp_path / "cache", transport=httpx.MockTransport(dispatch),
                 sleep=clock.sleep, clock=clock.time, jitter=lambda: 0.0, min_interval=2.0)
+    for i in range(2):
+        with pytest.raises(httpx.ReadTimeout):
+            f.get(f"https://example.com/t{i}", "listing")
+    assert f.interval("example.com") == pytest.approx(2.0)  # 2 in a row: still the base
+    f.get("https://example.com/ok", "listing")  # an answer resets the run
+    for i in range(2, 4):
+        with pytest.raises(httpx.ReadTimeout):
+            f.get(f"https://example.com/t{i}", "listing")
+    assert f.interval("example.com") == pytest.approx(2.0)
     with pytest.raises(httpx.ReadTimeout):
-        f.get("https://example.com/a", "listing")
+        f.get("https://example.com/t4", "listing")  # third in a row
     assert f.interval("example.com") == pytest.approx(3.0)
 
 

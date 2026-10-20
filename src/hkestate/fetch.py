@@ -13,7 +13,8 @@ Every page the project reads goes through `Fetcher.get`. It:
 
 Adaptive pacing (process-local, per host). The base gap is the configured `min_interval`
 (never below 1 s or the robots.txt Crawl-delay). A throttle signal (HTTP 429 or 503, a 5xx
-still failing after the retries, or a timeout) multiplies the host's gap by 1.5, up to 15 s.
+still failing after the retries, or 3 timeouts in a row) multiplies the host's gap by 1.5,
+up to 15 s.
 A 429/503 also starts a cool-down for the host (15 min, then 30, 60, then 2 h each time;
 Retry-After is honoured if longer): the next request to that host waits until it is over and
 is a single probe. `throttle_probes` (default 1) is how many probes one call makes before it
@@ -72,6 +73,7 @@ MAX_REDIRECTS = 5
 # 11 hours after the first ones (2026-10-20), so repeated cool-downs grow to 2 hours.
 SLOWDOWN_FACTOR = 1.5
 MAX_INTERVAL_S = 15.0
+TIMEOUTS_TO_SLOW = 3  # timeouts in a row before the gap widens (single ones are normal)
 SPEEDUP_AFTER = 100  # good answers in a row before the gap steps back down
 SPEEDUP_FACTOR = 0.75  # 15 s back to 2 s in ~700 good answers (0.9 per 500 took ~16 h)
 COOLDOWN_RESET_AFTER = 100  # good answers in a row before cool-downs start again at the first
@@ -165,6 +167,7 @@ class Fetcher:
         self.throttle_probes = throttle_probes
         self._pace: dict[str, float] = {}  # per host: the adapted gap, when above the base
         self._ok_streak: dict[str, int] = {}
+        self._timeouts: dict[str, int] = {}  # per host: timeouts in a row
         self._cooldowns: dict[str, int] = {}  # per host: cool-downs since the last good run
         self._cooldown_until: dict[str, float] = {}
         self.cache_dir = Path(cache_dir) if cache_dir else get_data_dir() / "cache"
@@ -376,6 +379,7 @@ class Fetcher:
 
     def _answered(self, host: str) -> None:
         """A good answer: count towards stepping the gap back down."""
+        self._timeouts.pop(host, None)
         streak = self._ok_streak.get(host, 0) + 1
         self._ok_streak[host] = streak
         if streak >= COOLDOWN_RESET_AFTER:
@@ -430,7 +434,13 @@ class Fetcher:
                     response = self._client.post(url, json=body)
             except httpx.TimeoutException:
                 self.requests_made += 1
-                self._slow_down(host, "a timeout")
+                # Some sites time out on a few percent of pages for good (Ricacorp ~4%);
+                # only a run of timeouts means the site is struggling.
+                n = self._timeouts.get(host, 0) + 1
+                self._timeouts[host] = n
+                if n >= TIMEOUTS_TO_SLOW:
+                    self._timeouts[host] = 0
+                    self._slow_down(host, f"{n} timeouts in a row")
                 raise
             self.requests_made += 1
             status = response.status_code
