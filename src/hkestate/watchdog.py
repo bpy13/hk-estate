@@ -5,8 +5,8 @@ It never opens the database: it reads lock files (data/locks/), the jobs' own lo
 (data/logs/<job>_<YYYYmmdd_HHMMSS>.log) and a small state file (data/watchdog_state.json).
 
 A job is **alive** if a live process holds its lock file (the same stale-lock rule as
-locks.py), or its newest log was written in the last 45 minutes (a run started by older code
-that holds no lock of its own). A job sleeping through a cool-down holds its lock, so it is
+locks.py), or its newest log was written in the last 45 minutes and comes from a run started
+by older code (no "command line:" line; such runs may hold no lock of their own). A job sleeping through a cool-down holds its lock, so it is
 alive. A job is **dead** if it is not alive and its newest log (ignoring "not started" and
 "skipped" runs) has no normal ending: it crashed, was killed, or was stopped by Ctrl+C.
 
@@ -16,7 +16,7 @@ Jobs watched:
 - `ricacorp` (lock ricacorp; ends "ok: {...}" / "partial: {...}"): only a pass of the
   current ISO week is resumed; the Sunday task starts new passes.
 - `daily` (lock listings; ends "daily: ok|partial|skipped"): only today's (HK date) run, and
-  only between 08:00 and 20:00. A rerun doesn't read again what today's run already read.
+  only between 08:00 and midnight. A rerun doesn't read again what today's run already read.
 
 Limits: at most 3 watchdog restarts per job per day; a job that died within 10 minutes of
 its last watchdog restart 3 times in a row is left alone ("GIVING UP" in the log) until its
@@ -48,7 +48,7 @@ FRESH_LOG_MIN = 45  # a log written this recently means the job is still running
 MAX_RESTARTS_PER_DAY = 3
 QUICK_DEATH_MIN = 10
 QUICK_DEATHS_LIMIT = 3
-DAILY_FROM_HOUR, DAILY_UNTIL_HOUR = 8, 20
+DAILY_FROM_HOUR, DAILY_UNTIL_HOUR = 8, 24  # a dead run is resumed until midnight
 
 _TIME = r"^\d\d:\d\d:\d\d "
 
@@ -171,7 +171,10 @@ def decide(job: Job, *, now: datetime, holder: int | None, run: RunLog | None,
         state.pop("gave_up", None)
         state["quick_deaths"] = 0
         return Decision(job.name, "none", f"finished normally ({run.path.name})")
-    if now - run.modified < timedelta(minutes=FRESH_LOG_MIN):
+    # Only a run started by older code (no "command line:" line) may be alive without its
+    # lock; current code always holds it, so no holder means it died (e.g. it was killed).
+    if (now - run.modified < timedelta(minutes=FRESH_LOG_MIN)
+            and not re.search(r"command line: ", run.text)):
         return Decision(job.name, "none",
                         f"running (log written {run.modified:%H:%M}, no lock holder seen)")
     if job.daily:

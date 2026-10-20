@@ -110,13 +110,21 @@ def test_ricacorp_from_an_earlier_week_is_left_for_the_sunday_task(data):
     assert d.action == "restart"
 
 
-def test_daily_restarted_only_today_and_between_8_and_20(data):
+def test_daily_restarted_only_today_from_8_until_midnight(data):
     lines = ["08:00:09 log file: x", "10:01:55   spacious territory: 1600/6000 buildings"]
     write_log(data, "daily", datetime(2026, 10, 20, 8, 0, 9), lines,
               modified=datetime(2026, 10, 20, 10, 2))
     assert decide(data, "daily")[0].action == "restart"
-    assert decide(data, "daily", now=datetime(2026, 10, 20, 20, 30))[0].action == "none"
+    assert decide(data, "daily", now=datetime(2026, 10, 20, 20, 30))[0].action == "restart"
     assert decide(data, "daily", now=datetime(2026, 10, 21, 12))[0].action == "none"
+
+
+def test_a_killed_current_run_is_restarted_although_its_log_is_fresh(data):
+    write_log(data, "cd-history", NOW - timedelta(hours=1),
+              ['10:00:00 command line: ["cd-history"]', "11:50:00 cooling down 15 min"],
+              modified=NOW - timedelta(minutes=5))
+    d, _ = decide(data, "cd-history")
+    assert d.action == "restart"
 
 
 def test_finished_daily_is_left_alone_even_after_a_skipped_one(data):
