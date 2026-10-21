@@ -39,9 +39,13 @@ Saved layout (the dashboard's growth page, plan Phase 5, reads it):
   `net_growth_first` (a first-home buyer's stamp duty); `rental_yield`; `total_return`;
   `drawdown`, `peak`, `trough` (from the group's index; blank where there is none).
 - `settings.json`: `date`, `snapshot_at`, `order` (setting names in run order), `settings`
-  (per name: `label`, `start`, `end`, `pairs` by type, `enough` (true when a regression
-  could be run on recorded pairs), `note` (why not, or null), `seconds`, `checks` (the time
-  and district split used per pair type)), `prepare_seconds`, `total_seconds`.
+  (per name: `label`, `start`, `end`, `min_hold_years` (3 for the main settings),
+  `sensitivity` (true for a labelled side-check such as the 1-year-hold runs; never mixed
+  into the main verdicts), `pairs` by type, `enough` (true when a regression could be run
+  on recorded pairs), `note` (why not, or null), `seconds`, `checks` (the time and district
+  split used per pair type)), `prepare_seconds`, `total_seconds`.
+
+District names in `districts.csv` are Chinese; `DISTRICT_EN` maps them to English.
 """
 
 from __future__ import annotations
@@ -70,14 +74,44 @@ VALUE_COLS = ["ann_growth", "net_ann_growth", "net_ann_growth_first", "rental_yi
               "total_return"]
 
 
+SHORT_HOLD_YEARS = 1.0  # the sensitivity runs' minimum hold (decisions.md, 2026-10-21)
+
+# Chinese district names (as stored) -> English, kept alongside in reports and the dashboard
+DISTRICT_EN = {
+    "中西區": "Central and Western", "灣仔區": "Wan Chai", "東區": "Eastern", "南區": "Southern",
+    "油尖旺區": "Yau Tsim Mong", "深水埗區": "Sham Shui Po", "九龍城區": "Kowloon City",
+    "黃大仙區": "Wong Tai Sin", "觀塘區": "Kwun Tong", "葵青區": "Kwai Tsing",
+    "荃灣區": "Tsuen Wan", "屯門區": "Tuen Mun", "元朗區": "Yuen Long", "北區": "North",
+    "大埔區": "Tai Po", "沙田區": "Sha Tin", "西貢區": "Sai Kung", "離島區": "Islands",
+}
+# RVD's three regions, for grouping district charts (NT is split in two so a chart holds
+# at most five lines)
+DISTRICT_GROUPS = {
+    "Hong Kong Island": ["中西區", "灣仔區", "東區", "南區"],
+    "Kowloon": ["油尖旺區", "深水埗區", "九龍城區", "黃大仙區", "觀塘區"],
+    "New Territories West": ["葵青區", "荃灣區", "屯門區", "元朗區", "離島區"],
+    "New Territories East": ["北區", "大埔區", "沙田區", "西貢區"],
+}
+
+
+def district_label(name) -> str:
+    """'東區' -> 'Eastern (東區)'; a name without a translation (e.g. 'unknown') as is."""
+    en = DISTRICT_EN.get(name)
+    return f"{en} ({name})" if en else str(name)
+
+
 @dataclass(frozen=True)
 class Setting:
     """A date window to run the study in: a pair counts when bought on or after `start` and
-    sold (or valued) on or before `end` (None = no limit)."""
+    sold (or valued) on or before `end` (None = no limit), held at least `min_hold_years`.
+    A `sensitivity` is a labelled side-check (the 1-year-hold runs) shown in its own
+    section, never in the main verdict table."""
     name: str
     start: str | None
     end: str | None
     label: str
+    min_hold_years: float = pairs.MIN_HOLD_YEARS
+    sensitivity: bool = False
 
 
 # The plan's preset list (plan 2026-10-21 Task 7, from the owner's "all data in everything,
@@ -85,7 +119,9 @@ class Setting:
 # index and our own repeat-sales index: peak October 1997, low July 2003, the 2008 financial
 # crisis (Lehman, September 2008), peak September 2021, low October 2024. The 3-year minimum
 # hold still applies, so a phase shorter than about 4 years holds few or no pairs; such a
-# setting reports "too few pairs" rather than a verdict.
+# setting reports "too few pairs" rather than a verdict. The two most recent phases hold
+# almost none (1 and 0 on 2026-10-21), so each also runs as a clearly labelled sensitivity
+# with a 1-year minimum hold (decisions.md "Recent phases get a short-hold sensitivity").
 STANDARD = [
     Setting("all", None, None, "All data (every pair, 1995 on)"),
     Setting("since-2000", "2000-01-01", None, "Bought from 2000 on"),
@@ -100,6 +136,12 @@ STANDARD = [
     Setting("recent-2024-now", "2024-11-01", None, "Bought and sold since the Oct 2024 low"),
     Setting("bought-after-crash", "2003-07-01", None,
             "Bought from July 2003 on (does the crash drive the all-data result?)"),
+    Setting("fall-2021-2024-1y", "2021-10-01", "2024-10-31",
+            "Sensitivity: the 2021-2024 fall with a 1-year minimum hold",
+            min_hold_years=SHORT_HOLD_YEARS, sensitivity=True),
+    Setting("recent-2024-now-1y", "2024-11-01", None,
+            "Sensitivity: since the Oct 2024 low with a 1-year minimum hold",
+            min_hold_years=SHORT_HOLD_YEARS, sensitivity=True),
 ]
 
 
@@ -122,6 +164,7 @@ class Base:
     """Everything built once per snapshot, before any window is applied."""
     deals: pd.DataFrame
     pairs: dict[str, pd.DataFrame]  # real, ricacorp, recorded, estimated (with costs), gain
+    short: dict[str, pd.DataFrame]  # real, ricacorp held SHORT_HOLD_YEARS to 3 years, no costs
     y: pd.Series
     anchor: dict
     bias: pd.DataFrame
@@ -154,6 +197,9 @@ class Study:
     districts: pd.DataFrame = field(default_factory=pd.DataFrame)
     enough: bool = True  # enough recorded pairs for a regression
     seconds: float = 0.0
+    label: str = ""
+    min_hold_years: float = pairs.MIN_HOLD_YEARS
+    sensitivity: bool = False
 
 
 # ---- estimated pairs: the model's value of each flat today -----------------------------------
@@ -273,12 +319,20 @@ def prepare(raw: dict, m: model.FairPrice | None = None,
     deals = features.deal_features(raw)
     log(f"deals {len(deals)}, clean {deals['exclude_reason'].isna().sum()}")
 
-    real = pairs.real_pairs(deals)
-    rica = pairs.ricacorp_pairs(raw.get("deal_pairs"), deals, real=real)
+    # every consecutive-sale pair once (any hold); the 3-year rule splits it into the main
+    # pairs and the short holds kept for the 1-year sensitivity runs
+    dated = pairs.real_pairs(deals, min_years=0.0)
+    real = dated[dated["years"] >= pairs.MIN_HOLD_YEARS].reset_index(drop=True)
+    short_real = dated[(dated["years"] >= SHORT_HOLD_YEARS)
+                       & (dated["years"] < pairs.MIN_HOLD_YEARS)].reset_index(drop=True)
+    rica_all = pairs.ricacorp_pairs(raw.get("deal_pairs"), deals, min_years=SHORT_HOLD_YEARS,
+                                    real=dated)
+    rica = rica_all[rica_all["years"] >= pairs.MIN_HOLD_YEARS].reset_index(drop=True)
+    short_rica = rica_all[rica_all["years"] < pairs.MIN_HOLD_YEARS].reset_index(drop=True)
     recorded = pd.concat([x for x in (real, rica) if not x.empty] or [real], ignore_index=True)
     gain_all = pairs.gain_pairs(deals)
     chk = pairs.gain_check(gain_all, real)
-    gain = pairs.undated_gain_pairs(deals, recorded)
+    gain = pairs.undated_gain_pairs(deals, recorded, dated=dated)
 
     estimated = pd.DataFrame()
     if m is not None:
@@ -304,16 +358,29 @@ def prepare(raw: dict, m: model.FairPrice | None = None,
     y = costs.rvd_yields(rvd) if not rvd.empty else pd.Series(dtype=float)
     anchor = listing_anchor(raw, deals, y) if not y.empty else {"factor": 1.0,
                                                                "basis": "none"}
-    by_type = {"real": real, "ricacorp": rica, "recorded": recorded, "estimated": estimated}
-    by_type = {k: _with_costs(v, y, anchor["factor"]) if not y.empty else v
-               for k, v in by_type.items()}
-    by_type["gain"] = gain
+    # costs are per row, so they are computed once on the recorded set (real + Ricacorp)
+    # and split back, not on each of the three overlapping frames
+    if not y.empty:
+        recorded = _with_costs(recorded, y, anchor["factor"])
+        estimated = _with_costs(estimated, y, anchor["factor"])
+    by_type = {"real": _of_type(recorded, "real", real),
+               "ricacorp": _of_type(recorded, "ricacorp", rica),
+               "recorded": recorded, "estimated": estimated, "gain": gain}
     log("costs and yields added")
     bias = model_bias(test_predictions, deals) if m is not None else pd.DataFrame()
-    return Base(deals=deals, pairs=by_type, y=y, anchor=anchor, bias=bias, gain_check=chk,
+    return Base(deals=deals, pairs=by_type, short={"real": short_real, "ricacorp": short_rica},
+                y=y, anchor=anchor, bias=bias, gain_check=chk,
                 coverage=coverage(raw, deals), rvd=rvd,
                 rvd_long=growth.rvd_long_run(rvd) if not rvd.empty else pd.DataFrame(),
                 notes=notes)
+
+
+def _of_type(recorded: pd.DataFrame, pair_type: str, fallback: pd.DataFrame) -> pd.DataFrame:
+    """The rows of one pair type out of the recorded set (with its cost columns); the frame
+    as built when the recorded set is empty."""
+    if recorded.empty or "pair_type" not in recorded.columns:
+        return fallback
+    return recorded[recorded["pair_type"] == pair_type].reset_index(drop=True)
 
 
 # ---- step 2: one window -----------------------------------------------------------------------
@@ -342,6 +409,13 @@ def _index_set(frame: pd.DataFrame, window=None) -> tuple[dict, list]:
         dd = growth.drawdown(idx, lo, hi)
         rows.append({"group": name, "pairs": len(part), **dd})
     return out, rows
+
+
+def _concat(*frames: pd.DataFrame) -> pd.DataFrame:
+    """Stack pair frames, leaving out empty ones (an empty frame's object-typed date columns
+    would turn the dates of the others into objects)."""
+    parts = [f for f in frames if not f.empty]
+    return pd.concat(parts, ignore_index=True) if parts else frames[0]
 
 
 def _clip_window(inner: tuple, outer: tuple) -> tuple:
@@ -379,18 +453,37 @@ def _district_rows(frames: dict, drawdowns: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def analyse(base: Base, start=None, end=None, name: str = "all", log=print) -> Study:
-    """The study on the pairs inside [start, end] (both sales inside; None = open)."""
+def analyse(base: Base, start=None, end=None, name: str = "all", log=print,
+            min_hold_years: float = pairs.MIN_HOLD_YEARS, label: str = "",
+            sensitivity: bool = False) -> Study:
+    """The study on the pairs inside [start, end] (both sales inside; None = open).
+    `min_hold_years` below the 3-year rule adds the short holds (a sensitivity run: their
+    costs and yields are computed here, for the window's pairs only)."""
     t0 = time.perf_counter()
     window = (start, end)
     by_type = {k: v[pairs.in_window(v, start, end)].reset_index(drop=True)
                for k, v in base.pairs.items() if k != "gain"}
+    notes = list(base.notes)
+    if min_hold_years < pairs.MIN_HOLD_YEARS:
+        extra = {}
+        for k, v in base.short.items():
+            v = v[pairs.in_window(v, start, end) & (v["years"] >= min_hold_years)]
+            extra[k] = _with_costs(v.reset_index(drop=True), base.y, base.anchor["factor"]) \
+                if not base.y.empty else v.reset_index(drop=True)
+            by_type[k] = _concat(by_type[k], extra[k])
+        by_type["recorded"] = _concat(by_type["real"], by_type["ricacorp"])
+        n_short = sum(len(v) for v in extra.values())
+        notes.append(f"Sensitivity: minimum hold {min_hold_years:g} years instead of 3, which "
+                     f"adds {n_short:,} recorded pairs held {min_hold_years:g}-3 years. "
+                     "After-cost figures ignore Special Stamp Duty (10-20% on resales within "
+                     "36 months until 28 Feb 2024); trust the gross growth and the verdicts, "
+                     "not the after-cost numbers.")
     # gain pairs have no start date: only their (sale) end can be placed in the window
     gain = base.pairs["gain"]
     by_type["gain"] = gain[pairs.in_window(gain, None, end)].reset_index(drop=True)
-    notes = list(base.notes)
     counts = {k: len(v) for k, v in by_type.items()}
-    log(f"[{name}] window {start or 'start'} to {end or 'end'}: pairs {counts}")
+    log(f"[{name}] window {start or 'start'} to {end or 'end'}, hold {min_hold_years:g}+ "
+        f"years: pairs {counts}")
 
     frames, verdicts, summaries = {}, {}, {}
     for k in ("real", "ricacorp", "recorded", "estimated"):
@@ -405,8 +498,8 @@ def analyse(base: Base, start=None, end=None, name: str = "all", log=print) -> S
     enough = len(frames.get("recorded", ())) >= MIN_PAIRS
     if not enough:
         notes.append(f"Too few recorded pairs in this window ({counts['recorded']:,}; a "
-                     f"regression needs {MIN_PAIRS}): no verdicts. Pairs are held 3+ years, "
-                     "so a short phase holds few.")
+                     f"regression needs {MIN_PAIRS}): no verdicts. Pairs are held "
+                     f"{min_hold_years:g}+ years, so a short phase holds few.")
     for k in ("recorded", "real", "estimated"):
         f = frames.get(k)
         if f is None or len(f) < MIN_PAIRS:
@@ -470,7 +563,7 @@ def analyse(base: Base, start=None, end=None, name: str = "all", log=print) -> S
         rvd_long=base.rvd_long, first_hand=pd.DataFrame(fh_rows), summaries=summaries,
         anchor=base.anchor, coverage=base.coverage, notes=notes, rvd=base.rvd,
         setting=name, window=window, districts=_district_rows(frames, drawdowns),
-        enough=enough)
+        enough=enough, label=label, min_hold_years=min_hold_years, sensitivity=sensitivity)
     s.seconds = time.perf_counter() - t0
     log(f"[{name}] done in {s.seconds:.0f} s")
     return s
@@ -582,6 +675,7 @@ def setting_meta(s: Study, setting: Setting) -> dict:
     """The settings.json entry for one run."""
     note = next((n for n in s.notes if n.startswith("Too few")), None)
     return {"label": setting.label, "start": setting.start, "end": setting.end,
+            "min_hold_years": setting.min_hold_years, "sensitivity": setting.sensitivity,
             "pairs": {k: int(len(v)) for k, v in s.pairs.items()}, "enough": s.enough,
             "note": note, "seconds": round(s.seconds, 1),
             "checks": {k: dict(v.attrs.get("checks", {})) for k, v in s.verdicts.items()}}
@@ -606,7 +700,9 @@ def run_settings(raw: dict, m: model.FairPrice | None, test_predictions: pd.Data
     meta["order"] = [x for x in meta.get("order", []) if x not in {s.name for s in settings}]
     studies = {}
     for st in settings:
-        s = analyse(base, st.start, st.end, name=st.name, log=log)
+        s = analyse(base, st.start, st.end, name=st.name, log=log,
+                    min_hold_years=st.min_hold_years, label=st.label,
+                    sensitivity=st.sensitivity)
         studies[st.name] = s
         save_setting(s, out_dir)
         meta["settings"][st.name] = setting_meta(s, st)

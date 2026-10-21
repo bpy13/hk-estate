@@ -31,6 +31,20 @@ def _add_history(con):
         con.execute("INSERT OR IGNORE INTO unit (unit_id, building_id, floor_label, floor_num, "
                     "floor_kind, flat) VALUES (?, ?, ?, ?, 'number', ?)",
                     [db.unit_id(b, str(floor), f"R{flat}"), b, str(floor), floor, f"R{flat}"])
+    # short holds inside the 2021-2024 fall (bought 2022, resold 1.2-2.5 years later): no
+    # 3-year pair, but the 1-year sensitivity picks them up
+    for i in range(30):
+        b = ["cd-1-AAA", "cd-1-BBB"][i % 2]
+        floor, flat = 2 + i % 28, f"S{i % 4}"
+        d0 = date(2022, 3, 1) + timedelta(days=rng.randint(0, 120))
+        d1 = d0 + timedelta(days=rng.randint(440, 910))
+        p0 = int(600.0 * 8000 * rng.uniform(0.95, 1.05))
+        add_deal(con, f"s{i}a", b, floor, flat, d0, p0, area=600.0, source="centadata")
+        add_deal(con, f"s{i}b", b, floor, flat, d1, int(p0 * 0.95), area=600.0,
+                 source="centadata")
+        con.execute("INSERT OR IGNORE INTO unit (unit_id, building_id, floor_label, floor_num, "
+                    "floor_kind, flat) VALUES (?, ?, ?, ?, 'number', ?)",
+                    [db.unit_id(b, str(floor), flat), b, str(floor), floor, flat])
     # a flat last sold in 2008: the start of an estimated pair
     add_deal(con, "old_z", "cd-1-AAA", 5, "Z", date(2008, 3, 1), 3_000_000, area=600.0,
              source="centadata")
@@ -87,9 +101,17 @@ def test_hkestate_report_writes_the_findings_file(data):
     out = tmp_path / "reports" / f"findings_{date.today():%Y%m%d}.md"
     text = out.read_text("utf-8")
     assert text.index("Summary in plain language") < text.index("## Data coverage")
-    for heading in ("PRELIMINARY", "## Verdicts by attribute", "## First-hand vs second-hand",
-                    "## Limits", "## Growth, total return and drawdown by attribute"):
+    # (no "Cross-check: estimated pairs" section here: the synthetic data has one estimated
+    # pair, too few for a regression)
+    for heading in ("## Verdicts by attribute and market phase", "## First-hand vs second-hand",
+                    "## Limits", "## By district",
+                    "## Growth, total return and drawdown by attribute"):
         assert heading in text
+    # Task 8: the old provisional wording is gone (recorded pairs now span 1995-2026)
+    for stale in ("PRELIMINARY", "pilot-heavy", "since about 2018",
+                  "What changes when the backfill completes"):
+        assert stale not in text
+    assert "Yuen Long (元朗區)" in text  # districts carry the English name alongside
     assert (tmp_path / "reports" / f"findings_{date.today():%Y%m%d}" / "effects.svg").exists()
     with db.session(tmp_path / "hkestate.duckdb") as con:
         status = con.execute("SELECT status FROM run_log WHERE command = 'report'").fetchone()[0]
@@ -128,14 +150,49 @@ def test_window_drops_pairs_outside_and_adapts_the_time_split(data):
     assert len(s2.pairs["real"]) == len(real)
 
 
+def test_short_hold_sensitivity_adds_pairs_held_one_to_three_years(data):
+    """Decision 2026-10-21: the 2021-2024 fall holds no 3-year pairs, so it also runs with a
+    1-year minimum hold, clearly flagged; the main settings are unchanged by it."""
+    import pandas as pd
+
+    _, raw = data
+    tp = pd.read_parquet(model.model_dir() / "test_predictions.parquet")
+    base = study.prepare(raw, model.load(), tp, log=lambda *_: None)
+    assert (base.pairs["real"]["years"] >= 3).all()
+    assert (base.short["real"]["years"] < 3).all() and (base.short["real"]["years"] >= 1).all()
+    main = study.analyse(base, "2021-10-01", "2024-10-31", name="fall-2021-2024")
+    assert main.pairs["real"].empty and main.enough is False
+    assert main.min_hold_years == 3 and main.sensitivity is False
+    s = study.analyse(base, "2021-10-01", "2024-10-31", name="fall-2021-2024-1y",
+                      min_hold_years=1.0, sensitivity=True, label="Sensitivity")
+    real = s.pairs["real"]
+    assert len(real) >= 25
+    assert real["years"].between(1, 3).all()
+    assert (real["start_date"] >= pd.Timestamp("2021-10-01")).all()
+    assert (real["end_date"] <= pd.Timestamp("2024-10-31")).all()
+    # the short holds get costs and yields too, and the recorded set includes them
+    assert {"net_ann_growth", "rental_yield", "total_return"} <= set(real.columns)
+    assert len(s.pairs["recorded"]) == len(real) + len(s.pairs["ricacorp"])
+    assert s.sensitivity and s.min_hold_years == 1.0 and s.label == "Sensitivity"
+    assert any(n.startswith("Sensitivity") for n in s.notes)
+    # the all-data study still holds only 3-year pairs
+    assert (study.analyse(base).pairs["real"]["years"] >= 3).all()
+
+
 def test_standard_settings_are_the_plans_list():
     names = [s.name for s in study.STANDARD]
     assert names == ["all", "since-2000", "crash-1997-2003", "recovery-2003-2008",
                      "boom-2008-2021", "fall-2021-2024", "recent-2024-now",
-                     "bought-after-crash"]
+                     "bought-after-crash", "fall-2021-2024-1y", "recent-2024-now-1y"]
     for s in study.STANDARD:
         if s.start and s.end:
             assert s.start < s.end
+        # the short-hold runs are flagged sensitivities; the main settings keep the 3-year rule
+        assert s.sensitivity == s.name.endswith("-1y")
+        assert s.min_hold_years == (1.0 if s.sensitivity else 3.0)
+    by_name = {s.name: s for s in study.STANDARD}
+    assert by_name["fall-2021-2024-1y"].start == by_name["fall-2021-2024"].start
+    assert by_name["fall-2021-2024-1y"].end == by_name["fall-2021-2024"].end
     assert study.settings_named("standard") == list(study.STANDARD)
     assert [s.name for s in study.settings_named("all,crash-1997-2003")] == [
         "all", "crash-1997-2003"]
@@ -151,20 +208,31 @@ def test_report_settings_saves_csvs_per_setting(data):
     import pandas as pd
 
     tmp_path, _ = data
-    assert cli.main(["report", "--from-snapshot", "--settings", "all,crash-1997-2003"]) == 0
+    assert cli.main(["report", "--from-snapshot", "--settings",
+                     "all,crash-1997-2003,fall-2021-2024-1y"]) == 0
     root = tmp_path / "reports" / "growth" / f"{date.today():%Y%m%d}"
-    for name in ("all", "crash-1997-2003"):
+    for name in ("all", "crash-1997-2003", "fall-2021-2024-1y"):
         for f in ("effects", "districts", "index", "returns"):
             assert (root / name / f"{f}.csv").exists(), (name, f)
     meta = json.loads((root / "settings.json").read_text("utf-8"))
-    assert meta["order"] == ["all", "crash-1997-2003"]
+    assert meta["order"] == ["all", "crash-1997-2003", "fall-2021-2024-1y"]
     allm = meta["settings"]["all"]
     assert allm["pairs"]["real"] >= 200 and allm["enough"] is True
     assert allm["start"] is None and allm["end"] is None and allm["seconds"] > 0
+    assert allm["sensitivity"] is False and allm["min_hold_years"] == 3
     crash = meta["settings"]["crash-1997-2003"]
     assert crash["pairs"]["real"] == 0 and crash["enough"] is False
     assert "too few" in crash["note"].lower()
     assert crash["start"] == "1997-10-01"
+    # the sensitivity is flagged for the dashboard and holds the short-hold pairs
+    sens = meta["settings"]["fall-2021-2024-1y"]
+    assert sens["sensitivity"] is True and sens["min_hold_years"] == 1
+    assert sens["pairs"]["real"] >= 25
+    text = (tmp_path / "reports" / f"findings_{date.today():%Y%m%d}.md").read_text("utf-8")
+    assert "## Short-hold sensitivity" in text
+    assert "| Attribute | all | crash-1997-2003 |" in text  # the sensitivity is not a column
+    assert text.index("## Verdicts by attribute and market phase") < text.index(
+        "## Short-hold sensitivity")
     eff = pd.read_csv(root / "all" / "effects.csv")
     assert {"setting", "pairs_type", "attribute", "label", "coef", "se", "p", "n_with",
             "robust", "verdict"} <= set(eff.columns)

@@ -199,7 +199,15 @@ throughout. The 28Hse territory backfill (about 7% done) is not waited for.
     (windows, pair counts, run time). Phase 5 reads these.
   - Done when: tests cover the settings list and the saved file layout; the command runs on
     the snapshot within 2 hours (report the time).
-- [ ] **Task 8: report on real pairs, by setting and by district**
+- [x] **Task 8: report on real pairs, by setting and by district** *(2026-10-21 22:46:
+  `report --from-snapshot --settings standard` on the 17:54 snapshot in 13 min 30 s (was
+  22 min 35 s: costs and yields vectorised, 13.5 min -> 15 s, saved CSVs identical to
+  5e-16). Report: summary across phases, attribute x setting table with a reading per
+  attribute, estimated pairs as a cross-check section, the two 1-year-hold sensitivities
+  (982 and 703 pairs) in their own section, 18-district table and four district index
+  charts from 1995. Only low floors hold the same way in all three testable phases.
+  Spot-checked against the CSVs: all/size_xl +2.20 robust, boom/mtr_near +0.83 robust,
+  Yau Tsim Mong 48,108 pairs, 5.8% a year, worst fall 62%.)*
   - Files: modify `src/hkestate/report.py`, `src/hkestate/charts.py`; tests
     `tests/test_study.py`
   - Real (recorded) pairs are the main evidence; estimated pairs are a cross-check section.

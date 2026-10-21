@@ -1,9 +1,12 @@
-"""Findings report (Task 5.4): `hkestate report` writes data/reports/findings_<date>.md with
-charts in data/reports/findings_<date>/. Generated from `study.run`; never committed (the repo
-is public and the report holds the data).
+"""Findings report: `hkestate report` writes data/reports/findings_<date>.md with charts in
+data/reports/findings_<date>/. Generated from `study.run_settings` (several settings from one
+snapshot) or `study.run` (one window); never committed (the repo is public and the report
+holds the data).
 
 Order: a plain-language summary first (the owner relays it to non-technical people), then
-coverage, method, verdicts, tables and charts, first-hand vs second-hand, checks, limits.
+coverage, method, the verdicts by attribute and market phase (recorded pairs are the main
+evidence), the estimated-pair cross-check, the short-hold sensitivity, returns by attribute,
+districts, indices, first-hand vs second-hand, checks, limits.
 """
 
 from __future__ import annotations
@@ -15,9 +18,9 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from hkestate import charts
+from hkestate import charts, growth
 from hkestate.config import get_data_dir
-from hkestate.study import ESTIMATED_INDEX_WINDOW, Study
+from hkestate.study import DISTRICT_GROUPS, ESTIMATED_INDEX_WINDOW, MIN_PAIRS, Study, district_label
 
 TYPE_NAMES = {
     "real": "Real pairs (two recorded sales of the same flat)",
@@ -25,6 +28,15 @@ TYPE_NAMES = {
     "recorded": "Recorded pairs (real + Ricacorp combined)",
     "estimated": "Estimated pairs (sale before 2018 vs the model's value today)",
 }
+
+# the market-phase settings (study.STANDARD) and how the summary names them
+PHASES = {
+    "crash-1997-2003": "the 1997-2003 crash", "recovery-2003-2008": "the 2003-2008 recovery",
+    "boom-2008-2021": "the 2008-2021 boom", "fall-2021-2024": "the 2021-2024 fall",
+    "recent-2024-now": "the market since late 2024",
+}
+FALLING = {"crash-1997-2003", "fall-2021-2024"}
+RISING = {"recovery-2003-2008", "boom-2008-2021", "recent-2024-now"}
 
 
 def _pct(x, digits=1, sign=False) -> str:
@@ -66,19 +78,161 @@ SHORT = {
 }
 
 
-def _summary(s: Study) -> list[str]:
+# ---- the attribute x setting matrix ------------------------------------------------------------
+
+
+def cell(s: Study | None, attr: str, key: str = "recorded") -> dict | None:
+    """One matrix cell: the effect and its verdict for `attr` in setting `s`, or None when
+    the setting had too few pairs for a verdict (or never tested the attribute)."""
+    if s is None:
+        return None
+    v = s.verdicts.get(key)
+    if v is None or v.empty or attr not in v.index:
+        return None
+    r = v.loc[attr]
+    return {"coef": float(r["coef"]), "robust": bool(r["robust"]),
+            "significant": bool(r["significant"]), "p": float(r["p"])}
+
+
+def cell_text(c: dict | None) -> str:
+    """'**+2.20**' robust, '+0.61' significant but not robust, '+0.03 n.s.', '–' no verdict."""
+    if c is None:
+        return "–"
+    if c["robust"]:
+        return f"**{_pp(c['coef'])}**"
+    return _pp(c["coef"]) if c["significant"] else f"{_pp(c['coef'])} n.s."
+
+
+def _way(coef: float) -> str:
+    return "faster" if coef > 0 else "slower"
+
+
+def phase_reading(attr: str, cells: dict[str, dict | None], phases: list[str] | None = None
+                  ) -> str:
+    """A plain-language line for one attribute across the market phases: which phases it
+    holds in, as a reader would ask ("helps in rising and falling markets", "only in the
+    2008-2021 boom", ...). `cells`: setting name -> `cell` (None = no verdict there);
+    `phases`: the phase settings to read, in order (default: every PHASES key present)."""
+    phases = [p for p in (phases or list(PHASES)) if p in cells]
+    tested = [p for p in phases if cells[p] is not None]
+    base = cells.get("all")
+    short = SHORT.get(attr, attr)
+    head = f"**{short[0].upper() + short[1:]}.**"  # not .capitalize(): it lowers "MTR"
+    if base is not None:
+        head += (f" All data: {_pp(base['coef'])} pp a year, "
+                 + ("robust" if base["robust"] else
+                    "significant but not robust" if base["significant"] else
+                    "not significant") + ".")
+    if not tested:
+        return head + " No market phase had enough pairs to test it on its own."
+    name = {p: PHASES.get(p, p) for p in phases}
+
+    def with_effect(ps):
+        return ", ".join(f"{name[p]} ({_pp(cells[p]['coef'])})" for p in ps)
+
+    # the direction to judge against: the all-data effect, else the first robust phase
+    any_robust = [p for p in tested if cells[p]["robust"]]
+    sign = np.sign(base["coef"]) if base else np.sign(
+        cells[(any_robust or tested)[0]]["coef"])
+    same = [p for p in tested if np.sign(cells[p]["coef"]) == sign]
+    robust_in = [p for p in same if cells[p]["robust"]]
+    sig_same = [p for p in same if cells[p]["significant"]]
+    if robust_in and len(robust_in) == len(tested) and len(same) == len(tested):
+        kinds = {"falling" for p in tested if p in FALLING} | {"rising" for p in tested
+                                                                 if p in RISING}
+        where = ("in rising and falling markets" if kinds == {"rising", "falling"}
+                 else f"in {'rising' if kinds == {'rising'} else 'falling'} markets only, the "
+                      "only kind with enough pairs")
+        return (f"{head} Grew {_way(sign)} in every market phase tested: "
+                f"{with_effect(tested)}. Holds {where}.")
+    if robust_in:
+        rest = [p for p in tested if p not in robust_in]
+        parts = []
+        for p in rest:
+            c = cells[p]
+            if np.sign(c["coef"]) != sign and c["significant"]:
+                parts.append(f"the other way in {name[p]} ({_pp(c['coef'])})")
+            elif c["significant"]:
+                parts.append(f"significant but not robust in {name[p]} ({_pp(c['coef'])})")
+            else:
+                parts.append(f"not significant in {name[p]}")
+        return (f"{head} Robust only in {with_effect(robust_in)}"
+                + (f"; {'; '.join(parts)}" if parts else "") + ".")
+    if len(sig_same) == len(tested):
+        return (f"{head} Points the same way ({_way(sign)}) in every phase tested, "
+                f"{with_effect(tested)}, but fails an out-of-sample check in each: a weak, "
+                "consistent lean rather than a proven effect.")
+    if not any(cells[p]["significant"] for p in tested):
+        return (f"{head} Not significant in any phase tested "
+                f"({', '.join(name[p] for p in tested)}): no phase-level effect found.")
+    flips = [p for p in tested if p not in same and cells[p]["significant"]]
+    return (f"{head} No consistent effect across phases: {with_effect(tested)}"
+            + (f"; it points the other way in {', '.join(name[p] for p in flips)}" if flips
+               else "") + ".")
+
+
+def matrix_lines(main: list[Study], key: str = "recorded") -> list[str]:
+    """The attribute x setting table plus a reading per attribute."""
+    attrs = [a for a in growth.ATTRIBUTES
+             if any(cell(s, a, key) is not None for s in main)]
+    if not attrs:
+        return ["No setting had enough pairs for a verdict.", ""]
+    rows = []
+    for a in attrs:
+        row = {"Attribute": SHORT[a]}
+        for s in main:
+            row[s.setting] = cell_text(cell(s, a, key))
+        rows.append(row)
+    lines = _table(pd.DataFrame(rows)) + ["",
+             "Effects in percentage points of growth a year, like for like (same district, "
+             "purchase year, price level and building age). **Bold** = robust (p < 0.05 and "
+             "the same sign in both halves of a time split and of a district split); plain = "
+             "significant but failed a split; n.s. = not significant; – = too few pairs for a "
+             "verdict there.", ""]
+    phases = [s.setting for s in main if s.setting in PHASES]
+    if phases:
+        lines += ["**How to read each attribute across the market phases:**", ""]
+        for a in attrs:
+            cells = {s.setting: cell(s, a, key) for s in main}
+            lines.append(f"- {phase_reading(a, cells, phases)}")
+        lines.append("")
+    return lines
+
+
+def holds_everywhere(main: list[Study], key: str = "recorded"
+                     ) -> tuple[list, list, list, list]:
+    """(attributes robust the same way in every phase tested, robust in every phase but
+    not always the same way, robust in some phases, robust in none), among the phase
+    settings with a verdict."""
+    phases = [s for s in main if s.setting in PHASES and s.enough and key in s.verdicts
+              and len(s.verdicts[key])]
+    every, mixed, some, none = [], [], [], []
+    for a in growth.ATTRIBUTES:
+        cells = [cell(s, a, key) for s in phases]
+        cells = [c for c in cells if c is not None]
+        if not cells:
+            continue
+        rob = [c for c in cells if c["robust"]]
+        signs = {np.sign(c["coef"]) for c in rob}
+        if rob and len(rob) == len(cells) and len(signs) == 1:
+            every.append((a, rob[0]["coef"], len(cells)))
+        elif rob and len(rob) == len(cells):
+            mixed.append((a, len(cells)))
+        elif rob:
+            some.append((a, len(rob), len(cells)))
+        else:
+            none.append(a)
+    return every, mixed, some, none
+
+
+# ---- sections ----------------------------------------------------------------------------------
+
+
+def _summary(s: Study, main: list[Study], sens: list[Study]) -> list[str]:
     cov = s.coverage
     rec = s.frames.get("recorded")
     est = s.frames.get("estimated")
     lines = ["## Summary in plain language", ""]
-    lines.append(
-        "**This is a preliminary report.** The territory-wide data load is still running "
-        "(about 9 days for the 28Hse history), so most recorded resale pairs come from the five "
-        "pilot estates. The numbers will change when the load finishes; rerun `hkestate report` "
-        "then. Verdicts close to the line can flip as data is added (while the load runs, a "
-        "rerun an hour later can differ), so treat single verdicts as provisional and look "
-        "for the ones that hold in both kinds of pairs.")
-    lines.append("")
     lt = s.rvd_long
     if not lt.empty:
         allp = lt[(lt["series"] == "Price index") & (lt["class"] == "ALL")]
@@ -96,14 +250,12 @@ def _summary(s: Study) -> list[str]:
         if not r.empty and pd.notna(r.iloc[0]["drawdown"]):
             r = r.iloc[0]
             lines.append(
-                f"- **Worst fall in our own resale pairs (this window):** prices fell "
+                f"- **Worst fall in our own resale pairs:** prices fell "
                 f"{_pct(r['drawdown'], 0)} from {r['peak']:%B %Y} to {r['trough']:%B %Y}.")
-    for key, who in (("recorded", "flats sold twice since about 2018 (mostly 2018-2026)"),
-                     ("estimated", "flats last sold before 2018, valued today by our model")):
-        v = s.verdicts.get(key)
-        if v is None or v.empty:
-            continue
+    v = s.verdicts.get("recorded")
+    if v is not None and not v.empty:
         rob = v[v["robust"]]
+        who = "recorded pairs (two real prices for the same flat, all years)"
         if rob.empty:
             lines.append(f"- **Attributes, {who}:** no attribute passed every check.")
         else:
@@ -115,15 +267,62 @@ def _summary(s: Study) -> list[str]:
         if not weak.empty:
             lines.append(f"  Looked significant but failed an out-of-sample check: "
                          f"{', '.join(SHORT[a] for a in weak.index)}.")
-    both = []
+    phases = [m for m in main if m.setting in PHASES]
+    if phases:
+        tested = [m for m in phases if m.enough]
+        if tested:
+            every, mixed, some, none = holds_everywhere(main)
+            text = (f"- **Across market phases** ({len(tested)} of {len(phases)} phases had "
+                    "enough pairs: " + ", ".join(PHASES[m.setting] for m in tested) + "). ")
+            if every:
+                text += ("Held the same way in every phase tested: " + "; ".join(
+                    f"{SHORT[a]} ({_way(c)}, {n} phases)" for a, c, n in every) + ". ")
+            if mixed:
+                text += ("Clear in every phase but not always the same way: " + "; ".join(
+                    f"{SHORT[a]} ({n} phases)" for a, n in mixed) + ". ")
+            if some:
+                text += ("Held only in some: " + "; ".join(
+                    f"{SHORT[a]} ({k} of {n})" for a, k, n in some) + ". ")
+            if none:
+                text += "Robust in no phase: " + ", ".join(SHORT[a] for a in none) + "."
+            lines.append(text + " The table in \"Verdicts by attribute and market phase\" has "
+                         "the effect in each phase and a line per attribute.")
+        else:
+            lines.append(f"- **Across market phases:** none of the {len(phases)} phases run "
+                         "had enough 3-year pairs for a verdict of its own.")
+        short = [m for m in phases if not m.enough]
+        if short:
+            lines.append("  Not tested: " + "; ".join(
+                f"{PHASES[m.setting]} has {len(m.pairs['recorded']):,} recorded "
+                f"pair{'' if len(m.pairs['recorded']) == 1 else 's'} held 3+ years"
+                for m in short) + ": too few for a verdict (a phase shorter than about four "
+                "years holds almost no 3-year pairs).")
     if "recorded" in s.verdicts and "estimated" in s.verdicts:
         a, b = s.verdicts["recorded"], s.verdicts["estimated"]
         common = a.index.intersection(b.index)
         both = [x for x in common if a.loc[x, "robust"] and b.loc[x, "robust"]
                 and np.sign(a.loc[x, "coef"]) == np.sign(b.loc[x, "coef"])]
-        if both:
-            lines.append(f"- **Strongest signal (robust in both the recent and the long-run "
-                         f"pairs, same direction):** {', '.join(SHORT[x] for x in both)}.")
+        clash = [x for x in common if a.loc[x, "robust"] and b.loc[x, "robust"]
+                 and np.sign(a.loc[x, "coef"]) != np.sign(b.loc[x, "coef"])]
+        text = "- **Cross-check with estimated pairs** (a flat's last sale before 2018 against " \
+               "the model's value today): "
+        text += (f"agree and robust in both: {', '.join(SHORT[x] for x in both)}."
+                 if both else "no attribute is robust in both.")
+        if clash:
+            text += f" Robust in both but opposite: {', '.join(SHORT[x] for x in clash)}."
+        lines.append(text)
+    for m in sens:
+        n = len(m.pairs["recorded"])
+        v = m.verdicts.get("recorded")
+        if v is not None and len(v):
+            rob = [SHORT[a] for a in v.index if v.loc[a, "robust"]]
+            verdict = ("robust: " + ", ".join(rob)) if rob else "no attribute robust"
+        else:
+            verdict = "too few for a verdict"
+        what = (m.label or m.setting).removeprefix("Sensitivity: ")
+        lines.append(f"- **Short-hold sensitivity (`{m.setting}`):** {what}: {n:,} recorded "
+                     f"pairs held {m.min_hold_years:g}+ years; {verdict}. A side-check only "
+                     "(see its own section); not part of the main verdicts.")
     fh = s.first_hand
     if not fh.empty:
         for k in ("recorded", "estimated"):
@@ -143,17 +342,34 @@ def _summary(s: Study) -> list[str]:
                 f"{_pct(f['rental_yield'].median())} a year gives a total of "
                 f"{_pct(f['total_return'].median())} a year (before rates, management fees "
                 f"and tax; no mortgage).")
+    if not s.districts.empty:
+        d = s.districts[(s.districts["pairs_type"] == "recorded")
+                        & (s.districts["district"] != "unknown")]
+        d = d[d["pairs"] >= MIN_PAIRS].sort_values("growth")
+        if len(d) >= 2:
+            lo, hi = d.iloc[0], d.iloc[-1]
+            lines.append(
+                f"- **Districts (recorded pairs, medians):** growth ran from "
+                f"{_pct(lo['growth'])} a year in {district_label(lo['district'])} to "
+                f"{_pct(hi['growth'])} in {district_label(hi['district'])}; the worst fall was "
+                f"about {_pct(d['drawdown'].median(), 0)} in a typical district (1997-2003).")
     lines.append(
         f"- **How much data:** {_n(cov['clean'])} clean sales; "
         f"{_n(len(s.pairs['real']))} real resale pairs, {_n(len(s.pairs['ricacorp']))} Ricacorp "
-        f"pairs, {_n(len(s.pairs['estimated']))} estimated pairs. Recorded pairs are "
-        f"{_pct(rec['is_pilot'].mean(), 0) if rec is not None and 'is_pilot' in rec else '–'} "
-        "from the pilot estates.")
+        f"pairs, {_n(len(s.pairs['estimated']))} estimated pairs. Recorded pairs span "
+        f"{_years(s.pairs['recorded'])}.")
     lines += ["", "Words used below: a *pair* is two prices for the same flat (bought, then sold "
               "or valued). *Robust* means the effect is statistically clear (p < 0.05) and points "
               "the same way when the pairs are split by time and, separately, by district. "
               "*Drawdown* is the largest fall from a peak to a later low.", ""]
     return lines
+
+
+def _years(p: pd.DataFrame) -> str:
+    if p is None or p.empty or "start_date" not in p:
+        return "no years"
+    return f"purchases {p['start_date'].min():%Y}-{p['start_date'].max():%Y}, sales " \
+           f"{p['end_date'].min():%Y}-{p['end_date'].max():%Y}"
 
 
 def _coverage(s: Study) -> list[str]:
@@ -193,7 +409,13 @@ def _coverage(s: Study) -> list[str]:
     return lines
 
 
-def _method(s: Study) -> list[str]:
+def _window_text(m: Study) -> str:
+    start, end = m.window
+    return (f"bought from {start or 'the earliest data'}, sold by {end or 'the latest data'}, "
+            f"held {m.min_hold_years:g}+ years")
+
+
+def _method(s: Study, main: list[Study], sens: list[Study]) -> list[str]:
     a = s.anchor
     checks = {k: v.attrs.get("checks", {}) for k, v in s.verdicts.items()}
     lines = [
@@ -203,26 +425,38 @@ def _method(s: Study) -> list[str]:
         "sale, house, bulk sale, outlier, part-share-like price (under half or over double the "
         "building's index-adjusted median), non-market transfer, or wrongly attached LOHAS Park "
         "row. A developer sale may start a pair and is tagged first-hand.",
+    ]
+    if len(main) + len(sens) > 1:
+        lines.append("- **Settings.** The same study in several date windows from one snapshot "
+                     "(a pair counts when both its sales fall inside):")
+        for m in main + sens:
+            lines.append(f"  - `{m.setting}`: {m.label or m.setting}; {_window_text(m)}; "
+                         f"{len(m.pairs['recorded']):,} recorded pairs"
+                         + ("" if m.enough else " (too few for a verdict)")
+                         + (" **[sensitivity]**" if m.sensitivity else "") + ".")
+    lines += [
         "- **Regression.** Annual growth (log) on the attributes, controlling for district, "
         "building age at purchase (and its square), purchase year, sale year and purchase "
         "price per sq ft. Errors are clustered by building. Effects are in percentage points "
         "of growth a year.",
-        "- **Out-of-sample checks.** The plan's time split is pairs ending by 2018 vs later. "
-        "Recorded pairs almost all end after 2020 (28Hse's free history starts in 2018) and "
-        "estimated pairs all end today, so the time split is by purchase year at the median "
-        "instead (decisions.md). Districts are dealt into two halves of similar size. "
-        "Robust = p < 0.05 on all pairs and the same sign in both halves of both splits.",
+        "- **Out-of-sample checks.** Time split: pairs ending by 2018 vs later where both "
+        "sides have 200+ pairs, otherwise by purchase year at the median inside the window "
+        "(estimated pairs all end today, so they always split by purchase year). Districts "
+        "are dealt into two halves of similar size. Robust = p < 0.05 on all pairs and the "
+        "same sign in both halves of both splits. Splits used in the headline setting:",
     ]
     for k, c in checks.items():
         if c:
             lines.append(f"  - {k}: time split = {c.get('time')}; district split = "
                          f"{c.get('district')}.")
     lines += [
-        "- **Estimated pairs.** The fair-price model (Phase 4) values each flat last sold "
-        "before 2018 as of the latest RVD index month. Model error (80% interval about ±11%) "
-        "is in each pair's growth; clustering by building covers errors shared by a "
-        "building. Where the model's out-of-time error differs by attribute, an estimated "
-        "effect smaller than that tilt is not called robust.",
+        "- **Estimated pairs.** The fair-price model values each flat last sold before 2018 as "
+        "of the latest RVD index month. Model error (80% interval about ±11%) is in each "
+        "pair's growth; clustering by building covers errors shared by a building. Where the "
+        "model's out-of-time error differs by attribute, an estimated effect smaller than "
+        "that tilt is not called robust. Estimated pairs are the cross-check, not the main "
+        "evidence: their end price is a model value, and the model learns today's price "
+        "differences between attributes.",
         "- **Costs.** Buyer: Hong Kong permanent resident who owns another flat (decisions.md), "
         "so 2013-2024 purchases pay the higher Scale 1 / 15% / 7.5% rates; first-home buyer "
         "shown as a sensitivity. Agent 1% each side, legal 0.3% on purchase, stamp duty from "
@@ -234,10 +468,11 @@ def _method(s: Study) -> list[str]:
         f"{a.get('rent_listings', 0)} rent listings; listing yield "
         f"{_pct(a.get('listing_median_yield'))} vs RVD {_pct(a.get('rvd_median_yield'))}). "
         "Asking rents run above achieved rents, so the anchor may overstate yields slightly.",
-        "- **Drawdown.** A monthly repeat-sales index per group (log price changes explained "
-        "by month effects, lightly smoothed), worst peak-to-trough fall. Recorded pairs: from "
-        f"2018; estimated pairs: {ESTIMATED_INDEX_WINDOW[0][:4]}-{ESTIMATED_INDEX_WINDOW[1][:4]} "
-        "(their purchase dates; their end is always today).",
+        "- **Drawdown.** A monthly repeat-sales index per group and per district (log price "
+        "changes explained by month effects, lightly smoothed), worst peak-to-trough fall "
+        "inside the setting's window. Estimated pairs: "
+        f"{ESTIMATED_INDEX_WINDOW[0][:4]}-{ESTIMATED_INDEX_WINDOW[1][:4]} (their purchase "
+        "dates; their end is always today).",
         "",
     ]
     return lines
@@ -257,7 +492,9 @@ def _verdict_table(v: pd.DataFrame) -> list[str]:
             "Verdict": "**robust**" if r["robust"] else (
                 "significant, not robust" if r["significant"] else "not significant"),
         })
-    return _table(pd.DataFrame(rows))
+    return _table(pd.DataFrame(rows)) + ["", "Time / district halves: the estimate in each "
+                                         "half (– = too few pairs there to estimate, which "
+                                         "counts as not holding).", ""]
 
 
 def _groups_table(s: Study, key: str) -> list[str]:
@@ -283,78 +520,191 @@ def _groups_table(s: Study, key: str) -> list[str]:
     return _table(pd.DataFrame(rows))
 
 
-def write(s: Study, today: date | None = None) -> Path:
-    today = today or date.today()
-    reports = get_data_dir() / "reports"
-    reports.mkdir(parents=True, exist_ok=True)
-    path = reports / f"findings_{today:%Y%m%d}.md"
-    fig_dir = reports / f"findings_{today:%Y%m%d}"
-    fig_dir.mkdir(exist_ok=True)
-    rel = fig_dir.name
-
-    start, end = s.window
-    window = (f"pairs bought from {start or 'the earliest data'} and sold by "
-              f"{end or 'the latest data'}")
-    lines = [f"# Findings: which flat attributes grew faster ({today:%Y-%m-%d}, PRELIMINARY)",
-             "", "Written by `hkestate report`. Generated, not edited by hand; rerun it as data "
-             f"grows. Not committed to git. Setting `{s.setting}`: {window}.", ""]
-    lines += _summary(s)
-    lines += _coverage(s)
-    lines += _method(s)
-
-    lines += ["## Verdicts by attribute", ""]
-    chart_rows = []
-    for key in ("recorded", "real", "estimated"):
-        v = s.verdicts.get(key)
-        if v is None or v.empty:
-            continue
-        n = len(s.frames[key])
-        lines += [f"### {TYPE_NAMES[key]}", "", f"{n:,} pairs.", ""]
-        if key == "real":
-            lines += ["(Almost the same pairs as the recorded set, which adds the "
-                      f"{len(s.pairs['ricacorp'])} Ricacorp pairs; shown for completeness.)",
-                      ""]
-        lines += _verdict_table(v) + ["", "Time / district halves: the estimate in each "
-                                      "half (– = too few pairs there to estimate, which "
-                                      "counts as not holding).", ""]
-        if key in ("recorded", "estimated"):
+def _verdict_sections(s: Study, main: list[Study], fig_dir: Path, rel: str) -> list[str]:
+    lines = ["## Verdicts by attribute and market phase (recorded pairs: the main evidence)", "",
+             "Recorded pairs are two real prices for the same flat. Each column is one "
+             "setting (a date window; both sales inside it; held 3+ years).", ""]
+    if len(main) > 1:
+        lines += matrix_lines(main)
+        rows = []
+        for m in main:
+            v = m.verdicts.get("recorded")
+            if v is None or v.empty:
+                continue
             for a, r in v.iterrows():
-                chart_rows.append({"label": SHORT[a], "group": key,
-                                   "est": 100 * r["coef"], "lo": 100 * (r["coef"] - 1.96 * r["se"]),
-                                   "hi": 100 * (r["coef"] + 1.96 * r["se"])})
-    if len(s.pairs["ricacorp"]) and "ricacorp" not in s.verdicts:
-        lines += [f"Ricacorp pairs alone ({len(s.pairs['ricacorp'])}) are too few for a "
-                  "regression (needs 200); they are in the recorded set.", ""]
-    if chart_rows:
-        cr = pd.DataFrame(chart_rows)
-        groups = [g for g in ("recorded", "estimated") if g in set(cr["group"])]
+                rows.append({"label": SHORT[a], "group": m.setting, "est": 100 * r["coef"],
+                             "lo": 100 * (r["coef"] - 1.96 * r["se"]),
+                             "hi": 100 * (r["coef"] + 1.96 * r["se"])})
+        if rows:
+            cr = pd.DataFrame(rows)
+            groups = [m.setting for m in main if m.setting in set(cr["group"])]
+            charts.dot_ci_chart(cr, fig_dir / "effects_settings.svg",
+                                "Attribute effects by setting (recorded pairs)", groups)
+            lines += [f"![Attribute effects by setting]({rel}/effects_settings.svg)", ""]
+    v = s.verdicts.get("recorded")
+    if v is not None and not v.empty:
+        lines += [f"### Detail: setting `{s.setting}`, {TYPE_NAMES['recorded'].lower()}", "",
+                  f"{len(s.frames['recorded']):,} pairs.", ""] + _verdict_table(v)
+        vr = s.verdicts.get("real")
+        n_rica = len(s.pairs["ricacorp"])
+        if vr is not None and not vr.empty and n_rica:
+            same = (vr.index.equals(v.index) and (vr["robust"] == v["robust"]).all()
+                    and (vr["significant"] == v["significant"]).all())
+            if same:
+                lines += [f"Real pairs alone ({len(s.frames['real']):,}, without the {n_rica} "
+                          "Ricacorp pairs) give the same verdicts; Ricacorp pairs alone are "
+                          f"too few for a regression (needs {MIN_PAIRS}).", ""]
+            else:
+                lines += [f"### Real pairs alone ({len(s.frames['real']):,}, without the "
+                          f"{n_rica} Ricacorp pairs)", ""] + _verdict_table(vr)
+        keys = [k for k in ("recorded", "estimated")
+                if k in s.verdicts and len(s.verdicts[k])]
+        cr = pd.DataFrame([{"label": SHORT[a], "group": k, "est": 100 * r["coef"],
+                            "lo": 100 * (r["coef"] - 1.96 * r["se"]),
+                            "hi": 100 * (r["coef"] + 1.96 * r["se"])}
+                           for k in keys for a, r in s.verdicts[k].iterrows()])
         charts.dot_ci_chart(cr, fig_dir / "effects.svg",
-                            "Attribute effects on annual growth", groups)
+                            f"Attribute effects on annual growth, setting {s.setting}", keys)
         lines += [f"![Attribute effects]({rel}/effects.svg)", ""]
+    elif s.enough is False:
+        lines += [f"Setting `{s.setting}` has too few recorded pairs for a verdict.", ""]
+    return lines
 
-    lines += ["## Growth, total return and drawdown by attribute", "",
-              "Medians. Growth = price growth a year; after costs = after stamp duty, agents and "
-              "lawyers on a buy and a sale; total return = after-cost growth + gross rent yield. "
-              "These are raw group medians (no controls): the verdicts above are the "
-              "like-for-like comparison.", ""]
-    for key in ("recorded", "estimated"):
-        t = _groups_table(s, key)
-        if t:
-            lines += [f"### {TYPE_NAMES[key]}", ""] + t + [""]
 
-    lines += ["## Price indices and drawdown", ""]
+def _estimated_section(s: Study, fig_dir: Path, rel: str) -> list[str]:
+    v = s.verdicts.get("estimated")
+    if v is None or v.empty:
+        return []
+    lines = ["## Cross-check: estimated pairs", "",
+             f"{TYPE_NAMES['estimated']}: {len(s.frames['estimated']):,} pairs in setting "
+             f"`{s.setting}`. Their end price is a model value, so they are a check on the "
+             "recorded pairs (do the long-run purchases 1995-2017 tell the same story?), not "
+             "evidence on their own.", ""]
+    rv = s.verdicts.get("recorded")
+    if rv is not None and not rv.empty:
+        rows = []
+        for a in growth.ATTRIBUTES:
+            cr, ce = cell(s, a, "recorded"), cell(s, a, "estimated")
+            if cr is None and ce is None:
+                continue
+            agree = ("yes" if cr and ce and np.sign(cr["coef"]) == np.sign(ce["coef"])
+                     and cr["robust"] and ce["robust"] else
+                     "same sign" if cr and ce and np.sign(cr["coef"]) == np.sign(ce["coef"])
+                     else "no")
+            rows.append({"Attribute": SHORT[a], "Recorded": cell_text(cr),
+                         "Estimated": cell_text(ce), "Agree (robust in both, same way)": agree})
+        lines += _table(pd.DataFrame(rows)) + ["", "(The chart above shows both sets of "
+                                               "effects side by side.)", ""]
+    lines += ["### Estimated pairs in detail", ""] + _verdict_table(v)
+    return lines
+
+
+def _sensitivity_section(sens: list[Study]) -> list[str]:
+    if not sens:
+        return []
+    lines = ["## Short-hold sensitivity (1-year minimum hold; not part of the main verdicts)",
+             "",
+             "The two most recent phases are too short for 3-year holds, so each is rerun "
+             "with pairs held at least 1 year. Short holds are a different population (quick "
+             "flips, forced sales) and the verdicts here are a side-check only: they are "
+             "never mixed into the table above. After-cost figures here ignore Special Stamp "
+             "Duty (10-20% on resales within 36 months until 28 Feb 2024), so read the gross "
+             "growth and the verdicts, not the after-cost numbers.", ""]
+    for m in sens:
+        n = len(m.pairs["recorded"])
+        lines += [f"### `{m.setting}`: {m.label or m.setting}", "",
+                  f"{_window_text(m).capitalize()}: {n:,} recorded pairs "
+                  f"({len(m.pairs['real']):,} real, {len(m.pairs['ricacorp']):,} Ricacorp)."]
+        f = m.frames.get("recorded")
+        if f is not None and len(f):
+            lines.append(f"Median hold {f['years'].median():.1f} years; median growth "
+                         f"{_pct(f['ann_growth'].median())} a year"
+                         + (f", total return {_pct(f['total_return'].median())}"
+                            if "total_return" in f else "") + ".")
+        lines.append("")
+        v = m.verdicts.get("recorded")
+        if v is not None and len(v):
+            lines += _verdict_table(v)
+        else:
+            note = next((x for x in m.notes if x.startswith("Too few")), "Too few pairs.")
+            lines += [note, ""]
+    return lines
+
+
+def _district_section(s: Study, main: list[Study], fig_dir: Path, rel: str) -> list[str]:
+    d = s.districts
+    if d is None or d.empty:
+        return []
+    rec = d[d["pairs_type"] == "recorded"].copy()
+    if rec.empty:
+        return []
+    lines = [f"## By district (setting `{s.setting}`, recorded pairs)", "",
+             "Medians per district (no controls). Growth = price growth a year; after costs "
+             "= after stamp duty, agents and lawyers; total return = after-cost growth + gross "
+             "rent yield; worst fall = the district's own repeat-sales index, peak to low "
+             "(blank under 100 pairs). Estimated growth = the cross-check pairs' median.", ""]
+    est = d[d["pairs_type"] == "estimated"].set_index("district")["growth"] \
+        if (d["pairs_type"] == "estimated").any() else pd.Series(dtype=float)
+    rec = rec.sort_values("growth", ascending=False)
+    rows = []
+    for _, r in rec.iterrows():
+        rows.append({
+            "District": district_label(r["district"]), "Pairs": _n(r["pairs"]),
+            "Years held": f"{r['median_years']:.1f}", "Growth/yr": _pct(r["growth"]),
+            "After costs": _pct(r["net_growth"]), "Rent yield": _pct(r["rental_yield"]),
+            "Total return": _pct(r["total_return"]),
+            "Worst fall": _pct(r["drawdown"], 0),
+            "Peak → low": (f"{pd.Timestamp(r['peak']):%Y-%m} → {pd.Timestamp(r['trough']):%Y-%m}"
+                           if pd.notna(r["drawdown"]) and r["peak"] is not None else "–"),
+            "Estimated growth/yr": _pct(est.get(r["district"], np.nan)),
+        })
+    lines += _table(pd.DataFrame(rows)) + [""]
+    idx = s.indices.get("recorded", {})
+    first = pd.Timestamp("1995-01-01")
+    drawn = []
+    for group, names in DISTRICT_GROUPS.items():
+        series = {}
+        for name in names:
+            ser = idx.get(f"district:{name}")
+            if ser is None or ser.empty:
+                continue
+            ser = ser[ser.index >= first]
+            if ser.empty:
+                continue
+            series[district_label(name)] = ser / ser.iloc[0] * 100
+        if series:
+            fname = "district_index_" + group.lower().replace(" ", "_") + ".svg"
+            charts.line_chart(series, fig_dir / fname,
+                              f"Price index by district, {group} (log scale, "
+                              f"{series[next(iter(series))].index[0]:%Y} = 100)",
+                              "index", log_scale=True)
+            drawn.append((group, fname))
+    if drawn:
+        lines += ["### Price index per district from 1995", "",
+                  "A repeat-sales index from the district's own recorded pairs (first month "
+                  "= 100, log scale so equal slopes mean equal growth rates).", ""]
+        for group, fname in drawn:
+            lines += [f"![{group}]({rel}/{fname})", ""]
+    return lines
+
+
+def _index_section(s: Study, fig_dir: Path, rel: str) -> list[str]:
+    lines = ["## Price indices and drawdown", ""]
     idx_rec = s.indices.get("recorded", {})
     if "all" in idx_rec:
         rec_idx = idx_rec["all"]
-        rec_idx = rec_idx[rec_idx.index >= "2018-01-01"]
         series = {"Recorded pairs": rec_idx / rec_idx.iloc[0] * 100}
         rvd_all = _rvd_series(s, "rvd_price_index", "ALL", "ALL")
         if rvd_all is not None:
             r = rvd_all[rvd_all.index >= rec_idx.index[0]]
-            series["RVD all classes"] = r / r.iloc[0] * 100
-        charts.line_chart(series, fig_dir / "index_recent.svg",
-                          "Repeat-sales index from 2018 vs RVD (start = 100)", "index")
-        lines += [f"![Recent index]({rel}/index_recent.svg)", ""]
+            if not r.empty:
+                series["RVD all classes"] = r / r.iloc[0] * 100
+        charts.line_chart(series, fig_dir / "index_recorded.svg",
+                          f"Repeat-sales index from recorded pairs vs RVD "
+                          f"({rec_idx.index[0]:%Y} = 100, log scale)", "index", log_scale=True)
+        lines += [f"![Recorded index]({rel}/index_recorded.svg)", "",
+                  "Our own index from every recorded pair in the setting, against the official "
+                  "RVD index over the same months. Agreement is a check on the pairs.", ""]
     idx_est = s.indices.get("estimated", {})
     if "all" in idx_est:
         # estimated pairs only have data at their purchase months: draw those (normalised
@@ -369,7 +719,8 @@ def write(s: Study, today: date | None = None) -> Path:
         if rvd_all is not None:
             series["RVD all classes"] = rvd_all / rvd_all.iloc[-1] * 100
         charts.line_chart(series, fig_dir / "index_long.svg",
-                          "Long-run index (today = 100, log scale)", "index", log_scale=True)
+                          "Long-run index from estimated pairs (today = 100, log scale)",
+                          "index", log_scale=True)
         lines += [f"![Long-run index]({rel}/index_long.svg)", "",
                   "Estimated pairs give the index only at their purchase months (to 2017), "
                   "relative to the model's value today; that they track the official RVD index "
@@ -403,12 +754,60 @@ def write(s: Study, today: date | None = None) -> Path:
                               log_scale=True)
             lines += [f"![RVD classes]({rel}/rvd_classes.svg)", ""]
     if not s.drawdowns.empty:
-        d = s.drawdowns
+        d = s.drawdowns[~s.drawdowns["group"].str.startswith("district:")]
         lines += ["### Drawdown by group", ""] + _table(pd.DataFrame({
             "Pairs": d["pairs_type"], "Group": d["group"], "Pairs used": d["pairs"].map(_n),
             "Worst fall": d["drawdown"].map(lambda x: _pct(x, 0)),
             "Peak": pd.to_datetime(d["peak"]).dt.strftime("%Y-%m"),
             "Low": pd.to_datetime(d["trough"]).dt.strftime("%Y-%m")})) + [""]
+    return lines
+
+
+def write(s: Study, studies: dict[str, Study] | None = None, today: date | None = None
+          ) -> Path:
+    """Write the findings file from the headline study `s` (setting `all` when it was run)
+    and, when `studies` holds the other settings of the same run, the attribute x setting
+    table, the district tables and the sensitivity section."""
+    today = today or date.today()
+    reports = get_data_dir() / "reports"
+    reports.mkdir(parents=True, exist_ok=True)
+    path = reports / f"findings_{today:%Y%m%d}.md"
+    fig_dir = reports / f"findings_{today:%Y%m%d}"
+    fig_dir.mkdir(exist_ok=True)
+    rel = fig_dir.name
+
+    studies = studies or {s.setting: s}
+    if s.setting not in studies:
+        studies = {s.setting: s, **studies}
+    main = [m for m in studies.values() if not m.sensitivity]
+    sens = [m for m in studies.values() if m.sensitivity]
+
+    lines = [f"# Findings: which flat attributes grew faster ({today:%Y-%m-%d})",
+             "", "Written by `hkestate report`. Generated, not edited by hand; rerun it after "
+             "`hkestate train` as data grows. Not committed to git. Headline setting "
+             f"`{s.setting}`: pairs {_window_text(s)}."
+             + (f" Settings run: {', '.join(f'`{m.setting}`' for m in main)}"
+                + (f"; sensitivities: {', '.join(f'`{m.setting}`' for m in sens)}" if sens
+                   else "") + "." if len(studies) > 1 else ""), ""]
+    lines += _summary(s, main, sens)
+    lines += _coverage(s)
+    lines += _method(s, main, sens)
+    lines += _verdict_sections(s, main, fig_dir, rel)
+    lines += _estimated_section(s, fig_dir, rel)
+    lines += _sensitivity_section(sens)
+
+    lines += ["## Growth, total return and drawdown by attribute", "",
+              "Medians. Growth = price growth a year; after costs = after stamp duty, agents and "
+              "lawyers on a buy and a sale; total return = after-cost growth + gross rent yield. "
+              "These are raw group medians (no controls): the verdicts above are the "
+              "like-for-like comparison.", ""]
+    for key in ("recorded", "estimated"):
+        t = _groups_table(s, key)
+        if t:
+            lines += [f"### {TYPE_NAMES[key]}", ""] + t + [""]
+
+    lines += _district_section(s, main, fig_dir, rel)
+    lines += _index_section(s, fig_dir, rel)
 
     lines += ["## First-hand vs second-hand", "",
               "First-hand = the pair starts with the developer's sale (SRPE, or the project's "
@@ -489,31 +888,34 @@ def _rvd_series(s: Study, series: str, cls: str, region: str) -> pd.Series | Non
 
 
 def _limits(s: Study) -> list[str]:
+    fc = s.coverage.get("feature_cover", {})
     return [
         "## Limits", "",
-        "- **Preliminary and pilot-heavy.** Recorded pairs come mostly from five pilot estates "
-        "(Taikoo Shing, Mei Foo, City One, LOHAS Park, Goldwin Heights); LOHAS Park's young "
-        "flats dominate the first-hand starts. The territory backfill adds full 2018-on "
-        "histories for every estate.",
-        "- **Short recorded window.** Free full histories start in 2018, so recorded pairs "
-        "cover 2018-2026 only, a falling then recovering market. Effects in one cycle may not "
-        "hold in another; the estimated pairs (1995-2017 purchases) are the long-run check.",
+        "- **Only flats that were resold are in a recorded pair.** A flat bought and never "
+        "sold again contributes nothing, so pairs lean towards flats that change hands; the "
+        "estimated pairs (last sold before 2018, valued by the model) cover the rest.",
+        "- **Short phases hold few 3-year pairs.** A pair needs both sales inside the window, "
+        "so a phase under about four years (the 2021-2024 fall, the market since late 2024) "
+        "has no verdict of its own; the 1-year-hold sensitivity is the only read on them.",
+        "- **Attribute coverage is uneven.** MTR distance is known for "
+        f"{_pct(fc.get('MTR distance'), 0)} of clean sales, facing for "
+        f"{_pct(fc.get('facing'), 0)}; sea view and facing come from listings only, so those "
+        "effects rest on few flats.",
         "- **Estimated pairs depend on the model.** Their end price is a model value (typical "
         "error about 5%, 80% interval about ±11%). The model learns today's price differences "
         "between attributes from recent sales, so an estimated effect reads as \"today's "
         "premium vs the premium paid then\".",
-        "- **Few flats have facing, sea view or rooms**: these come from listings only.",
         "- **Asking rents** anchor the yields; achieved rents are usually lower.",
         "- **No leverage, no holding costs** (rates, management fees, repairs, vacancy, tax).",
         "- **Costs assume a permanent resident who owns another flat**; a first-home buyer "
-        "pays less stamp duty for 2013-2024 purchases (sensitivity above).",
+        "pays less stamp duty for 2013-2024 purchases (sensitivity above). The short-hold "
+        "sensitivity ignores Special Stamp Duty.",
+        "- **Like-for-like, not causal.** An effect says flats with the attribute grew faster "
+        "than otherwise similar flats; it does not say the attribute caused it.",
         "",
-        "## What changes when the backfill completes", "",
-        "- Recorded pairs grow from the pilot estates to the whole territory (every resale since "
-        "2018 held 3+ years), so the district split becomes a real test across many districts.",
-        "- The model is retrained on more data (`hkestate train`), changing the estimated "
-        "pairs' end values and the model-error check.",
-        "- Rent anchoring improves as territory rental listings accumulate.",
-        "- Rerun: `hkestate train`, then `hkestate report`.",
+        "## Rerun", "",
+        "`hkestate train --from-snapshot`, then `hkestate report --from-snapshot --settings "
+        "standard` (about 25 minutes; the saved results under `data/reports/growth/<date>/` "
+        "feed the dashboard's growth page).",
         "",
     ]

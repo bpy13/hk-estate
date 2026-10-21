@@ -104,7 +104,16 @@ def dot_ci_chart(rows: pd.DataFrame, path: Path, title: str, groups: list[str],
     """Estimates with 95% intervals, one row per attribute, one colour per group.
     `rows`: columns label, group, est, lo, hi (in % a year)."""
     labels = list(dict.fromkeys(rows["label"]))
-    left, right, top, row_h = 330, 30, 64, 26
+    left, right, row_h = 330, 30, 26
+    # legend items wrap into rows (about 7 px a character); the plot starts below them
+    legend, x, y = [], 16, 44
+    for i, g in enumerate(groups):
+        w = 26 + 7 * len(str(g))
+        if x + w > width - 16 and x > 16:
+            x, y = 16, y + 18
+        legend.append((x, y, i, g))
+        x += w
+    top = y + 20
     height = top + row_h * len(labels) + 40
     pw = width - left - right
     lo = min(rows["lo"].min(), 0)
@@ -119,10 +128,10 @@ def dot_ci_chart(rows: pd.DataFrame, path: Path, title: str, groups: list[str],
            f"viewBox='0 0 {width} {height}'>",
            f"<rect width='100%' height='100%' fill='{SURFACE}'/>",
            _text(16, 24, title, 15, TEXT, weight="600")]
-    for i, g in enumerate(groups):  # legend
-        x = 16 + i * 220
-        out.append(f"<circle cx='{x + 5}' cy='44' r='5' fill='{SERIES[i]}'/>")
-        out.append(_text(x + 16, 48, g, 12, TEXT))
+    for x, y, i, g in legend:
+        c = SERIES[i % len(SERIES)]
+        out.append(f"<circle cx='{x + 5}' cy='{y}' r='5' fill='{c}'/>")
+        out.append(_text(x + 16, y + 4, g, 12, TEXT))
     for t in _nice_ticks(lo, hi):
         if lo <= t <= hi:
             x = X(t)
@@ -138,8 +147,9 @@ def dot_ci_chart(rows: pd.DataFrame, path: Path, title: str, groups: list[str],
         sub = rows[rows["label"] == lab]
         for _, row in sub.iterrows():
             gi = groups.index(row["group"])
-            y = yb + (gi - (len(groups) - 1) / 2) * 8
-            c = SERIES[gi]
+            step = 8 if len(groups) <= 3 else 4  # keep many groups inside the row
+            y = yb + (gi - (len(groups) - 1) / 2) * step
+            c = SERIES[gi % len(SERIES)]
             out.append(f"<line x1='{X(row['lo']):.1f}' x2='{X(row['hi']):.1f}' y1='{y:.1f}' "
                        f"y2='{y:.1f}' stroke='{c}' stroke-width='2' stroke-linecap='round'/>")
             out.append(f"<circle cx='{X(row['est']):.1f}' cy='{y:.1f}' r='4.5' fill='{c}' "

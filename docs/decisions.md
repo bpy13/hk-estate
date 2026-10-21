@@ -19,6 +19,19 @@ What was decided, why, and when. Change these only with a reason, and note the c
   2021-2024 fall and 2024-now windows hold almost no 3-year pairs (1 and 0), so each also
   runs as a clearly labelled sensitivity with a 1-year minimum hold. The 3-year hold stays
   the main rule; the short-hold results are never mixed into the main verdicts.
+  Built as settings `fall-2021-2024-1y` and `recent-2024-now-1y` (`sensitivity: true` in
+  settings.json). Their after-cost figures ignore Special Stamp Duty (holds under 36 months
+  paid 10-20% until 28 Feb 2024), so the report says to read their gross growth and
+  verdicts only. (Claude's call, 2026-10-21.)
+- **Findings report reading order** (2026-10-21, Claude's call): recorded pairs are the
+  headline; the attribute x setting table shows each effect in bold when robust, and a
+  plain line per attribute says in which phases it holds. "Holds in rising and falling
+  markets" needs robust and the same sign in every phase with enough pairs. Estimated
+  pairs moved to a cross-check section. The "preliminary / pilot-heavy" wording was
+  dropped: recorded pairs are now 3% pilot and span 1993-2026.
+- **Ricacorp pairs are checked against every dated sale** (2026-10-21, Claude's call): a
+  derived Ricacorp pair ending within 90 days of any stored consecutive-sale pair (not only
+  3-year ones) is the same sale twice and is dropped; 107 -> 99 pairs.
 - **Don't wait for the 28Hse territory backfill before analysing** (2026-10-21, user).
 - **Dashboard gets a growth-study page** (2026-10-21, user).
 - **Two goals:**

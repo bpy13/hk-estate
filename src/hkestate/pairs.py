@@ -164,12 +164,15 @@ def gain_pairs(deals: pd.DataFrame, exclude: pd.DataFrame | None = None) -> pd.D
     return out
 
 
-def undated_gain_pairs(deals: pd.DataFrame, recorded: pd.DataFrame) -> pd.DataFrame:
+def undated_gain_pairs(deals: pd.DataFrame, recorded: pd.DataFrame,
+                       dated: pd.DataFrame | None = None) -> pd.DataFrame:
     """Gain pairs whose start date is still unknown. A deal whose previous sale is stored
     (any hold, however short) has a dated start now: held 3+ years it is a real pair, shorter
     it is dropped like any short hold, but it must not stay behind as an undated gain pair.
-    `recorded` are the real and Ricacorp pairs already built."""
-    dated = real_pairs(deals, min_years=0.0)
+    `recorded` are the real and Ricacorp pairs already built; `dated` the real pairs of any
+    hold (`real_pairs(deals, min_years=0)`) when the caller has them already."""
+    if dated is None:
+        dated = real_pairs(deals, min_years=0.0)
     frames = [x for x in (recorded, dated) if x is not None and not x.empty]
     return gain_pairs(deals, exclude=pd.concat(frames, ignore_index=True) if frames else None)
 

@@ -179,16 +179,56 @@ def round_trip(start_price: float, start_date, end_price: float,
     return {"stamp_duty": duty, "buy_cost": buy, "sell_cost": AGENT_PCT * end_price}
 
 
+def _apply_table_many(table, price: np.ndarray) -> np.ndarray:
+    """`apply_table` for an array of prices: each price takes the first band it fits."""
+    out = np.full(len(price), np.nan)
+    left = np.ones(len(price), dtype=bool)
+    for upper, kind, a, b, lower in table:
+        sel = left if upper is None else left & (price <= upper)
+        if kind == "flat":
+            out[sel] = float(a)
+        elif kind == "rate":
+            out[sel] = a * price[sel]
+        else:
+            out[sel] = a + b * (price[sel] - lower)
+        left &= ~sel
+    return out
+
+
+def stamp_duty_many(price, day, buyer: str = "additional") -> np.ndarray:
+    """`stamp_duty` for arrays of prices and agreement dates (the same rules, vectorised:
+    the row-by-row version took 13 minutes on 1.9 million pairs)."""
+    if buyer not in BUYERS:
+        raise ValueError(f"buyer must be one of {BUYERS}")
+    price = np.asarray(price, dtype=float)
+    days = pd.to_datetime(pd.Series(day)).dt.normalize().to_numpy()
+    starts = np.array([np.datetime64(start) for start, _ in GENERAL_TABLES])
+    which = np.clip(np.searchsorted(starts, days, side="right") - 1, 0, None)
+    duty = np.full(len(price), np.nan)
+    for i, (_start, table) in enumerate(GENERAL_TABLES):
+        sel = which == i
+        if sel.any():
+            duty[sel] = _apply_table_many(table, price[sel])
+    if buyer == "additional":
+        scale1 = (days >= np.datetime64(SCALE1_FROM)) & (days < np.datetime64(PART1_ENDS))
+        if scale1.any():
+            duty[scale1] = _apply_table_many(SCALE1_PART2[1], price[scale1])
+            for start, rate in PART1_FLAT:  # later flat rates overwrite earlier ones
+                flat = scale1 & (days >= np.datetime64(start))
+                duty[flat] = rate * price[flat]
+    return np.ceil(duty - 1e-9)
+
+
 def add_net_growth(pairs: pd.DataFrame, buyer: str = "additional") -> pd.DataFrame:
     """Annualised growth after round-trip costs: (end - selling costs) / (start + buying
     costs), over the holding years. Adds `buy_cost`, `sell_cost`, `net_ann_growth`."""
     p = pairs.copy()
     if p.empty:
         return p.assign(buy_cost=[], sell_cost=[], net_ann_growth=[], cost_pct=[])
-    rt = [round_trip(s, d, e, buyer) for s, d, e in
-          zip(p["start_price"], p["start_date"], p["end_price"], strict=True)]
-    p["buy_cost"] = [r["buy_cost"] for r in rt]
-    p["sell_cost"] = [r["sell_cost"] for r in rt]
+    start = p["start_price"].to_numpy(dtype=float)
+    duty = stamp_duty_many(start, p["start_date"], buyer)
+    p["buy_cost"] = duty + (AGENT_PCT + LEGAL_PCT) * start
+    p["sell_cost"] = AGENT_PCT * p["end_price"].to_numpy(dtype=float)
     p["cost_pct"] = (p["buy_cost"] + p["sell_cost"]) / p["start_price"]
     net = (p["end_price"] - p["sell_cost"]) / (p["start_price"] + p["buy_cost"])
     p["net_ann_growth"] = np.power(net.astype(float), 1 / p["years"].astype(float)) - 1
@@ -264,25 +304,39 @@ def _yield_lookup(y: pd.Series) -> dict:
 
 
 def pair_yields(pairs: pd.DataFrame, y: pd.Series, anchor: float = 1.0) -> pd.Series:
-    """Average gross yield over each pair's holding period, for its size class and region,
-    times the listing anchor. Missing class/region: the region's class B, then NaN."""
+    """Average gross yield over each pair's holding period (whole months, first to last),
+    for its size class and region, times the listing anchor. Missing class/region: the
+    region's class B, then NaN. A holding period outside RVD's range takes the nearest
+    month. Vectorised per (class, region) with cumulative sums; the row-by-row version
+    took minutes on a million pairs."""
     look = _yield_lookup(y)
-    out = []
-    for s, e, cls, dist in zip(pairs["start_date"], pairs["end_date"], pairs["rvd_class"],
-                               pairs["district"], strict=True):
-        region = region_of(dist) or "NT"
-        ser = look.get((cls, region)) if cls in ("A", "B", "C", "D", "E") else None
-        ser = ser if ser is not None else look.get(("B", region))
-        if ser is None or pd.isna(s) or pd.isna(e):
-            out.append(np.nan)
+    out = pd.Series(np.nan, index=pairs.index, dtype=float)
+    if pairs.empty or not look:
+        return out
+    region = pairs["district"].map(region_of).fillna("NT")
+    cls = pairs["rvd_class"].where(pairs["rvd_class"].isin(list("ABCDE")), "B")
+    has = pd.Series([(c, r) in look for c, r in zip(cls, region, strict=True)],
+                    index=pairs.index)
+    cls = cls.where(has, "B")  # an unknown class falls back to the region's class B
+    s = pd.to_datetime(pairs["start_date"]).dt.to_period("M").dt.to_timestamp()
+    e = pd.to_datetime(pairs["end_date"]).dt.to_period("M").dt.to_timestamp()
+    ok = s.notna() & e.notna()
+    for (c, r), ser in look.items():
+        sel = (ok & (cls == c) & (region == r)).to_numpy()
+        if not sel.any():
             continue
-        lo = pd.Timestamp(s).to_period("M").to_timestamp()
-        hi = pd.Timestamp(e).to_period("M").to_timestamp()
-        part = ser[(ser.index >= lo) & (ser.index <= hi)]
-        if part.empty:  # outside RVD's range: nearest month
-            part = ser.iloc[[0]] if hi < ser.index.min() else ser.iloc[[-1]]
-        out.append(float(part.mean()) * anchor)
-    return pd.Series(out, index=pairs.index, dtype=float)
+        months = ser.index.to_numpy()
+        vals = ser.to_numpy(dtype=float)
+        cum = np.concatenate([[0.0], np.cumsum(vals)])
+        lo, hi = s.to_numpy()[sel], e.to_numpy()[sel]
+        i0 = np.searchsorted(months, lo, side="left")
+        i1 = np.searchsorted(months, hi, side="right")
+        n = i1 - i0
+        mean = np.where(n > 0, (cum[i1] - cum[i0]) / np.where(n > 0, n, 1), np.nan)
+        # no month inside the holding period: the nearest end of the series
+        nearest = np.where(hi < months[0], vals[0], vals[-1])
+        out.iloc[np.flatnonzero(sel)] = np.where(n > 0, mean, nearest) * anchor
+    return out
 
 
 ANCHOR_MIN_BUILDINGS = 20

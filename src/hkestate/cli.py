@@ -456,6 +456,7 @@ def cmd_report(args) -> int:
             m = model.load()
             tp_path = model.model_dir() / "test_predictions.parquet"
             tp = pd.read_parquet(tp_path) if tp_path.exists() else None
+        studies = None
         if settings:
             studies = study.run_settings(raw, m, tp, settings, log=log)
             s = studies.get("all") or next(iter(studies.values()))
@@ -466,7 +467,7 @@ def cmd_report(args) -> int:
         else:
             s = study.run(raw, m, tp, log=log, start=args.start, end=args.end)
             summary = {}
-        path = report.write(s)
+        path = report.write(s, studies)
         log(f"report ({s.setting}): {path}")
         counts = {k: len(v) for k, v in s.pairs.items()}
         robust = {k: [a for a in v.index if v.loc[a, "robust"]] for k, v in s.verdicts.items()

@@ -128,6 +128,82 @@ def test_anchor_falls_back_to_one_with_few_buildings():
     assert not np.isnan(a["listing_median_yield"])
 
 
+def test_vectorised_stamp_duty_matches_the_scalar_rule():
+    # Task 8: `add_net_growth` uses the array version; it must give the scalar rule's
+    # amounts exactly, across every table, both buyers, and the cut-over days themselves
+    rng = np.random.default_rng(3)
+    n = 3000
+    days = pd.to_datetime("1987-06-01") + pd.to_timedelta(rng.integers(0, 365 * 40, n), "D")
+    edges = [pd.Timestamp(s) for s, _ in costs.GENERAL_TABLES] + [
+        pd.Timestamp(costs.SCALE1_FROM), pd.Timestamp(costs.PART1_ENDS)] + [
+        pd.Timestamp(s) for s, _ in costs.PART1_FLAT]
+    days = pd.Series(list(days) + edges + [e - pd.Timedelta(days=1) for e in edges])
+    price = np.exp(rng.uniform(np.log(3e5), np.log(1.5e8), len(days)))
+    for buyer in costs.BUYERS:
+        want = np.array([costs.stamp_duty(p, d, buyer) for p, d in zip(price, days, strict=True)])
+        got = costs.stamp_duty_many(price, days, buyer)
+        np.testing.assert_array_equal(got, want)
+    p = pd.DataFrame({"start_price": price, "end_price": price * 1.3, "start_date": days,
+                      "years": 4.0})
+    out = costs.add_net_growth(p)
+    want = [costs.round_trip(s, d, e) for s, d, e in zip(price, days, price * 1.3, strict=True)]
+    np.testing.assert_array_equal(out["buy_cost"].to_numpy(), [w["buy_cost"] for w in want])
+    np.testing.assert_array_equal(out["sell_cost"].to_numpy(), [w["sell_cost"] for w in want])
+
+
+def _pair_yields_rowwise(pairs, y, anchor=1.0):
+    """The row-by-row rule `pair_yields` replaced (kept here as the reference)."""
+    look = costs._yield_lookup(y)
+    out = []
+    for s, e, cls, dist in zip(pairs["start_date"], pairs["end_date"], pairs["rvd_class"],
+                               pairs["district"], strict=True):
+        region = costs.region_of(dist) or "NT"
+        ser = look.get((cls, region)) if cls in ("A", "B", "C", "D", "E") else None
+        ser = ser if ser is not None else look.get(("B", region))
+        if ser is None or pd.isna(s) or pd.isna(e):
+            out.append(np.nan)
+            continue
+        lo = pd.Timestamp(s).to_period("M").to_timestamp()
+        hi = pd.Timestamp(e).to_period("M").to_timestamp()
+        part = ser[(ser.index >= lo) & (ser.index <= hi)]
+        if part.empty:
+            part = ser.iloc[[0]] if hi < ser.index.min() else ser.iloc[[-1]]
+        out.append(float(part.mean()) * anchor)
+    return pd.Series(out, index=pairs.index, dtype=float)
+
+
+def test_vectorised_pair_yields_match_the_row_by_row_rule():
+    rng = np.random.default_rng(4)
+    months = pd.date_range("2000-01-01", "2024-12-01", freq="MS")
+    rows = []
+    for cls in "ABC":  # no D/E series: those classes fall back to B
+        for region in ("HK", "KLN", "NT"):
+            if cls == "C" and region == "KLN":
+                continue  # a missing (class, region) also falls back to B
+            for m in months:  # a different yield every month, so averages are real tests
+                rows += [{"series": "rvd_avg_rent_psm", "freq": "month", "period": m,
+                          "class": cls, "region": region, "value": 200.0 + 50 * rng.random()},
+                         {"series": "rvd_avg_price_psm", "freq": "month", "period": m,
+                          "class": cls, "region": region,
+                          "value": 100_000.0 + 20_000 * rng.random()}]
+    y = costs.rvd_yields(pd.DataFrame(rows))
+    n = 2000
+    start = pd.to_datetime("1995-01-01") + pd.to_timedelta(rng.integers(0, 365 * 33, n), "D")
+    end = start + pd.to_timedelta(rng.integers(0, 365 * 12, n), "D")
+    pairs = pd.DataFrame({
+        "start_date": start, "end_date": end,
+        "rvd_class": rng.choice(["A", "B", "C", "D", "E", "X", None], n),
+        "district": rng.choice(["東區", "深水埗區", "沙田區", None, "unknown"], n)})
+    pairs.loc[rng.choice(n, 20, replace=False), "end_date"] = pd.NaT
+    got = costs.pair_yields(pairs, y, anchor=0.9)
+    want = _pair_yields_rowwise(pairs, y, anchor=0.9)
+    assert got.isna().equals(want.isna()) and got.isna().sum() == 20
+    np.testing.assert_allclose(got.dropna(), want.dropna(), rtol=1e-10)
+    # every branch was exercised: whole-range averages, partial overlaps, before and after
+    inside = (end >= months[0]) & (start <= months[-1]) & pairs["end_date"].notna()
+    assert 0 < inside.sum() < n and (end < months[0]).any() and (start > months[-1]).any()
+
+
 def test_total_return_adds_the_yield_to_net_growth():
     months = pd.date_range("2018-01-01", "2024-12-01", freq="MS")
     y = costs.rvd_yields(_rvd(months, 300.0, 120_000.0))
