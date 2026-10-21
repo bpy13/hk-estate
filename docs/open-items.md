@@ -48,7 +48,9 @@ cache pruning.)*
   that flat out (slower). Your call whether that is worth it.
 
 ## Pending work
-- [ ] **`rank` holds the database too long and blocks the scrapers.** Its extract
+- [x] **`rank` holds the database too long and blocks the scrapers.** *(Fixed 2026-10-21,
+  commits 02b6e7c, ed1fad4: the duplicate test's OR join split into two joins; rank's
+  database read is now about 1 minute.)* Its extract
   (`features.extract`, built on the `txn_latest` views) took 6 min on 10-17, 25 min on 10-20,
   and on 2026-10-21 was still running after 2 h 10 min once cd-history added ~970k sales. During
   that time the daily run died on the lock at 14:30 and backfill-territory sat waiting. I killed

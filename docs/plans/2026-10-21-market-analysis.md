@@ -79,7 +79,9 @@ throughout. The 28Hse territory backfill (about 7% done) is not waited for.
     quarantine count, the agreement lag, the model's input and `srpe_buildings`; existing
     feature tests pass. Timed on a copy of the database: the whole `extract` under 3 minutes
     (report the time).
-- [ ] **Task 3 (main session): real run**
+- [x] **Task 3 (main session): real run** *(2026-10-21 16:58: database read ~1 min
+  (snapshot written 16:59:22), whole rank 2 min 49 s, 12,472 listings ranked; daily and
+  backfill logs show no lock failure.)*
   - Run `hkestate rank` on the live database while the scrapers run.
   - Done when: the rank log shows the snapshot read and the ranked CSV written, the extract
     took under 3 minutes, and the daily and backfill logs show no lock failure in that window.
