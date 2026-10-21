@@ -9,8 +9,14 @@ What was decided, why, and when. Change these only with a reason, and note the c
 - **Coverage: whole territory, private residential flats only** (2026-10-16). Excludes HOS /
   subsidised flats (resale restrictions distort prices), houses/villas, commercial. Build is
   proven on a few pilot estates first, then scaled to the whole territory within the plan.
-- **History from 2000** (2026-10-16). Covers several cycles (2003 trough, 2008, 2021 peak,
-  2021–24 fall, 2025–26 recovery).
+- ~~**History from 2000** (2026-10-16). Covers several cycles (2003 trough, 2008, 2021 peak,
+  2021–24 fall, 2025–26 recovery).~~ *Reversed 2026-10-21, see next line.*
+- **History: all data, adjustable window** (2026-10-21, user): use every year available
+  (Centadata goes back to 1995) in everything, unless the 1997–2003 crash skews a result to
+  a meaningless degree. The study takes an adjustable start and end date and is run in
+  several meaningful settings (all data, each market phase, bought after the crash).
+- **Don't wait for the 28Hse territory backfill before analysing** (2026-10-21, user).
+- **Dashboard gets a growth-study page** (2026-10-21, user).
 - **Two goals:**
   1. Under-market listings: score every current listing by its discount to a modelled fair
      price (after allowing for the usual asking-vs-deal gap) and **rank them; no fixed cut-off**
