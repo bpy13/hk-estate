@@ -96,7 +96,7 @@ def _summary(s: Study) -> list[str]:
         if not r.empty and pd.notna(r.iloc[0]["drawdown"]):
             r = r.iloc[0]
             lines.append(
-                f"- **Recent years.** Our own resale pairs show prices falling "
+                f"- **Worst fall in our own resale pairs (this window):** prices fell "
                 f"{_pct(r['drawdown'], 0)} from {r['peak']:%B %Y} to {r['trough']:%B %Y}.")
     for key, who in (("recorded", "flats sold twice since about 2018 (mostly 2018-2026)"),
                      ("estimated", "flats last sold before 2018, valued today by our model")):
@@ -292,9 +292,12 @@ def write(s: Study, today: date | None = None) -> Path:
     fig_dir.mkdir(exist_ok=True)
     rel = fig_dir.name
 
+    start, end = s.window
+    window = (f"pairs bought from {start or 'the earliest data'} and sold by "
+              f"{end or 'the latest data'}")
     lines = [f"# Findings: which flat attributes grew faster ({today:%Y-%m-%d}, PRELIMINARY)",
              "", "Written by `hkestate report`. Generated, not edited by hand; rerun it as data "
-             "grows. Not committed to git.", ""]
+             f"grows. Not committed to git. Setting `{s.setting}`: {window}.", ""]
     lines += _summary(s)
     lines += _coverage(s)
     lines += _method(s)

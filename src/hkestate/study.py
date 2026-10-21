@@ -1,26 +1,135 @@
 """The growth study end to end (Tasks 5.1-5.3), from a database snapshot to the numbers the
 findings report shows. Re-runnable: `hkestate report` rebuilds everything from the latest
-snapshot, so the report follows the data as the Phase 3 loads finish.
+snapshot.
+
+Two steps, so several date windows can be run from one snapshot (plan 2026-10-21, Phase 4):
+`prepare` builds every pair once (the slow part: pairs, costs, yields, model values);
+`analyse` takes a window (`start`, `end`) and runs the regressions, checks, indices and
+tables on the pairs whose two sales both fall inside it. `run` does both for one window;
+`run_settings` runs the preset list (`STANDARD`) and saves each setting's results.
+
+Saved layout (the dashboard's growth page, plan Phase 5, reads it):
+`data/reports/growth/<YYYYMMDD>/<setting>/` with four CSV files, plus
+`data/reports/growth/<YYYYMMDD>/settings.json`.
+
+- `effects.csv`: one row per attribute and pair type (`recorded`, `real`, `estimated`), from
+  `growth.verdicts`. Columns: `setting`; `pairs_type`; `attribute` (column name, e.g.
+  `size_small`); `label` (plain English); `coef` (effect on annual log growth; x100 =
+  percentage points a year); `se`; `p`; `n_with` (pairs with the attribute); `n` (pairs in
+  the regression); `time_a`, `time_a_p`, `time_b`, `time_b_p` (the effect and p in each half
+  of the time split); `district_a`, `district_a_p`, `district_b`, `district_b_p` (the
+  district split); `time_holds`, `district_holds` (same sign in both halves); `significant`
+  (p < 0.05); `robust` (significant and both splits hold; for estimated pairs also bigger
+  than the model's tilt); `model_tilt` (estimated pairs only: the model's error difference
+  by attribute, per holding year; blank otherwise); `verdict` (`robust`, `significant, not
+  robust` or `not significant`). Empty (header only) when the setting has too few pairs.
+- `districts.csv`: one row per district and pair type. Columns: `setting`; `pairs_type`;
+  `district` (Chinese name, `unknown` where the building has none); `pairs`; `median_years`
+  (holding period); `growth` (median annual price growth); `net_growth` (after round-trip
+  costs); `rental_yield`; `total_return` (net growth + yield); `drawdown` (worst
+  peak-to-trough fall of the district's repeat-sales index within the window; blank under
+  100 pairs); `peak`, `trough` (months of that fall, YYYY-MM-DD).
+- `index.csv`: monthly repeat-sales indices, long form. Columns: `setting`; `pairs_type`;
+  `group` (`all`, an attribute such as `size_small`, its complement `not size_small`, or
+  `district:<name>`); `month` (YYYY-MM-DD, first of the month); `level` (first month = 100).
+  Estimated pairs give a level only at their purchase months (their end is always today).
+- `returns.csv`: raw group medians (no controls), one row per group and pair type. Columns:
+  `setting`; `pairs_type`; `group` (`all`, each attribute and its `not ...` complement,
+  `first-hand`, `second-hand`); `pairs`; `median_years`; `growth`; `net_growth`;
+  `net_growth_first` (a first-home buyer's stamp duty); `rental_yield`; `total_return`;
+  `drawdown`, `peak`, `trough` (from the group's index; blank where there is none).
+- `settings.json`: `date`, `snapshot_at`, `order` (setting names in run order), `settings`
+  (per name: `label`, `start`, `end`, `pairs` by type, `enough` (true when a regression
+  could be run on recorded pairs), `note` (why not, or null), `seconds`, `checks` (the time
+  and district split used per pair type)), `prepare_seconds`, `total_seconds`.
 """
 
 from __future__ import annotations
 
+import json
+import time
 from dataclasses import dataclass, field
 from datetime import date
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
 from hkestate import costs, features, growth, model, pairs
+from hkestate.config import get_data_dir
 
 Z80 = 1.2816  # an 80% interval's half-width is 1.2816 standard deviations (normal)
 RENT_PSF_RANGE = (5.0, 200.0)  # monthly asking rent per sq ft; outside = not a real rent
 ANCHOR_SALES_MONTHS = 12
 INDEX_MIN_PAIRS = growth.MIN_INDEX_PAIRS
+MIN_PAIRS = 200  # fewer recorded pairs than this: no regression, the setting says so
 ESTIMATED_INDEX_WINDOW = ("1995-01-01", "2017-12-31")  # where estimated pairs have starts
-RECORDED_INDEX_WINDOW = ("2018-01-01", None)  # where recorded pairs are dense (28Hse 2018 on)
 INDEX_ATTRS = ["size_small", "size_large", "floor_high", "floor_low", "mtr_near", "mtr_far",
                "big_estate", "first_hand_start"]
+VALUE_COLS = ["ann_growth", "net_ann_growth", "net_ann_growth_first", "rental_yield",
+              "total_return"]
+
+
+@dataclass(frozen=True)
+class Setting:
+    """A date window to run the study in: a pair counts when bought on or after `start` and
+    sold (or valued) on or before `end` (None = no limit)."""
+    name: str
+    start: str | None
+    end: str | None
+    label: str
+
+
+# The plan's preset list (plan 2026-10-21 Task 7, from the owner's "all data in everything,
+# start and end adjustable, several meaningful settings"). Phase dates follow the RVD price
+# index and our own repeat-sales index: peak October 1997, low July 2003, the 2008 financial
+# crisis (Lehman, September 2008), peak September 2021, low October 2024. The 3-year minimum
+# hold still applies, so a phase shorter than about 4 years holds few or no pairs; such a
+# setting reports "too few pairs" rather than a verdict.
+STANDARD = [
+    Setting("all", None, None, "All data (every pair, 1995 on)"),
+    Setting("since-2000", "2000-01-01", None, "Bought from 2000 on"),
+    Setting("crash-1997-2003", "1997-10-01", "2003-07-31",
+            "Bought and sold in the 1997-2003 crash (Oct 1997 peak to Jul 2003 low)"),
+    Setting("recovery-2003-2008", "2003-08-01", "2008-09-30",
+            "Bought and sold in the 2003-2008 recovery (to the financial crisis)"),
+    Setting("boom-2008-2021", "2008-10-01", "2021-09-30",
+            "Bought and sold in the 2008-2021 boom (to the Sep 2021 peak)"),
+    Setting("fall-2021-2024", "2021-10-01", "2024-10-31",
+            "Bought and sold in the 2021-2024 fall (Sep 2021 peak to Oct 2024 low)"),
+    Setting("recent-2024-now", "2024-11-01", None, "Bought and sold since the Oct 2024 low"),
+    Setting("bought-after-crash", "2003-07-01", None,
+            "Bought from July 2003 on (does the crash drive the all-data result?)"),
+]
+
+
+def settings_named(spec: str) -> list[Setting]:
+    """`standard` (the preset list) or comma-separated setting names."""
+    if spec == "standard":
+        return list(STANDARD)
+    by_name = {s.name: s for s in STANDARD}
+    out = []
+    for name in [n.strip() for n in spec.split(",") if n.strip()]:
+        if name not in by_name:
+            raise ValueError(f"unknown setting {name!r}; known: standard, "
+                             f"{', '.join(by_name)}")
+        out.append(by_name[name])
+    return out
+
+
+@dataclass
+class Base:
+    """Everything built once per snapshot, before any window is applied."""
+    deals: pd.DataFrame
+    pairs: dict[str, pd.DataFrame]  # real, ricacorp, recorded, estimated (with costs), gain
+    y: pd.Series
+    anchor: dict
+    bias: pd.DataFrame
+    gain_check: dict
+    coverage: dict
+    rvd: pd.DataFrame
+    rvd_long: pd.DataFrame
+    notes: list[str]
 
 
 @dataclass
@@ -40,6 +149,11 @@ class Study:
     coverage: dict
     notes: list[str] = field(default_factory=list)
     rvd: pd.DataFrame = field(default_factory=pd.DataFrame)  # raw RVD series, for charts
+    setting: str = "all"
+    window: tuple = (None, None)  # (start, end) as given; None = no limit
+    districts: pd.DataFrame = field(default_factory=pd.DataFrame)
+    enough: bool = True  # enough recorded pairs for a regression
+    seconds: float = 0.0
 
 
 # ---- estimated pairs: the model's value of each flat today -----------------------------------
@@ -149,32 +263,12 @@ def coverage(raw: dict, deals: pd.DataFrame) -> dict:
     }
 
 
-# ---- the whole study ----------------------------------------------------------------------
+# ---- step 1: everything that does not depend on the window ------------------------------------
 
 
-def _index_set(frame: pd.DataFrame, window=None) -> tuple[dict, list]:
-    """Indices for all pairs and each attribute level with enough pairs; drawdown rows."""
-    out, rows = {}, []
-    if len(frame) < INDEX_MIN_PAIRS:
-        return out, rows
-    groups = {"all": frame}
-    for a in INDEX_ATTRS:
-        if a in frame.columns:
-            for lvl, name in ((1, a), (0, f"not {a}")):
-                part = frame[frame[a] == lvl]
-                if len(part) >= INDEX_MIN_PAIRS:
-                    groups[name] = part
-    for name, part in groups.items():
-        idx = growth.rs_index(part)
-        out[name] = idx
-        lo, hi = window if window else (None, None)
-        dd = growth.drawdown(idx, lo, hi)
-        rows.append({"group": name, "pairs": len(part), **dd})
-    return out, rows
-
-
-def run(raw: dict, m: model.FairPrice | None = None, test_predictions: pd.DataFrame | None = None,
-        log=print) -> Study:
+def prepare(raw: dict, m: model.FairPrice | None = None,
+            test_predictions: pd.DataFrame | None = None, log=print) -> Base:
+    """Build every pair type from the snapshot, with costs and yields, once."""
     notes = []
     deals = features.deal_features(raw)
     log(f"deals {len(deals)}, clean {deals['exclude_reason'].isna().sum()}")
@@ -214,6 +308,89 @@ def run(raw: dict, m: model.FairPrice | None = None, test_predictions: pd.DataFr
     by_type = {k: _with_costs(v, y, anchor["factor"]) if not y.empty else v
                for k, v in by_type.items()}
     by_type["gain"] = gain
+    log("costs and yields added")
+    bias = model_bias(test_predictions, deals) if m is not None else pd.DataFrame()
+    return Base(deals=deals, pairs=by_type, y=y, anchor=anchor, bias=bias, gain_check=chk,
+                coverage=coverage(raw, deals), rvd=rvd,
+                rvd_long=growth.rvd_long_run(rvd) if not rvd.empty else pd.DataFrame(),
+                notes=notes)
+
+
+# ---- step 2: one window -----------------------------------------------------------------------
+
+
+def _index_set(frame: pd.DataFrame, window=None) -> tuple[dict, list]:
+    """Indices for all pairs, each attribute level and each district with enough pairs;
+    drawdown rows within `window`."""
+    out, rows = {}, []
+    if len(frame) < INDEX_MIN_PAIRS:
+        return out, rows
+    groups = {"all": frame}
+    for a in INDEX_ATTRS:
+        if a in frame.columns:
+            for lvl, name in ((1, a), (0, f"not {a}")):
+                part = frame[frame[a] == lvl]
+                if len(part) >= INDEX_MIN_PAIRS:
+                    groups[name] = part
+    for dist, part in frame.groupby("district"):
+        if len(part) >= INDEX_MIN_PAIRS:
+            groups[f"district:{dist}"] = part
+    lo, hi = window if window else (None, None)
+    for name, part in groups.items():
+        idx = growth.rs_index(part)
+        out[name] = idx
+        dd = growth.drawdown(idx, lo, hi)
+        rows.append({"group": name, "pairs": len(part), **dd})
+    return out, rows
+
+
+def _clip_window(inner: tuple, outer: tuple) -> tuple:
+    """The later start and the earlier end of two windows (None = open)."""
+    starts = [pd.Timestamp(x) for x in (inner[0], outer[0]) if x is not None]
+    ends = [pd.Timestamp(x) for x in (inner[1], outer[1]) if x is not None]
+    return (max(starts) if starts else None, min(ends) if ends else None)
+
+
+def _medians(part: pd.DataFrame) -> dict:
+    out = {"pairs": int(len(part)), "median_years": float(part["years"].median())}
+    for c, name in zip(VALUE_COLS, ("growth", "net_growth", "net_growth_first", "rental_yield",
+                                    "total_return"), strict=True):
+        out[name] = float(part[c].median()) if c in part.columns and len(part) else np.nan
+    return out
+
+
+def _district_rows(frames: dict, drawdowns: pd.DataFrame) -> pd.DataFrame:
+    rows = []
+    for k in ("recorded", "estimated"):
+        f = frames.get(k)
+        if f is None or f.empty:
+            continue
+        dd = drawdowns[drawdowns["pairs_type"] == k].set_index("group") if not drawdowns.empty \
+            else pd.DataFrame()
+        for dist, part in f.groupby("district"):
+            row = {"pairs_type": k, "district": dist, **_medians(part)}
+            g = f"district:{dist}"
+            if g in dd.index:
+                row.update(drawdown=dd.loc[g, "drawdown"], peak=dd.loc[g, "peak"],
+                           trough=dd.loc[g, "trough"])
+            else:
+                row.update(drawdown=np.nan, peak=None, trough=None)
+            rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def analyse(base: Base, start=None, end=None, name: str = "all", log=print) -> Study:
+    """The study on the pairs inside [start, end] (both sales inside; None = open)."""
+    t0 = time.perf_counter()
+    window = (start, end)
+    by_type = {k: v[pairs.in_window(v, start, end)].reset_index(drop=True)
+               for k, v in base.pairs.items() if k != "gain"}
+    # gain pairs have no start date: only their (sale) end can be placed in the window
+    gain = base.pairs["gain"]
+    by_type["gain"] = gain[pairs.in_window(gain, None, end)].reset_index(drop=True)
+    notes = list(base.notes)
+    counts = {k: len(v) for k, v in by_type.items()}
+    log(f"[{name}] window {start or 'start'} to {end or 'end'}: pairs {counts}")
 
     frames, verdicts, summaries = {}, {}, {}
     for k in ("real", "ricacorp", "recorded", "estimated"):
@@ -225,11 +402,25 @@ def run(raw: dict, m: model.FairPrice | None = None, test_predictions: pd.DataFr
         summaries[k] = f[["ann_growth", "net_ann_growth", "net_ann_growth_first",
                           "rental_yield", "total_return", "years"]].describe(
             percentiles=[0.25, 0.5, 0.75]).T if "net_ann_growth" in f else pd.DataFrame()
-        if len(f) >= 200:
-            verdicts[k] = growth.verdicts(f)
+    enough = len(frames.get("recorded", ())) >= MIN_PAIRS
+    if not enough:
+        notes.append(f"Too few recorded pairs in this window ({counts['recorded']:,}; a "
+                     f"regression needs {MIN_PAIRS}): no verdicts. Pairs are held 3+ years, "
+                     "so a short phase holds few.")
+    for k in ("recorded", "real", "estimated"):
+        f = frames.get(k)
+        if f is None or len(f) < MIN_PAIRS:
+            continue
+        if k == "real" and by_type["ricacorp"].empty and "recorded" in verdicts:
+            verdicts[k] = verdicts["recorded"].copy()  # the same pairs: no second regression
+            verdicts[k].attrs = dict(verdicts["recorded"].attrs)
+            continue
+        verdicts[k] = growth.verdicts(f)
+        log(f"[{name}] verdicts on {k}: {len(f):,} pairs, "
+            f"{int(verdicts[k]['robust'].sum()) if len(verdicts[k]) else 0} robust")
 
-    bias = model_bias(test_predictions, deals) if m is not None else pd.DataFrame()
-    if "estimated" in verdicts and not bias.empty:
+    bias = base.bias
+    if "estimated" in verdicts and not bias.empty and len(verdicts["estimated"]):
         v = verdicts["estimated"]
         yrs = float(frames["estimated"]["years"].median())
         v["model_tilt"] = bias["difference"].reindex(v.index) / yrs
@@ -238,10 +429,10 @@ def run(raw: dict, m: model.FairPrice | None = None, test_predictions: pd.DataFr
 
     # % change pairs: sign check of attribute effects on the total gain (no dates)
     gain_signs = pd.DataFrame()
-    if len(gain) >= 200 and "recorded" in verdicts:
-        g = gain.assign(start_date=gain["end_date"], first_hand_start=False,
-                        start_psf=gain["end_price"] / gain["area_sqft"],
-                        ann_log_growth=gain["log_gain"])
+    g = by_type["gain"]
+    if len(g) >= MIN_PAIRS and "recorded" in verdicts and len(verdicts["recorded"]):
+        g = g.assign(start_date=g["end_date"], first_hand_start=False,
+                     start_psf=g["end_price"] / g["area_sqft"], ann_log_growth=g["log_gain"])
         gf = growth.attribute_frame(g)
         est = growth.fit(gf)
         rv = verdicts["recorded"]
@@ -252,11 +443,13 @@ def run(raw: dict, m: model.FairPrice | None = None, test_predictions: pd.DataFr
 
     indices, dd_rows = {}, []
     if "recorded" in frames:
-        indices["recorded"], rows = _index_set(frames["recorded"], RECORDED_INDEX_WINDOW)
+        indices["recorded"], rows = _index_set(frames["recorded"], window)
         dd_rows += [{"pairs_type": "recorded", **r} for r in rows]
     if "estimated" in frames:
-        indices["estimated"], rows = _index_set(frames["estimated"], ESTIMATED_INDEX_WINDOW)
+        indices["estimated"], rows = _index_set(frames["estimated"],
+                                                _clip_window(ESTIMATED_INDEX_WINDOW, window))
         dd_rows += [{"pairs_type": "estimated", **r} for r in rows]
+    drawdowns = pd.DataFrame(dd_rows)
 
     fh_rows = []
     for k in ("recorded", "estimated"):
@@ -271,12 +464,158 @@ def run(raw: dict, m: model.FairPrice | None = None, test_predictions: pd.DataFr
                                 "total_return": part.get("total_return",
                                                          pd.Series(dtype=float)).median()})
 
-    return Study(
-        pairs=by_type, frames=frames, verdicts=verdicts, gain_check=chk,
-        gain_signs=gain_signs, model_bias=bias, indices=indices,
-        drawdowns=pd.DataFrame(dd_rows), rvd_long=growth.rvd_long_run(rvd) if not rvd.empty
-        else pd.DataFrame(), first_hand=pd.DataFrame(fh_rows), summaries=summaries,
-        anchor=anchor, coverage=coverage(raw, deals), notes=notes, rvd=rvd)
+    s = Study(
+        pairs=by_type, frames=frames, verdicts=verdicts, gain_check=base.gain_check,
+        gain_signs=gain_signs, model_bias=bias, indices=indices, drawdowns=drawdowns,
+        rvd_long=base.rvd_long, first_hand=pd.DataFrame(fh_rows), summaries=summaries,
+        anchor=base.anchor, coverage=base.coverage, notes=notes, rvd=base.rvd,
+        setting=name, window=window, districts=_district_rows(frames, drawdowns),
+        enough=enough)
+    s.seconds = time.perf_counter() - t0
+    log(f"[{name}] done in {s.seconds:.0f} s")
+    return s
+
+
+def run(raw: dict, m: model.FairPrice | None = None, test_predictions: pd.DataFrame | None = None,
+        log=print, start=None, end=None) -> Study:
+    """The whole study for one window (the default: all data)."""
+    return analyse(prepare(raw, m, test_predictions, log=log), start, end, log=log)
+
+
+# ---- saved results per setting ----------------------------------------------------------------
+
+
+def effects_table(s: Study) -> pd.DataFrame:
+    cols = ["coef", "se", "p", "n_with", "n", "time_a", "time_a_p", "time_b", "time_b_p",
+            "district_a", "district_a_p", "district_b", "district_b_p", "time_holds",
+            "district_holds", "significant", "robust", "model_tilt"]
+    rows = []
+    for k in ("recorded", "real", "estimated"):
+        v = s.verdicts.get(k)
+        if v is None or v.empty:
+            continue
+        t = v.reindex(columns=cols)
+        t.insert(0, "label", v["label"])
+        t.insert(0, "attribute", v.index)
+        t.insert(0, "pairs_type", k)
+        t.insert(0, "setting", s.setting)
+        t["verdict"] = np.where(v["robust"], "robust", np.where(
+            v["significant"], "significant, not robust", "not significant"))
+        rows.append(t.reset_index(drop=True))
+    return pd.concat(rows, ignore_index=True) if rows else pd.DataFrame(
+        columns=["setting", "pairs_type", "attribute", "label", *cols, "verdict"])
+
+
+def returns_table(s: Study) -> pd.DataFrame:
+    rows = []
+    for k in ("recorded", "estimated"):
+        f = s.frames.get(k)
+        if f is None or f.empty:
+            continue
+        dd = s.drawdowns[s.drawdowns["pairs_type"] == k].set_index("group") \
+            if not s.drawdowns.empty else pd.DataFrame()
+        groups = [("all", f)]
+        for a in growth.ATTRIBUTES:
+            if a in f.columns:
+                groups += [(a, f[f[a] == 1]), (f"not {a}", f[f[a] == 0])]
+        groups += [("first-hand", f[f["first_hand_start"] == 1]),
+                   ("second-hand", f[f["first_hand_start"] == 0])]
+        for g, part in groups:
+            if part.empty:
+                continue
+            row = {"setting": s.setting, "pairs_type": k, "group": g, **_medians(part)}
+            if g in dd.index:
+                row.update(drawdown=dd.loc[g, "drawdown"], peak=dd.loc[g, "peak"],
+                           trough=dd.loc[g, "trough"])
+            else:
+                row.update(drawdown=np.nan, peak=None, trough=None)
+            rows.append(row)
+    return pd.DataFrame(rows, columns=["setting", "pairs_type", "group", "pairs", "median_years",
+                                       "growth", "net_growth", "net_growth_first",
+                                       "rental_yield", "total_return", "drawdown", "peak",
+                                       "trough"])
+
+
+def index_table(s: Study) -> pd.DataFrame:
+    parts = []
+    for k, groups in s.indices.items():
+        for g, idx in groups.items():
+            parts.append(pd.DataFrame({"setting": s.setting, "pairs_type": k, "group": g,
+                                       "month": idx.index.strftime("%Y-%m-%d"),
+                                       "level": idx.to_numpy()}))
+    return pd.concat(parts, ignore_index=True) if parts else pd.DataFrame(
+        columns=["setting", "pairs_type", "group", "month", "level"])
+
+
+def districts_table(s: Study) -> pd.DataFrame:
+    cols = ["setting", "pairs_type", "district", "pairs", "median_years", "growth", "net_growth",
+            "rental_yield", "total_return", "drawdown", "peak", "trough"]
+    if s.districts.empty:
+        return pd.DataFrame(columns=cols)
+    return s.districts.assign(setting=s.setting).reindex(columns=cols)
+
+
+def _dates(df: pd.DataFrame) -> pd.DataFrame:
+    for c in ("peak", "trough"):
+        if c in df.columns:
+            df[c] = pd.to_datetime(df[c]).dt.strftime("%Y-%m-%d")
+    return df
+
+
+def save_setting(s: Study, out_dir: Path) -> Path:
+    """Write the four CSV files of one setting under `out_dir/<setting>/`."""
+    d = out_dir / s.setting
+    d.mkdir(parents=True, exist_ok=True)
+    effects_table(s).to_csv(d / "effects.csv", index=False, encoding="utf-8")
+    _dates(districts_table(s)).to_csv(d / "districts.csv", index=False, encoding="utf-8")
+    index_table(s).to_csv(d / "index.csv", index=False, encoding="utf-8")
+    _dates(returns_table(s)).to_csv(d / "returns.csv", index=False, encoding="utf-8")
+    return d
+
+
+def growth_dir(today: date | None = None) -> Path:
+    today = today or date.today()
+    return get_data_dir() / "reports" / "growth" / f"{today:%Y%m%d}"
+
+
+def setting_meta(s: Study, setting: Setting) -> dict:
+    """The settings.json entry for one run."""
+    note = next((n for n in s.notes if n.startswith("Too few")), None)
+    return {"label": setting.label, "start": setting.start, "end": setting.end,
+            "pairs": {k: int(len(v)) for k, v in s.pairs.items()}, "enough": s.enough,
+            "note": note, "seconds": round(s.seconds, 1),
+            "checks": {k: dict(v.attrs.get("checks", {})) for k, v in s.verdicts.items()}}
+
+
+def run_settings(raw: dict, m: model.FairPrice | None, test_predictions: pd.DataFrame | None,
+                 settings: list[Setting], log=print, today: date | None = None,
+                 out_dir: Path | None = None) -> dict[str, Study]:
+    """Prepare once, then run and save each setting; returns the studies by name."""
+    t0 = time.perf_counter()
+    out_dir = out_dir or growth_dir(today)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    base = prepare(raw, m, test_predictions, log=log)
+    prep_s = time.perf_counter() - t0
+    log(f"prepared all pairs in {prep_s:.0f} s")
+    meta_path = out_dir / "settings.json"
+    meta = json.loads(meta_path.read_text("utf-8")) if meta_path.exists() else {}
+    meta.update({"date": f"{today or date.today():%Y-%m-%d}",
+                 "snapshot_at": base.coverage.get("snapshot_at"),
+                 "prepare_seconds": round(prep_s, 1)})
+    meta.setdefault("settings", {})
+    meta["order"] = [x for x in meta.get("order", []) if x not in {s.name for s in settings}]
+    studies = {}
+    for st in settings:
+        s = analyse(base, st.start, st.end, name=st.name, log=log)
+        studies[st.name] = s
+        save_setting(s, out_dir)
+        meta["settings"][st.name] = setting_meta(s, st)
+        meta["order"].append(st.name)
+        meta["total_seconds"] = round(time.perf_counter() - t0, 1)
+        meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=1, default=str),
+                             "utf-8")
+    log(f"settings saved under {out_dir} ({meta['total_seconds']:.0f} s in all)")
+    return studies
 
 
 def today() -> date:

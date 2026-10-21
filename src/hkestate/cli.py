@@ -9,7 +9,9 @@
     hkestate link-ids                          match 28Hse ids to master ids
     hkestate train [--from-snapshot]           fair-price model + data/reports/model_eval.md
     hkestate rank                              ranked listings CSV in data/reports/
-    hkestate report [--from-snapshot]          growth study, findings_<date>.md
+    hkestate report [--from-snapshot] [--start D] [--end D] [--settings standard]
+                                               growth study, findings_<date>.md; with
+                                               --settings also data/reports/growth/<date>/
     hkestate datacheck [--read-db] [--no-fetch]  data checks on the snapshot, datacheck_<date>.md
     hkestate check-blocked                      monthly: do blocked sites still refuse us?
     hkestate watchdog [--dry-run]              every 15 min: restart jobs that died
@@ -421,10 +423,31 @@ def cmd_rank(args) -> int:
 
 
 def cmd_report(args) -> int:
-    """Growth study and findings report (Phase 5): data/reports/findings_<date>.md."""
+    """Growth study and findings report (Phase 5): data/reports/findings_<date>.md.
+
+    `--start/--end` set the window (a pair counts when both sales fall inside; default all
+    data); `--settings standard` (or a comma-separated list of names) runs the preset
+    windows from one snapshot and saves each under data/reports/growth/<date>/<setting>/,
+    writing the findings file from the `all` setting (plan 2026-10-21, Phase 4)."""
     import pandas as pd
 
     from hkestate import features, model, report, study
+
+    for name in ("start", "end"):
+        value = getattr(args, name, None)
+        if value is not None:
+            try:
+                pd.Timestamp(value)
+            except (ValueError, TypeError):
+                print(f"--{name} must be a date like 2003-07-01, not {value!r}", file=sys.stderr)
+                return 2
+    settings = None
+    if getattr(args, "settings", None):
+        try:
+            settings = study.settings_named(args.settings)
+        except ValueError as e:
+            print(str(e), file=sys.stderr)
+            return 2
 
     def work(log):
         raw = features.load_snapshot() if args.from_snapshot else features.snapshot(args.db)
@@ -433,13 +456,23 @@ def cmd_report(args) -> int:
             m = model.load()
             tp_path = model.model_dir() / "test_predictions.parquet"
             tp = pd.read_parquet(tp_path) if tp_path.exists() else None
-        s = study.run(raw, m, tp, log=log)
+        if settings:
+            studies = study.run_settings(raw, m, tp, settings, log=log)
+            s = studies.get("all") or next(iter(studies.values()))
+            summary = {"settings": {k: {"pairs": {t: len(v) for t, v in st.pairs.items()},
+                                        "enough": st.enough, "seconds": round(st.seconds)}
+                                    for k, st in studies.items()},
+                       "dir": str(study.growth_dir())}
+        else:
+            s = study.run(raw, m, tp, log=log, start=args.start, end=args.end)
+            summary = {}
         path = report.write(s)
-        log(f"report: {path}")
+        log(f"report ({s.setting}): {path}")
         counts = {k: len(v) for k, v in s.pairs.items()}
-        robust = {k: [a for a in v.index if v.loc[a, "robust"]] for k, v in s.verdicts.items()}
+        robust = {k: [a for a in v.index if v.loc[a, "robust"]] for k, v in s.verdicts.items()
+                  if len(v)}
         return counts.get("recorded", 0), {"pairs": counts, "robust": robust,
-                                          "report": str(path)}
+                                          "report": str(path), **summary}
 
     return _logged(args, "report", work)
 
@@ -586,6 +619,16 @@ def main(argv: list[str] | None = None) -> int:
     rpt = sub.add_parser("report", help="growth study + findings report in data/reports/")
     rpt.add_argument("--from-snapshot", action="store_true",
                      help="reuse data/model/snapshot instead of reading the database")
+    rpt.add_argument("--start", default=None, metavar="YYYY-MM-DD",
+                     help="only pairs bought on or after this date (default: all data)")
+    rpt.add_argument("--end", default=None, metavar="YYYY-MM-DD",
+                     help="only pairs sold (or valued) on or before this date")
+    rpt.add_argument("--settings", default=None, metavar="LIST",
+                     help="run preset windows from one snapshot: 'standard' or a "
+                          "comma-separated list of names (all, since-2000, crash-1997-2003, "
+                          "recovery-2003-2008, boom-2008-2021, fall-2021-2024, "
+                          "recent-2024-now, bought-after-crash); results go to "
+                          "data/reports/growth/<date>/<setting>/")
     rpt.set_defaults(func=cmd_report)
     dc = sub.add_parser("datacheck", help="data checks on the snapshot: datacheck_<date>.md")
     dc.add_argument("--read-db", action="store_true",

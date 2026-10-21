@@ -166,14 +166,25 @@ throughout. The 28Hse territory backfill (about 7% done) is not waited for.
 
 ## Phase 4 – Growth study on real pairs, adjustable window (fable)
 
-- [ ] **Task 6: date window for the study**
+- [x] **Task 6: date window for the study** *(2026-10-21 21:45: `pairs.in_window` keeps a
+  pair only when both sales are inside; `study.prepare` builds every pair once and
+  `study.analyse` runs one window; the time split falls inside the window (2018 end-cut
+  where both sides have 200+ pairs, else the median purchase year). The cluster SE and the
+  repeat-sales index were vectorised for 660k pairs.)*
   - Files: modify `src/hkestate/study.py`, `src/hkestate/pairs.py`, `src/hkestate/growth.py`,
     `src/hkestate/cli.py`; tests `tests/test_study.py`, `tests/test_pairs.py`
   - `hkestate report --start YYYY-MM-DD --end YYYY-MM-DD`: a pair counts when both its sales
     fall inside the window. Defaults: earliest and latest data (all data).
   - Done when: a test shows pairs outside the window are dropped and the out-of-sample time
     split adapts to the window (median purchase date inside it).
-- [ ] **Task 7: preset settings in one command**
+- [x] **Task 7: preset settings in one command** *(2026-10-21 21:43: `report --from-snapshot
+  --settings standard` on the 17:54 snapshot: 22 min 35 s wall (pair building 17 min, of
+  which costs and yields 13.5 min; the eight analyses 4 min), peak working set 8.9 GB.
+  Pairs: all 663,400 real + 107 Ricacorp + 564,113 estimated; since-2000 464,833 real;
+  crash-1997-2003 6,941; recovery-2003-2008 12,855; boom-2008-2021 136,823; fall-2021-2024
+  1 and recent-2024-now 0 (both say "too few recorded pairs", no verdicts);
+  bought-after-crash 374,660 real + 396,373 estimated. Saved under
+  `data/reports/growth/20261021/`; column docs in `study.py`'s docstring.)*
   - Files: modify `src/hkestate/study.py`, `src/hkestate/report.py`, `src/hkestate/cli.py`;
     tests
   - `hkestate report --settings standard` runs, from one snapshot:

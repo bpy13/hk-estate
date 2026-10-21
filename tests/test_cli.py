@@ -38,6 +38,18 @@ def test_status_runs_on_a_small_db(tmp_path, capsys):
     assert "test-group 1 1" in out
 
 
+def test_report_refuses_a_bad_date_or_setting_before_touching_the_db(tmp_path, monkeypatch,
+                                                                     capsys):
+    """Task 6/7: `--start/--end` must be dates and `--settings` known names; a bad value
+    returns 2 with a message and never starts a run (no database is created)."""
+    monkeypatch.setenv("HKESTATE_DATA_DIR", str(tmp_path))
+    assert cli.main(["report", "--from-snapshot", "--start", "last-year"]) == 2
+    assert "--start" in capsys.readouterr().err
+    assert cli.main(["report", "--from-snapshot", "--settings", "all,no-such"]) == 2
+    assert "no-such" in capsys.readouterr().err
+    assert not (tmp_path / "hkestate.duckdb").exists()
+
+
 def test_link_ids_runs_on_an_empty_db(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("HKESTATE_DATA_DIR", str(tmp_path))
     path = tmp_path / "t.duckdb"
