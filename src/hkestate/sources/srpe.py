@@ -148,12 +148,24 @@ class RegisterDeal:
 
     @property
     def deal_date(self) -> date:
-        return self.asp_date or self.pasp_date  # type: ignore[return-value]
+        """The agreement (ASP) date, or the preliminary (PASP) date when there is no ASP or
+        the ASP date is not believable: before the PASP, or more than a year after it. A
+        register listed one ASP as 26/09/2055 against a PASP of 13/09/2025 (the vendor's typo;
+        found by `hkestate datacheck` 2026-10-21); an ASP normally follows within days."""
+        if self.asp_date is None:
+            return self.pasp_date  # type: ignore[return-value]
+        if self.pasp_date is not None and not (
+                0 <= (self.asp_date - self.pasp_date).days <= MAX_PASP_TO_ASP_DAYS):
+            return self.pasp_date
+        return self.asp_date
 
     @property
     def pasp_only(self) -> bool:
         return self.asp_date is None
 
+
+# An ASP date further than this from its PASP is taken as a typo in the register.
+MAX_PASP_TO_ASP_DAYS = 365
 
 # Registers write dates as 17/12/2015 or 05-04-2016 depending on the vendor.
 _DATE = re.compile(r"^\s*(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})\s*$")

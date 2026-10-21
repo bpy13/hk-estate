@@ -89,7 +89,12 @@ throughout. The 28Hse territory backfill (about 7% done) is not waited for.
 
 ## Phase 2 – Data checks (fable)
 
-- [ ] **Task 4: `hkestate datacheck`**
+- [x] **Task 4: `hkestate datacheck`** *(2026-10-21 17:23: run on the snapshot, report
+  `data/reports/datacheck_20261021.md`; sales per year ok (61-84% of the Land Registry
+  count 2005-2026, no free count before 2005), duplicates left ok (4,475 pairs, 0.2%), odd
+  values and coverage "look at this": Chinese-numeral floor labels (五, 十二) are not parsed,
+  285k Centadata deals without a floor; SRPE's 2055 date is the register's own typo, the
+  parser now falls back to the PASP date.)*
   - Files: create `src/hkestate/datacheck.py`, `tests/test_datacheck.py`; modify
     `src/hkestate/cli.py` (new subcommand), `docs/operations.md` (command list)
   - Works from the snapshot (`features.load_snapshot()`); writes

@@ -71,6 +71,19 @@ def test_register_rows():
     assert b.has_parking
 
 
+def test_unbelievable_asp_date_falls_back_to_the_pasp_date():
+    # a register wrote 26/09/2055 for a sale whose PASP was 13/09/2025 (seen 2026-10-21)
+    rows = [ROWS[0], ROWS[1],
+            ["13/09/2025", "26/09/2055", "", "the MVP", "11", "A", "P1", "$35,353,900", "", "", ""],
+            ["13/09/2025", "10/09/2025", "", "the MVP", "12", "A", "", "$30,000,000", "", "", ""],
+            ["13/09/2025", "20/09/2025", "", "the MVP", "13", "A", "", "$31,000,000", "", "", ""]]
+    typo, before, normal = srpe.parse_register_rows(rows)
+    assert typo.asp_date == date(2055, 9, 26)  # kept as read, but not used as the deal date
+    assert typo.deal_date == date(2025, 9, 13) and not typo.pasp_only
+    assert before.deal_date == date(2025, 9, 13)  # an ASP before its PASP is a typo too
+    assert normal.deal_date == date(2025, 9, 20)
+
+
 # House-sale registers have 9 columns (one description cell, no block/floor/unit split), so the
 # price sits in column 5 and column 7 holds payment terms full of other amounts and dates.
 HOUSE_ROWS = [

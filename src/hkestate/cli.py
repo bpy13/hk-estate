@@ -10,6 +10,7 @@
     hkestate train [--from-snapshot]           fair-price model + data/reports/model_eval.md
     hkestate rank                              ranked listings CSV in data/reports/
     hkestate report [--from-snapshot]          growth study, findings_<date>.md
+    hkestate datacheck [--read-db] [--no-fetch]  data checks on the snapshot, datacheck_<date>.md
     hkestate check-blocked                      monthly: do blocked sites still refuse us?
     hkestate watchdog [--dry-run]              every 15 min: restart jobs that died
     hkestate status
@@ -441,6 +442,32 @@ def cmd_report(args) -> int:
     return _logged(args, "report", work)
 
 
+def cmd_datacheck(args) -> int:
+    """Data checks on the snapshot: data/reports/datacheck_<date>.md (plan 2026-10-21 Task 4).
+
+    Reads `data/model/snapshot` unless `--read-db` asks for a fresh one; no run_log row, so
+    by default it never opens the database (scrapers hold it)."""
+    from hkestate import datacheck, features
+
+    log = _logger("datacheck")
+    raw = features.snapshot(args.db) if args.read_db else features.load_snapshot()
+    log(f"snapshot: {raw['meta']}")
+    registry = None
+    if not args.no_fetch:
+        from hkestate.fetch import Fetcher
+
+        years = range(datacheck.LR_FIRST_YEAR, datetime.now().year + 1)
+        with Fetcher() as f:
+            registry = datacheck.land_registry_counts(f, years, log=log)
+        log(f"Land Registry counts for {len(registry)} years ({f.requests_made} requests)")
+    res = datacheck.run(raw, registry, log=log)
+    path = datacheck.write_report(res, raw)
+    for check, verdict in res["verdicts"].items():
+        log(f"{check}: {verdict}")
+    log(f"report: {path}")
+    return 0
+
+
 def cmd_status(args) -> int:
     with db.session(args.db) as con:
         db.init_db(con)
@@ -552,6 +579,13 @@ def main(argv: list[str] | None = None) -> int:
     rpt.add_argument("--from-snapshot", action="store_true",
                      help="reuse data/model/snapshot instead of reading the database")
     rpt.set_defaults(func=cmd_report)
+    dc = sub.add_parser("datacheck", help="data checks on the snapshot: datacheck_<date>.md")
+    dc.add_argument("--read-db", action="store_true",
+                    help="take a fresh snapshot from the database first (default: reuse "
+                         "data/model/snapshot, never opening the database)")
+    dc.add_argument("--no-fetch", action="store_true",
+                    help="skip the Land Registry download (no independent yearly count)")
+    dc.set_defaults(func=cmd_datacheck)
     s = sub.add_parser("status", help="recent runs and row counts")
     s.set_defaults(func=cmd_status)
 

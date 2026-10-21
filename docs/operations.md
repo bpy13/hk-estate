@@ -254,7 +254,21 @@ conda run -n hk-estate hkestate listings --sources centanet,spacious --estates t
 conda run -n hk-estate hkestate update                   # newest 28Hse deals
 conda run -n hk-estate hkestate prune-cache --days 7
 conda run -n hk-estate hkestate status
+conda run -n hk-estate hkestate datacheck                # data checks on the snapshot (below)
 ```
+
+## Data checks (`hkestate datacheck`)
+
+Writes `data\reports\datacheck_<date>.md`: sales per year against the Land Registry's count
+of residential sale and purchase agreements (2005 on, open data; docs/sources.md "Land
+Registry statistics"), duplicate sales left after `excl_duplicate`, odd values (dates,
+prices, areas, price per sq ft, two sales of one unit on one day) and coverage by decade
+and source, each with a verdict ("ok" / "look at this"). It reads `data\model\snapshot`
+(written by the last `train`, `rank` or `report` that read the database) and **never opens
+the database** unless you pass `--read-db`; it writes a log file but no `run_log` row.
+`--no-fetch` skips the Land Registry download (22 small files, cached 30 days), leaving the
+yearly table without a verdict. About a minute on 2.3 million deals. Nothing is changed or
+deleted: odd rows are listed for a decision.
 
 ## Manual building map
 

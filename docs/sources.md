@@ -337,3 +337,27 @@ Per-flat sale history from Centadata's own block pages' call. Plan:
   40 codes a call and about 1.15 calls per batch that is about 22,700 calls, at 4 s plus
   jitter and response time (about 4.6 s) roughly **29 hours** (a day and a bit) for the whole
   territory, longer as the master list grows. It is resumable, per building.
+
+## Land Registry statistics (2026-10-21)
+
+The independent yearly count for `hkestate datacheck` (plan 2026-10-21, Task 4): the number
+of agreements for sale and purchase of residential building units received for registration,
+by month and price band. Open data, used for market context only (no per-flat data).
+
+- **Where:** data.gov.hk dataset `hk-lr-data5-landreg`; one file per year from 2005 at
+  `https://www.landreg.gov.hk/datagovhk/consideration_<year>.json` (an `.xls` twin and a
+  data dictionary `.doc` sit beside them). The Land Registry's own statistics pages
+  (`/en/monthly/stat<MMYY>.htm`, `10years.htm`, `agreement.htm`) fill their tables with
+  JavaScript, so they were not used.
+- **robots.txt:** none on `www.landreg.gov.hk` (404) and none on `data.gov.hk` (404), so
+  everything is allowed; the fetcher's 1 s gap applies. Probe 2026-10-21: 11 requests (the
+  dataset page, one yearly file, four Land Registry pages, robots.txt per run).
+- **File shape:** a JSON list, one object per price band ("Less than 1", "1 to less than 2",
+  ... "20 or above", "Total") with the months Jan-Dec as strings with thousands commas; months
+  not yet published are missing or blank. `datacheck.parse_consideration_json` reads the
+  "Total" row.
+- **Use:** `hkestate datacheck` reads every year 2005-today through the fetcher (22 requests
+  the first time, cached 30 days as static pages under `data/cache/www.landreg.gov.hk/`).
+  The registry counts by registration month and includes first-hand sales and every
+  residential unit (subsidised flats too), so our clean resales run at 61-84% of it
+  (2005-2026). No free count exists for 1995-2004.
