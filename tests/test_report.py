@@ -54,6 +54,21 @@ def test_reading_with_no_phase_tested_and_weak_lean():
                          "boom-2008-2021": c(0.001, significant=False)})
 
 
+def test_worst_fall_clause_takes_its_period_from_the_districts():
+    """Pre-release review 2026-10-21: the summary hard-coded "(1997-2003)" after the median
+    district drawdown, wrong for a window that does not cover the crash."""
+    d = pd.DataFrame({
+        "district": ["東區", "南區", "北區", "沙田區"], "drawdown": [0.60, 0.50, 0.40, None],
+        "peak": ["1997-10-01", "1997-08-01", "2021-09-01", None],
+        "trough": ["2003-07-01", "2003-08-01", "2024-10-01", None]})
+    assert report.worst_fall_clause(d) == \
+        "; the worst fall was about 50% in a typical district (peak 1997, low 2003)"
+    recent = d[d["district"] == "北區"]
+    assert report.worst_fall_clause(recent) == \
+        "; the worst fall was about 40% in a typical district (peak 2021, low 2024)"
+    assert report.worst_fall_clause(d[d["drawdown"].isna()]) == ""
+
+
 def test_dot_chart_legend_wraps_for_many_groups(tmp_path):
     groups = ["all", "since-2000", "crash-1997-2003", "recovery-2003-2008", "boom-2008-2021",
               "bought-after-crash"]

@@ -16,7 +16,8 @@ way), so a listing that states them lends them to every deal on that building + 
 
 Rows left out of training (column `exclude_reason`, docs/decisions.md "Phase 4"):
 - the `txn_all` exclusions (duplicate, under HK$500k, first-hand, non-market, bulk, outlier;
-  deals dated before 1990 fall under `too_old`)
+  deals dated before 1990 fall under `too_old`, deals dated after the snapshot was taken,
+  e.g. an SRPE register typo saying 2055, under `in_future`)
 - first-hand sales by rule where SRPE doesn't cover the building and Centadata gives no
   first/second-hand label of its own (`first_hand_rule`)
 - deals that include a parking space (28Hse 連車位, SRPE parking column)
@@ -488,9 +489,17 @@ def _attach(df: pd.DataFrame, raw: dict, buildings: pd.DataFrame) -> pd.DataFram
 
 EXCLUDE_ORDER = [
     "no_building", "house", "duplicate", "first_hand", "first_hand_rule", "parking",
-    "non_market", "low_price", "bulk", "outlier", "derived", "no_area", "too_old",
+    "non_market", "low_price", "bulk", "outlier", "derived", "no_area", "too_old", "in_future",
     "price_check",  # applied last, against the deals left (see price_check)
 ]
+
+
+def snapshot_cutoff(raw: dict) -> pd.Timestamp:
+    """The last date a deal in this snapshot can honestly carry: the day the snapshot was
+    taken (today for an extract without `extracted_at`). A later date is a source error (an
+    SRPE register typo dated one sale 2055-09-26; pre-release review 2026-10-21)."""
+    at = raw.get("meta", {}).get("extracted_at")
+    return (pd.Timestamp(at) if at else pd.Timestamp(date.today())).normalize()
 
 
 def deal_features(raw: dict) -> pd.DataFrame:
@@ -553,6 +562,7 @@ def deal_features(raw: dict) -> pd.DataFrame:
         "derived": (d["source"] == "ricacorp") & d["source_id"].str.endswith(":prev"),
         "no_area": ~d["area_basis"].isin(["saleable", "converted"]) | d["log_psf"].isna(),
         "too_old": d["agreement_date"].isna() | (d["agreement_date"] < MIN_DEAL_DATE),
+        "in_future": d["agreement_date"] > snapshot_cutoff(raw),
     }
     reason = pd.Series([None] * len(d), index=d.index, dtype=object)
     for name in reversed(EXCLUDE_ORDER):  # the first reason in EXCLUDE_ORDER wins

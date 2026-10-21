@@ -351,8 +351,8 @@ def _summary(s: Study, main: list[Study], sens: list[Study]) -> list[str]:
             lines.append(
                 f"- **Districts (recorded pairs, medians):** growth ran from "
                 f"{_pct(lo['growth'])} a year in {district_label(lo['district'])} to "
-                f"{_pct(hi['growth'])} in {district_label(hi['district'])}; the worst fall was "
-                f"about {_pct(d['drawdown'].median(), 0)} in a typical district (1997-2003).")
+                f"{_pct(hi['growth'])} in {district_label(hi['district'])}"
+                f"{worst_fall_clause(d)}.")
     lines.append(
         f"- **How much data:** {_n(cov['clean'])} clean sales; "
         f"{_n(len(s.pairs['real']))} real resale pairs, {_n(len(s.pairs['ricacorp']))} Ricacorp "
@@ -363,6 +363,20 @@ def _summary(s: Study, main: list[Study], sens: list[Study]) -> list[str]:
               "the same way when the pairs are split by time and, separately, by district. "
               "*Drawdown* is the largest fall from a peak to a later low.", ""]
     return lines
+
+
+def worst_fall_clause(d: pd.DataFrame) -> str:
+    """The summary's "; the worst fall was about 45% in a typical district (peak 1997, low
+    2003)" from the district rows' drawdowns, with the median district's peak and low years
+    (the period used to be hard-coded as the 1997-2003 crash, wrong for a window that does
+    not cover it). Empty when no district has a drawdown."""
+    dd = d.dropna(subset=["drawdown"])
+    if dd.empty:
+        return ""
+    peak = int(pd.to_datetime(dd["peak"]).dt.year.median())
+    trough = int(pd.to_datetime(dd["trough"]).dt.year.median())
+    return (f"; the worst fall was about {_pct(dd['drawdown'].median(), 0)} in a typical "
+            f"district (peak {peak}, low {trough})")
 
 
 def _years(p: pd.DataFrame) -> str:
@@ -631,7 +645,7 @@ def _sensitivity_section(sens: list[Study]) -> list[str]:
     return lines
 
 
-def _district_section(s: Study, main: list[Study], fig_dir: Path, rel: str) -> list[str]:
+def _district_section(s: Study, fig_dir: Path, rel: str) -> list[str]:
     d = s.districts
     if d is None or d.empty:
         return []
@@ -806,7 +820,7 @@ def write(s: Study, studies: dict[str, Study] | None = None, today: date | None 
         if t:
             lines += [f"### {TYPE_NAMES[key]}", ""] + t + [""]
 
-    lines += _district_section(s, main, fig_dir, rel)
+    lines += _district_section(s, fig_dir, rel)
     lines += _index_section(s, fig_dir, rel)
 
     lines += ["## First-hand vs second-hand", "",
@@ -915,7 +929,8 @@ def _limits(s: Study) -> list[str]:
         "",
         "## Rerun", "",
         "`hkestate train --from-snapshot`, then `hkestate report --from-snapshot --settings "
-        "standard` (about 25 minutes; the saved results under `data/reports/growth/<date>/` "
+        "standard` (5-15 minutes: 4.6 on 2026-10-22 with nothing else running, 14 the day "
+        "before; the saved results under `data/reports/growth/<date>/` "
         "feed the dashboard's growth page).",
         "",
     ]

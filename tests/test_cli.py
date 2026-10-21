@@ -47,6 +47,14 @@ def test_report_refuses_a_bad_date_or_setting_before_touching_the_db(tmp_path, m
     assert "--start" in capsys.readouterr().err
     assert cli.main(["report", "--from-snapshot", "--settings", "all,no-such"]) == 2
     assert "no-such" in capsys.readouterr().err
+    # pre-release review 2026-10-21: --start/--end were silently ignored with --settings
+    assert cli.main(["report", "--from-snapshot", "--settings", "all", "--start",
+                     "2000-01-01"]) == 2
+    err = capsys.readouterr().err
+    assert "--settings" in err and "--start" in err
+    assert cli.main(["report", "--from-snapshot", "--settings", "standard", "--end",
+                     "2020-12-31"]) == 2
+    assert "--end" in capsys.readouterr().err
     assert not (tmp_path / "hkestate.duckdb").exists()
 
 

@@ -3,12 +3,77 @@ runs the regressions and writes data/reports/findings_<date>.md with its charts.
 
 from datetime import date, timedelta
 
+import numpy as np
+import pandas as pd
 import pytest
 from phase4_data import add_deal, make_db
 
-from hkestate import cli, db, features, model, study
+from hkestate import cli, costs, db, features, model, study
 
 TODAY = date(2026, 10, 17)
+
+
+def _rvd(months, rent_psm, price_psm, cls="B", region="HK"):
+    rows = []
+    for m in months:
+        rows.append({"kind": "rent", "series": "rvd_avg_rent_psm", "freq": "month",
+                     "period": m, "class": cls, "region": region, "value": rent_psm})
+        rows.append({"kind": "price", "series": "rvd_avg_price_psm", "freq": "month",
+                     "period": m, "class": cls, "region": region, "value": price_psm})
+    return pd.DataFrame(rows)
+
+
+def _anchor_inputs(extra_deals):
+    """25 buildings sold at HK$15,000/sq ft in 2026 with HK$30/sq ft asking rents (listing
+    yield 2.4% vs RVD 3%: anchor 0.8), plus `extra_deals` rows."""
+    months = pd.date_range("2026-01-01", "2026-08-01", freq="MS")
+    y = costs.rvd_yields(_rvd(months, 300.0, 120_000.0))
+    ids = [f"b{i}" for i in range(25)]
+    deals = pd.DataFrame({
+        "source": "centadata", "source_id": [f"d{i}" for i in range(25)], "building_id": ids,
+        "agreement_date": pd.Timestamp("2026-06-01"), "psf_hkd": 15_000.0, "rvd_class": "B",
+        "district": "東區", "exclude_reason": None})
+    deals = pd.concat([deals, pd.DataFrame(extra_deals)], ignore_index=True)
+    deals["agreement_date"] = pd.to_datetime(deals["agreement_date"])
+    listings = pd.DataFrame({"kind": "rent", "building_id": ids, "saleable_sqft": 500.0,
+                             "price_hkd": 15_000.0})
+    raw = {"listings": listings, "meta": {"extracted_at": "2026-10-21T17:54:59"},
+           "run_log": pd.DataFrame()}
+    return raw, deals, y
+
+
+def test_listing_anchor_window_ignores_a_far_future_deal_date():
+    """Pre-release review 2026-10-21: the anchor's 12-month sales window ended at the latest
+    deal date of any stored row, so one SRPE row dated 2055 (a register typo) emptied it and
+    the yields silently fell back to RVD alone (factor 1, 0 buildings). The window now ends
+    at the latest clean deal on or before the snapshot's extraction date."""
+    typo = {"source": "srpe", "source_id": "typo", "building_id": None,
+            "agreement_date": "2055-09-26", "psf_hkd": np.nan, "rvd_class": "B",
+            "district": None, "exclude_reason": "first_hand"}
+    # a clean-looking row dated after the snapshot must not move the window either
+    soon = {"source": "centadata", "source_id": "soon", "building_id": "b0",
+            "agreement_date": "2030-01-05", "psf_hkd": 15_000.0, "rvd_class": "B",
+            "district": "東區", "exclude_reason": None}
+    raw, deals, y = _anchor_inputs([typo, soon])
+    a = study.listing_anchor(raw, deals, y)
+    assert a["basis"] == "listings" and a["buildings"] == 25
+    assert a["factor"] == pytest.approx(0.8)
+    assert a["rent_listings"] == 25
+
+
+def test_coverage_last_date_ignores_a_register_typo():
+    typo = {"source": "srpe", "source_id": "typo", "building_id": None,
+            "agreement_date": "2055-09-26", "psf_hkd": np.nan, "rvd_class": "B",
+            "district": None, "exclude_reason": "first_hand"}
+    raw, deals, _ = _anchor_inputs([typo])
+    deals = deals.assign(is_pilot=False, estate_key="e", mtr_m=np.nan, rel_floor=np.nan,
+                         facing="unknown", built_year=np.nan)
+    cov = study.coverage(raw, deals)
+    bs = cov["by_source"]
+    assert bs.loc["srpe", "deals"] == 1  # still counted as stored
+    assert pd.isna(bs.loc["srpe", "last"])  # but its date is not shown as the latest sale
+    assert bs.loc["centadata", "last"] == pd.Timestamp("2026-06-01")
+    assert cov["clean"] == 25
 
 
 def _add_history(con):

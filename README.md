@@ -51,7 +51,8 @@ Copy-Item data\model\backup_20261018\* data\model\ -Recurse -Force   # run from 
 
 **Growth study windows.** `report --start YYYY-MM-DD --end YYYY-MM-DD` keeps a pair only when
 both its sales fall inside the window (default: all data). `report --settings standard` runs
-these windows from one snapshot (or `--settings name,name`); a pair needs a 3-year hold, so a
+these windows from one snapshot (or `--settings name,name`; not together with
+`--start/--end`, the presets carry their own dates); a pair needs a 3-year hold, so a
 window too short for enough pairs says so instead of giving a verdict:
 
 | Setting | Pairs counted |

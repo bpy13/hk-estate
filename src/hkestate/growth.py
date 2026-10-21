@@ -222,18 +222,6 @@ def verdicts(d: pd.DataFrame, attrs: list[str] | None = None) -> pd.DataFrame:
     return out
 
 
-# ---- summaries ---------------------------------------------------------------------------------
-
-
-def group_summary(d: pd.DataFrame, attr: str, value_cols=("ann_growth", "net_ann_growth",
-                                                           "rental_yield", "total_return")
-                  ) -> pd.DataFrame:
-    """Medians by attribute level (0/1), with counts."""
-    agg = {c: "median" for c in value_cols if c in d.columns}
-    g = d.groupby(attr).agg(n=("y", "size"), **{c: (c, f) for c, f in agg.items()})
-    return g
-
-
 # ---- repeat-sales index and drawdown ----------------------------------------------------------
 
 MIN_INDEX_PAIRS = 100

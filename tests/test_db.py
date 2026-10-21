@@ -482,6 +482,22 @@ def test_clean_view_drops_deals_dated_before_1990(con):
     assert flags == {"old": True, "edge": False, "ok": False}
 
 
+def test_clean_view_drops_deals_dated_in_the_future(con):
+    """Pre-release review 2026-10-21: an SRPE register typo dated one sale 2055-09-26. A deal
+    dated after today is flagged `excl_bad_date` like a pre-1990 one; today itself is fine."""
+    from datetime import timedelta
+
+    _setup_building(con)
+    _txn(con, "typo", 8_000_000, date(2055, 9, 26), unit="A", source="centadata")
+    _txn(con, "soon", 8_000_000, date.today() + timedelta(days=400), unit="B",
+         source="centadata")
+    _txn(con, "today", 8_000_000, date.today(), unit="C", source="centadata")
+    _txn(con, "ok", 8_000_000, date(2025, 9, 8), unit="D", source="centadata")
+    assert _clean_ids(con) == {"today", "ok"}
+    flags = dict(con.execute("SELECT source_id, excl_bad_date FROM txn_all").fetchall())
+    assert flags == {"typo": True, "soon": True, "today": False, "ok": False}
+
+
 def test_centadata_first_hand_label_decides_the_first_hand_flag(con):
     """Task 4b (e): Centadata history rows carry the source's own label
     (`firstOrSecondHand` in raw_json); where present it decides `excl_first_hand`. Rows

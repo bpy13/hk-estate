@@ -248,14 +248,21 @@ def model_bias(test_predictions: pd.DataFrame, deals: pd.DataFrame) -> pd.DataFr
 
 
 def listing_anchor(raw: dict, deals: pd.DataFrame, y: pd.Series) -> dict:
+    """Current asking rents against the last 12 months of clean sales, per building
+    (`costs.anchor_factor`)."""
     li = raw["listings"]
     r = li[(li["kind"] == "rent") & li["building_id"].notna()
            & (pd.to_numeric(li["saleable_sqft"], errors="coerce") > 0)]
     rents = pd.DataFrame({"building_id": r["building_id"],
                           "rent_psf": r["price_hkd"] / r["saleable_sqft"]})
     rents = rents[rents["rent_psf"].between(*RENT_PSF_RANGE)]
-    since = deals["agreement_date"].max() - pd.DateOffset(months=ANCHOR_SALES_MONTHS)
-    s = deals[deals["exclude_reason"].isna() & (deals["agreement_date"] > since)]
+    # The window ends at the latest clean deal on or before the snapshot date, not at the
+    # latest date of any stored row: one SRPE row dated 2055 (a register typo) emptied the
+    # window and the anchor silently fell back to RVD alone (pre-release review 2026-10-21).
+    clean = deals[deals["exclude_reason"].isna()
+                  & (deals["agreement_date"] <= features.snapshot_cutoff(raw))]
+    since = clean["agreement_date"].max() - pd.DateOffset(months=ANCHOR_SALES_MONTHS)
+    s = clean[clean["agreement_date"] > since]
     sales = pd.DataFrame({"building_id": s["building_id"], "sale_psf": s["psf_hkd"],
                           "rvd_class": s["rvd_class"],
                           "region": s["district"].map(costs.region_of)})
@@ -279,9 +286,11 @@ def _with_costs(p: pd.DataFrame, y: pd.Series, anchor: float) -> pd.DataFrame:
 
 def coverage(raw: dict, deals: pd.DataFrame) -> dict:
     d = deals
-    by_source = d.groupby("source").agg(deals=("source_id", "size"),
-                                        first=("agreement_date", "min"),
-                                        last=("agreement_date", "max"))
+    # first/last sale per source over dates on or before the snapshot date: a register typo
+    # (an SRPE row dated 2055) must not show as the source's latest sale
+    dated = d[d["agreement_date"] <= features.snapshot_cutoff(raw)]
+    by_source = d.groupby("source").agg(deals=("source_id", "size"))
+    by_source[["first", "last"]] = dated.groupby("source")["agreement_date"].agg(["min", "max"])
     clean = d[d["exclude_reason"].isna()]
     years = clean.groupby(clean["agreement_date"].dt.year).size()
     runs = raw.get("run_log", pd.DataFrame())
@@ -684,7 +693,13 @@ def setting_meta(s: Study, setting: Setting) -> dict:
 def run_settings(raw: dict, m: model.FairPrice | None, test_predictions: pd.DataFrame | None,
                  settings: list[Setting], log=print, today: date | None = None,
                  out_dir: Path | None = None) -> dict[str, Study]:
-    """Prepare once, then run and save each setting; returns the studies by name."""
+    """Prepare once, then run and save each setting; returns the studies by name.
+
+    A second run on the same day merges into that day's settings.json: settings not run
+    again keep their entry and their place in `order`, while `date`, `snapshot_at` and
+    `prepare_seconds` are overwritten by this run's. So after a run on a newer snapshot the
+    file's `snapshot_at` describes only the settings run last; rerun `standard` to make every
+    entry come from one snapshot."""
     t0 = time.perf_counter()
     out_dir = out_dir or growth_dir(today)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -712,7 +727,3 @@ def run_settings(raw: dict, m: model.FairPrice | None, test_predictions: pd.Data
                              "utf-8")
     log(f"settings saved under {out_dir} ({meta['total_seconds']:.0f} s in all)")
     return studies
-
-
-def today() -> date:
-    return date.today()

@@ -174,6 +174,8 @@ def stamp_duty(price: float, day, buyer: str = "additional") -> float:
 
 def round_trip(start_price: float, start_date, end_price: float,
                buyer: str = "additional") -> dict:
+    """One pair's costs, scalar. Not used by the study (`add_net_growth` is the vectorised
+    version); kept as the reference implementation the tests compare that version against."""
     duty = stamp_duty(start_price, start_date, buyer)
     buy = duty + (AGENT_PCT + LEGAL_PCT) * start_price
     return {"stamp_duty": duty, "buy_cost": buy, "sell_cost": AGENT_PCT * end_price}

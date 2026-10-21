@@ -1,6 +1,6 @@
 # Open items
 
-As of 2026-10-16. Tick off, or move to `decisions.md` when settled. A bug that will be fixed goes
+As of 2026-10-22. Tick off, or move to `decisions.md` when settled. A bug that will be fixed goes
 here; a limit or trap we live with goes in `known-issues.md`. Each item in one place only.
 
 ## Blockers
@@ -73,8 +73,23 @@ cache pruning.)*
 - **Two SRPE rows carry dates from the developer's register that look wrong:** one sale
   dated 2055-09-26 (the register's own typo; the parser now uses the PASP date in such cases,
   but the stored row keeps 2055 until that register is re-read) and one dated 2026-10-26 (in
-  the future). Both are excluded from analysis as odd dates only if Task 4b's rule catches
-  them; re-read those registers when SRPE runs next.
+  the future). Since the pre-release review fixes (2026-10-22) a deal dated after today is
+  flagged `excl_bad_date` in `txn_all` and gets `in_future` in `features.deal_features`, so
+  both are out of the analysis from the next snapshot on (they were first-hand, so never in
+  the clean data; the harm was the 2055 date emptying the rental-yield anchor's 12-month
+  window, now capped at the snapshot date). Re-read those registers when SRPE runs next.
+- **SRPE glued-price parse (pre-release review 2026-10-21).** Some SRPE register rows glue
+  several flats' prices into one number, e.g. row `3085:3 3:2 5:A A:2016-12-03` stored at
+  HK$728,100,014,452,000; ~50 SRPE rows are over HK$500m (datacheck 2026-10-21, "price over
+  HK$500m"). Harmless today because those rows have no building (so they are `no_building`
+  and never clean), but they would enter the analysis once SRPE buildings are matched. Fix
+  the parser (one row per flat, one price each) before the next SRPE building pass.
+- **2,134 clean rows under HK$1,000 per sq ft (pre-release review 2026-10-21).** The data
+  check's "price per sq ft under 1,000" rule hits 8,181 stored rows (centadata 6,100,
+  ricacorp 1,866, hse28 215) and 2,134 of them are still clean: sales a tenth of today's
+  level or less (1990s village or Tier-3 prices, part-share transfers the price check misses
+  in buildings under 5 deals, or area errors). Decide a rule (e.g. index-adjusted floor per
+  sq ft) and check a sample; until then they sit in the pairs as extreme starts or ends.
 - [x] **`rank` holds the database too long and blocks the scrapers.** *(Fixed 2026-10-21,
   commits 02b6e7c, ed1fad4: the duplicate test's OR join split into two joins; rank's
   database read is now about 1 minute.)* Its extract
@@ -138,7 +153,8 @@ cache pruning.)*
   Developments whose sales ended over 18 months ago are in a second index
   (`disclaimer_index_for_all_residential_t18m`) that is not read, so older first-hand sales
   are missing. (c) SRPE deals dedupe only against rows under the same building id (cd-
-  buildings), not pilot 28Hse ids. (d) **0 of ~8,600 SRPE deals have a building yet**: rerun
+  buildings), not pilot 28Hse ids. (d) **Only 20.8% of the ~88,200 SRPE rows have a
+  building** (datacheck 2026-10-21; 0 of ~8,600 on 2026-10-16): rerun
   `python -m hkestate.sources.srpe` after the master pass and geocoding; until then the
   first-hand rule covers those buildings.
 - [x] **Master list vs 28Hse ids.** *(Done 2026-10-16: `hkestate link-ids`, `source_map`.)*
@@ -161,18 +177,19 @@ cache pruning.)*
   hk.centanet.com; restart them (when convenient) to get the new behaviour.
 - **海璇灣 I and II (Centadata phases 13A/13B) are not in the 28Hse LOHAS Park set.** 8 blocks,
   ~900 deals. The territory backfill picks them up if 28Hse has them as a separate estate.
-- **Retrain, re-rank and rerun the findings report when the backfill finishes.** `hkestate
-  train`, then `hkestate rank` and `hkestate report` (rank runs daily at 14:00, train weekly on
-  Sundays at 12:00). Today's `data/reports/findings_20261016.md` is preliminary: recorded
-  pairs are 93% pilot, and verdicts near the line moved between runs while data was loading.
-  Compare pilot vs territory error in `data/reports/model_eval.md` (today 5.2% vs 5.0%).
+- [x] **Retrain, re-rank and rerun the findings report when the backfill finishes.** *(Done
+  2026-10-21, plan 2026-10-21 Tasks 5-8: retrained on all 1.5M clean sales, re-ranked, and
+  `findings_20261021.md` rests on 663,400 real pairs across the territory (the pilot estates
+  are 4% of clean sales), not the 2,989 pairs, 93% pilot, of `findings_20261016.md`.)*
 - **Long-running jobs may put back the old `txn`/`txn_all` views.** Jobs started before Phase 5
   (territory backfill PID 38336, master pass, SRPE, daily listings) still run the old code; if
   one calls `init_db` again it recreates the old views until any new command runs. The growth
   study and model are not affected (they build the query from the current code).
-- **First-hand result in recorded pairs is LOHAS-Park-heavy.** 1,652 of 2,989 recorded pairs
-  start with a developer sale, most of them LOHAS Park launches 2018-2020; their +1.7 pp a
-  year may reflect those launches' pricing. Recheck with territory pairs.
+- [x] **First-hand result in recorded pairs is LOHAS-Park-heavy.** *(Rechecked 2026-10-21:
+  the territory report has 176,516 recorded pairs starting with a developer sale, from every
+  district and 1993 on, so the result no longer rests on the 2018-2020 LOHAS Park launches;
+  see "First-hand vs second-hand" in the latest findings file.)* On 2026-10-16, 1,652 of
+  2,989 recorded pairs started with a developer sale, most of them LOHAS Park launches.
 - **Jupyter is not in the conda env.** `notebooks/explore.ipynb` was checked by running its
   cells as code; to open it interactively, `conda install -n hk-estate ipykernel notebook`.
 

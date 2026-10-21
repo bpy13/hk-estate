@@ -209,6 +209,26 @@ def test_one_row_per_deal_with_exclusion_reasons(snap):
     assert deals["first_hand"].sum() >= 7
 
 
+def test_deals_dated_after_the_snapshot_are_excluded(tmp_path):
+    """Pre-release review 2026-10-21: an SRPE register typo dated one sale 2055-09-26 and
+    another 2026-10-26 (after the snapshot). A deal dated after the snapshot's extraction
+    date gets `in_future`, next to the pre-1990 `too_old` rule; a deal dated the extraction
+    day stays."""
+    path = make_db(tmp_path / "t.duckdb", n_deals=120)
+    con = db.connect(path)
+    add_deal(con, "typo", "cd-1-AAA", 21, "C", date(2055, 9, 26), 6_000_000, source="centadata")
+    add_deal(con, "soon", "cd-1-AAA", 22, "C", date(2030, 1, 5), 6_000_000, source="centadata")
+    add_deal(con, "edge", "cd-1-AAA", 23, "C", date(2026, 10, 21), 6_000_000,
+             source="centadata")
+    raw = features.extract(con)
+    con.close()
+    raw["meta"]["extracted_at"] = "2026-10-21T17:54:59"
+    assert features.snapshot_cutoff(raw) == pd.Timestamp("2026-10-21")
+    reasons = features.deal_features(raw).set_index("source_id")["exclude_reason"]
+    assert reasons["typo"] == "in_future" and reasons["soon"] == "in_future"
+    assert reasons["edge"] != "in_future"
+
+
 def test_centadata_label_beats_the_first_hand_rule_and_chinese_floors_are_read(tmp_path):
     """Task 4b (e): the first-hand rule applies only where Centadata gives no label; a
     SecondHand label keeps a deal the rule would mark, a FirstHand label marks one it would

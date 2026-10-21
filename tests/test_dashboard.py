@@ -225,9 +225,11 @@ def test_effect_rows_and_attribute_sentence(growth_root):
 def test_district_names_carry_english_and_chinese(growth_root):
     study = dd.load_growth(dd.latest_growth_dir(growth_root))
     t = dd.district_table(study.get("all"))
-    assert list(t["District"]) == ["Eastern 東區", "Unknown"]
+    # the same label as the findings report (study.district_label, pre-release review
+    # 2026-10-21: one definition, not two)
+    assert list(t["District"]) == ["Eastern (東區)", "unknown"]
     idx = dd.district_index(study.get("all"))
-    assert set(idx["District"]) == {"Eastern 東區"} and len(idx) == 2
+    assert set(idx["District"]) == {"Eastern (東區)"} and len(idx) == 2
     assert dd.district_table(study.get("ghost")).empty
     assert dd.district_label("新界") == "新界"  # unmapped names pass through
 

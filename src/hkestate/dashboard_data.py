@@ -18,6 +18,7 @@ import pandas as pd
 
 from hkestate import db, model
 from hkestate.config import get_data_dir
+from hkestate.study import district_label  # noqa: F401  (one label, shared with the report)
 
 FLAG_LABELS = {
     "haunted": "haunted", "tenanted": "tenanted", "sea_view": "sea view",
@@ -103,27 +104,12 @@ def unit_history(all_deals: pd.DataFrame, row) -> tuple[pd.DataFrame, str]:
 
 
 # ---- growth study (data/reports/growth/<date>/, written by `hkestate report`) ----------------
+# District names are shown as the report shows them: `study.district_label`, 'Eastern (東區)'.
 
-DISTRICT_EN = {
-    "中西區": "Central and Western", "灣仔區": "Wan Chai", "東區": "Eastern",
-    "南區": "Southern", "油尖旺區": "Yau Tsim Mong", "深水埗區": "Sham Shui Po",
-    "九龍城區": "Kowloon City", "黃大仙區": "Wong Tai Sin", "觀塘區": "Kwun Tong",
-    "荃灣區": "Tsuen Wan", "屯門區": "Tuen Mun", "元朗區": "Yuen Long", "北區": "North",
-    "大埔區": "Tai Po", "沙田區": "Sha Tin", "西貢區": "Sai Kung", "葵青區": "Kwai Tsing",
-    "離島區": "Islands", "unknown": "Unknown",
-}
 PAIRS_TYPES = {"recorded": "Recorded sales (real pairs)",
                "estimated": "Estimated (model-priced) pairs"}
 VERDICT_SHORT = {"robust": "robust", "significant, not robust": "significant only",
                  "not significant": "no effect found"}
-
-
-def district_label(name: str) -> str:
-    """'東區' -> 'Eastern 東區' (English first, Chinese kept alongside)."""
-    en = DISTRICT_EN.get(name)
-    if en is None:
-        return name
-    return en if name == "unknown" else f"{en} {name}"
 
 
 @dataclass

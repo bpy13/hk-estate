@@ -448,6 +448,12 @@ def cmd_report(args) -> int:
         except ValueError as e:
             print(str(e), file=sys.stderr)
             return 2
+        given = [f"--{n}" for n in ("start", "end") if getattr(args, n, None) is not None]
+        if given:  # the preset windows carry their own dates; a window given too was ignored
+            print(f"{' and '.join(given)} cannot be combined with --settings: the preset "
+                  "windows set their own dates. Give one window (--start/--end) or "
+                  "--settings, not both.", file=sys.stderr)
+            return 2
 
     def work(log):
         raw = features.load_snapshot() if args.from_snapshot else features.snapshot(args.db)
@@ -628,8 +634,9 @@ def main(argv: list[str] | None = None) -> int:
                      help="run preset windows from one snapshot: 'standard' or a "
                           "comma-separated list of names (all, since-2000, crash-1997-2003, "
                           "recovery-2003-2008, boom-2008-2021, fall-2021-2024, "
-                          "recent-2024-now, bought-after-crash); results go to "
-                          "data/reports/growth/<date>/<setting>/")
+                          "recent-2024-now, bought-after-crash, and the 1-year-hold "
+                          "sensitivities fall-2021-2024-1y, recent-2024-now-1y); results go "
+                          "to data/reports/growth/<date>/<setting>/; not with --start/--end")
     rpt.set_defaults(func=cmd_report)
     dc = sub.add_parser("datacheck", help="data checks on the snapshot: datacheck_<date>.md")
     dc.add_argument("--read-db", action="store_true",

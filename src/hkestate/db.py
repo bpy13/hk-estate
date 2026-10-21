@@ -42,6 +42,8 @@ PRICE_CHECK_LOW, PRICE_CHECK_HIGH, PRICE_CHECK_MIN_DEALS = 0.5, 2.0, 5
 SQFT_PER_SQM = 10.7639
 # A deal dated before this is a source error (Centadata's data starts in 1995; a few dozen
 # rows say 1955-1988): flagged `excl_bad_date`, kept in storage (plan 2026-10-21, Task 4b).
+# So is a deal dated after today (an SRPE register typo said 2055-09-26; pre-release review
+# 2026-10-21): the same flag.
 MIN_DEAL_DATE = date(1990, 1, 1)
 
 # Which copy of a sale wins when it is reported more than once (lower = preferred).
@@ -383,7 +385,7 @@ def txn_all_sql(latest: str = "txn_latest") -> str:
 
     Task 4b (2026-10-21): `first_hand_label` is Centadata's own first/second-hand label
     (true/false, NULL where a row has none) and decides `excl_first_hand` where present;
-    `excl_bad_date` flags deals dated before MIN_DEAL_DATE."""
+    `excl_bad_date` flags deals dated before MIN_DEAL_DATE or after today."""
     return f"""
     WITH latest AS (
         SELECT *, {QUARANTINE_SQL} AS excl_quarantine,
@@ -447,7 +449,8 @@ def txn_all_sql(latest: str = "txn_latest") -> str:
             coalesce(price_hkd < {MIN_PRICE_HKD}, false) AS excl_low_price,
             coalesce(first_hand_label, first_hand, false) AS excl_first_hand,
             coalesce(non_market, false) AS excl_non_market,
-            coalesce(deal_date < DATE '{MIN_DEAL_DATE}', false) AS excl_bad_date
+            coalesce(deal_date < DATE '{MIN_DEAL_DATE}' OR deal_date > current_date, false)
+                AS excl_bad_date
         FROM base LEFT JOIN dup USING (source, source_id)
     ),
     bulk AS (
