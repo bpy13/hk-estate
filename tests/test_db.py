@@ -315,14 +315,14 @@ def test_unit_id_is_building_floor_flat():
 
 
 def _txn_raw_row(source_id, price, day, *, unit, building="b1", saleable=500.0,
-                 source="hse28", raw=None, estate=None,
+                 source="hse28", raw=None, estate=None, floor="10", deal_type="registry",
                  fetched_at=datetime(2026, 10, 16, 12)):
     import json
 
     return {
         "source": source, "source_id": source_id, "fetched_at": fetched_at,
         "url": "https://example.com/x", "building_id": building, "estate_id": estate,
-        "floor_label": "10", "flat": unit, "deal_date": day, "deal_type": "registry",
+        "floor_label": floor, "flat": unit, "deal_date": day, "deal_type": deal_type,
         "price_hkd": price, "saleable_sqft": saleable,
         "raw_json": json.dumps(raw or {}),
     }
@@ -402,6 +402,52 @@ def test_quarantined_lohas_park_rows_are_flagged_and_ignored_by_other_rules(con)
     assert flags["late"][0] is False
     assert flags["h1"] == (False, False)  # two real deals that day: not a bulk deal
     assert _clean_ids(con) == {"h1", "h2", "late"}
+
+
+def test_duplicate_flag_lands_on_the_worse_copy_only(con):
+    """The duplicate test's two ways of matching (same unit; a floor-band agency report on the
+    same building and flat), the source-rank tie-break, the price and date limits, and
+    quarantined rows not counting as the other copy. Written against the OR join and kept
+    for its replacement (two equi-joins, 2026-10-21): both must flag exactly these rows."""
+    _setup_building(con)
+    con.execute("INSERT INTO estate (estate_id, name_zh, group_name, source, source_key) "
+                "VALUES ('lp', 'LP6', 'lohas-park', 'hse28', '9')")
+    con.execute("INSERT INTO building (building_id, estate_id, name_zh) VALUES ('lpb', 'lp', 'x')")
+    bad = datetime(2026, 10, 16, 19, 30)  # quarantined: Centadata LOHAS Park before 19:44
+    db.insert_txn_raw(con, [
+        # (a) one sale of flat A on floor 10, from 28Hse (registry, rank 1) and Centadata
+        # (rank 3), plus an agency report (rank 2) that gives only the floor band
+        _txn_raw_row("h-A", 8_000_000, date(2024, 1, 20), unit="A"),
+        _txn_raw_row("c-A", 8_000_000, date(2024, 1, 20), unit="A", source="centadata"),
+        _txn_raw_row("m-A", 8_050_000, date(2024, 1, 5), unit="A", floor="高層",
+                     deal_type="market"),
+        # same unit but the price is 6% off, or the date is 7 months away: other sales
+        _txn_raw_row("c-A-far", 8_500_000, date(2024, 1, 20), unit="A", source="centadata"),
+        _txn_raw_row("c-A-old", 8_000_000, date(2023, 6, 1), unit="A", source="centadata"),
+        # a band report of another flat in the same building: no match
+        _txn_raw_row("m-E", 8_000_000, date(2024, 1, 20), unit="E", floor="中層",
+                     deal_type="market"),
+        # (b) two sources of equal rank (both 9): the alphabetically first source wins
+        _txn_raw_row("r-B", 7_000_000, date(2024, 3, 1), unit="B", source="ricacorp"),
+        _txn_raw_row("s-B", 7_000_000, date(2024, 3, 1), unit="B", source="squarefoot"),
+        # (c) a quarantined Centadata row is not "the other copy": the rank-9 row of the
+        # same unit, and the band report of the same flat, are kept
+        _txn_raw_row("q-C", 8_000_000, date(2024, 5, 5), unit="C", building="lpb",
+                     source="centadata", estate="lp", fetched_at=bad),
+        _txn_raw_row("r-C", 8_000_000, date(2024, 5, 5), unit="C", building="lpb",
+                     source="ricacorp", estate="lp"),
+        _txn_raw_row("q-D", 8_000_000, date(2024, 5, 5), unit="D", building="lpb",
+                     source="centadata", estate="lp", fetched_at=bad),
+        _txn_raw_row("r-D", 8_000_000, date(2024, 5, 9), unit="D", building="lpb",
+                     source="ricacorp", estate="lp", floor="低層"),
+    ])
+    flags = dict(con.execute("SELECT source_id, excl_duplicate FROM txn_all").fetchall())
+    assert flags == {
+        "h-A": False, "c-A": True, "m-A": True, "c-A-far": False, "c-A-old": False,
+        "m-E": False,
+        "r-B": False, "s-B": True,
+        "q-C": False, "r-C": False, "q-D": False, "r-D": False,
+    }
 
 
 LOCK_MSG = ("IO Error: Cannot open file: The process cannot access the file because it is "

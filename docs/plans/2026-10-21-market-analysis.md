@@ -62,7 +62,7 @@ throughout. The 28Hse territory backfill (about 7% done) is not waited for.
 
 ## Phase 1 – Fast database read (fable)
 
-- [ ] **Task 1: duplicate check without the OR join**
+- [x] **Task 1: duplicate check without the OR join**
   - Files: modify `src/hkestate/db.py` (`txn_all_sql`, the `dup` CTE); test
     `tests/test_db.py`
   - Done when: a new test builds sales where (a) two sources report the same unit and

@@ -351,6 +351,20 @@ TABLES_DDL = [
     )""",
 ]
 
+def _same_sale_sql() -> str:
+    """When row `o` is another copy of the sale in row `a` (both from `base`, already matched
+    on the unit or on building + flat) and the better copy: not the row itself, not
+    quarantined, price within 1%, dates within 90 days, and a better (lower) source rank,
+    ties going to the source that sorts first."""
+    return f"""NOT (a.source = o.source AND a.source_id = o.source_id)
+         AND NOT o.excl_quarantine
+         AND abs(a.price_hkd - o.price_hkd) <= {DUP_PRICE_TOL} * o.price_hkd
+         AND abs(date_diff('day', a.deal_date, o.deal_date)) <= {DUP_DAYS}
+         AND (o.source_rank < a.source_rank
+              OR (o.source_rank = a.source_rank AND o.source <> a.source
+                  AND o.source < a.source))"""
+
+
 def txn_all_sql(latest: str = "txn_latest") -> str:
     """The query behind the `txn_all` view, reading deals from `latest` (a view or table
     shaped like `txn_latest`). The fair-price model passes a filtered copy so rows it must
@@ -399,19 +413,17 @@ def txn_all_sql(latest: str = "txn_latest") -> str:
           ON t.source = 'hse28' AND sm.source_key = t.building_id
     ),
     dup AS (  -- the same sale reported again (agency report, other source): keep best copy
+        -- Two matches, one join each: the same unit, or an agency report giving only a floor
+        -- band on the same building and flat. As one join with OR DuckDB can't hash it and
+        -- compares every pair: over 10 minutes on 2.3 million rows, under a second split
+        -- (2026-10-21).
         SELECT DISTINCT a.source, a.source_id
-        FROM base a JOIN base o
-          ON (a.unit_id = o.unit_id
-              -- an agency report giving only a floor band: same building and flat
-              OR (a.floor_label IN ('高層', '中層', '低層')
-                  AND a.building_id = o.building_id AND a.flat = o.flat))
-         AND NOT (a.source = o.source AND a.source_id = o.source_id)
-         AND NOT o.excl_quarantine
-         AND abs(a.price_hkd - o.price_hkd) <= {DUP_PRICE_TOL} * o.price_hkd
-         AND abs(date_diff('day', a.deal_date, o.deal_date)) <= {DUP_DAYS}
-         AND (o.source_rank < a.source_rank
-              OR (o.source_rank = a.source_rank AND o.source <> a.source
-                  AND o.source < a.source))
+        FROM base a JOIN base o ON a.unit_id = o.unit_id
+        WHERE {_same_sale_sql()}
+        UNION
+        SELECT DISTINCT a.source, a.source_id
+        FROM base a JOIN base o ON a.building_id = o.building_id AND a.flat = o.flat
+        WHERE a.floor_label IN ('高層', '中層', '低層') AND {_same_sale_sql()}
     ),
     flagged AS (
         SELECT base.*,
