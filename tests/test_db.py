@@ -316,14 +316,14 @@ def test_unit_id_is_building_floor_flat():
 
 def _txn_raw_row(source_id, price, day, *, unit, building="b1", saleable=500.0,
                  source="hse28", raw=None, estate=None, floor="10", deal_type="registry",
-                 fetched_at=datetime(2026, 10, 16, 12)):
+                 fetched_at=datetime(2026, 10, 16, 12), first_hand=False):
     import json
 
     return {
         "source": source, "source_id": source_id, "fetched_at": fetched_at,
         "url": "https://example.com/x", "building_id": building, "estate_id": estate,
         "floor_label": floor, "flat": unit, "deal_date": day, "deal_type": deal_type,
-        "price_hkd": price, "saleable_sqft": saleable,
+        "price_hkd": price, "saleable_sqft": saleable, "first_hand": first_hand,
         "raw_json": json.dumps(raw or {}),
     }
 
@@ -448,6 +448,62 @@ def test_duplicate_flag_lands_on_the_worse_copy_only(con):
         "r-B": False, "s-B": True,
         "q-C": False, "r-C": False, "q-D": False, "r-D": False,
     }
+
+
+def test_same_source_copies_keep_the_lowest_source_id(con):
+    """Task 4b (b): one source holding a sale under two ids (Centadata: the agreement and
+    its assignment, weeks apart at the same price) keeps the copy with the lowest source_id;
+    the same tolerance as across sources (price within 1%, dates within 90 days). A sale of
+    the same flat a year later at the same price is a real resale."""
+    _setup_building(con)
+    db.insert_txn_raw(con, [
+        _txn_raw_row("TW02", 1_850_000, date(1995, 8, 22), unit="A", source="centadata"),
+        _txn_raw_row("TW01", 1_850_000, date(1995, 6, 30), unit="A", source="centadata"),
+        _txn_raw_row("TW03", 1_850_000, date(1996, 6, 30), unit="A", source="centadata"),
+        # three copies of one 28Hse registry deal: only the lowest id survives
+        _txn_raw_row("h3", 5_000_000, date(2024, 1, 5), unit="B"),
+        _txn_raw_row("h2", 5_000_000, date(2024, 1, 5), unit="B"),
+        _txn_raw_row("h1", 5_020_000, date(2024, 1, 5), unit="B"),
+    ])
+    flags = dict(con.execute("SELECT source_id, excl_duplicate FROM txn_all").fetchall())
+    assert flags == {"TW01": False, "TW02": True, "TW03": False,
+                     "h1": False, "h2": True, "h3": True}
+
+
+def test_clean_view_drops_deals_dated_before_1990(con):
+    """Task 4b (c): Centadata holds a few dozen sales dated 1955-1988 (the data starts in
+    1995); they are flagged `excl_bad_date` and left out of `txn`, not deleted."""
+    _setup_building(con)
+    _txn(con, "old", 1_730_000, date(1955, 9, 8), unit="A", source="centadata")
+    _txn(con, "edge", 1_730_000, date(1990, 1, 1), unit="B", source="centadata")
+    _txn(con, "ok", 1_730_000, date(1995, 9, 8), unit="C", source="centadata")
+    assert _clean_ids(con) == {"edge", "ok"}
+    flags = dict(con.execute("SELECT source_id, excl_bad_date FROM txn_all").fetchall())
+    assert flags == {"old": True, "edge": False, "ok": False}
+
+
+def test_centadata_first_hand_label_decides_the_first_hand_flag(con):
+    """Task 4b (e): Centadata history rows carry the source's own label
+    (`firstOrSecondHand` in raw_json); where present it decides `excl_first_hand`. Rows
+    without it (Centadata latest-deal rows, other sources) keep the stored flag."""
+    _setup_building(con)
+    db.insert_txn_raw(con, [
+        _txn_raw_row("fh", 8_000_000, date(2024, 1, 5), unit="A", source="centadata",
+                     raw={"firstOrSecondHand": "FirstHand"}),
+        _txn_raw_row("sh", 8_000_000, date(2024, 2, 5), unit="B", source="centadata",
+                     raw={"firstOrSecondHand": "SecondHand"}, first_hand=True),
+        _txn_raw_row("none-fh", 8_000_000, date(2024, 3, 5), unit="C", source="centadata",
+                     first_hand=True),
+        _txn_raw_row("none", 8_000_000, date(2024, 4, 5), unit="D", source="centadata"),
+        _txn_raw_row("srpe", 8_000_000, date(2024, 5, 5), unit="E", source="srpe",
+                     first_hand=True),
+    ])
+    rows = con.execute(
+        "SELECT source_id, excl_first_hand, first_hand_label FROM txn_all").fetchall()
+    assert {r[0]: (r[1], r[2]) for r in rows} == {
+        "fh": (True, True), "sh": (False, False), "none-fh": (True, None),
+        "none": (False, None), "srpe": (True, None)}
+    assert _clean_ids(con) == {"sh", "none"}
 
 
 LOCK_MSG = ("IO Error: Cannot open file: The process cannot access the file because it is "

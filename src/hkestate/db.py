@@ -40,6 +40,9 @@ DUP_DAYS = 90  # ... and dates within 90 days
 # with 5+ clean deals) is not a normal sale of a whole flat, e.g. a part-share transfer.
 PRICE_CHECK_LOW, PRICE_CHECK_HIGH, PRICE_CHECK_MIN_DEALS = 0.5, 2.0, 5
 SQFT_PER_SQM = 10.7639
+# A deal dated before this is a source error (Centadata's data starts in 1995; a few dozen
+# rows say 1955-1988): flagged `excl_bad_date`, kept in storage (plan 2026-10-21, Task 4b).
+MIN_DEAL_DATE = date(1990, 1, 1)
 
 # Which copy of a sale wins when it is reported more than once (lower = preferred).
 SOURCE_RANK_SQL = """
@@ -355,14 +358,17 @@ def _same_sale_sql() -> str:
     """When row `o` is another copy of the sale in row `a` (both from `base`, already matched
     on the unit or on building + flat) and the better copy: not the row itself, not
     quarantined, price within 1%, dates within 90 days, and a better (lower) source rank,
-    ties going to the source that sorts first."""
+    ties going to the source that sorts first and, within one source, to the lowest
+    source_id (Centadata stores some sales under two ids, the agreement and its assignment
+    weeks apart at the same price: 4,225 pairs on 2026-10-21)."""
     return f"""NOT (a.source = o.source AND a.source_id = o.source_id)
          AND NOT o.excl_quarantine
          AND abs(a.price_hkd - o.price_hkd) <= {DUP_PRICE_TOL} * o.price_hkd
          AND abs(date_diff('day', a.deal_date, o.deal_date)) <= {DUP_DAYS}
          AND (o.source_rank < a.source_rank
-              OR (o.source_rank = a.source_rank AND o.source <> a.source
-                  AND o.source < a.source))"""
+              OR (o.source_rank = a.source_rank
+                  AND (o.source < a.source
+                       OR (o.source = a.source AND o.source_id < a.source_id))))"""
 
 
 def txn_all_sql(latest: str = "txn_latest") -> str:
@@ -373,14 +379,24 @@ def txn_all_sql(latest: str = "txn_latest") -> str:
     Added in Phase 5 (so the growth study and any other reader of `txn` share them):
     `excl_quarantine` (QUARANTINE_SQL rows: flagged, and ignored by the duplicate, bulk,
     outlier and price-check tests of other rows), `excl_parking` (the price includes a
-    parking space) and `excl_price_check` (the fair-price model's price check)."""
+    parking space) and `excl_price_check` (the fair-price model's price check).
+
+    Task 4b (2026-10-21): `first_hand_label` is Centadata's own first/second-hand label
+    (true/false, NULL where a row has none) and decides `excl_first_hand` where present;
+    `excl_bad_date` flags deals dated before MIN_DEAL_DATE."""
     return f"""
     WITH latest AS (
         SELECT *, {QUARANTINE_SQL} AS excl_quarantine,
             CASE WHEN json_valid(raw_json) THEN
                 coalesce(json_extract_string(raw_json, '$.with_parking') = 'true'
                          OR json_extract_string(raw_json, '$.has_parking') = 'true', false)
-                ELSE false END AS excl_parking
+                ELSE false END AS excl_parking,
+            -- Centadata history rows carry the source's own label (firstOrSecondHand);
+            -- NULL where a row has none (Centadata latest-deal rows, other sources)
+            CASE WHEN json_valid(raw_json) THEN
+                CASE json_extract_string(raw_json, '$.firstOrSecondHand')
+                     WHEN 'FirstHand' THEN true WHEN 'SecondHand' THEN false END
+            END AS first_hand_label
         FROM {latest}
     ),
     base AS (
@@ -429,8 +445,9 @@ def txn_all_sql(latest: str = "txn_latest") -> str:
         SELECT base.*,
             (dup.source_id IS NOT NULL) AS excl_duplicate,
             coalesce(price_hkd < {MIN_PRICE_HKD}, false) AS excl_low_price,
-            coalesce(first_hand, false) AS excl_first_hand,
-            coalesce(non_market, false) AS excl_non_market
+            coalesce(first_hand_label, first_hand, false) AS excl_first_hand,
+            coalesce(non_market, false) AS excl_non_market,
+            coalesce(deal_date < DATE '{MIN_DEAL_DATE}', false) AS excl_bad_date
         FROM base LEFT JOIN dup USING (source, source_id)
     ),
     bulk AS (
@@ -497,7 +514,8 @@ def txn_all_sql(latest: str = "txn_latest") -> str:
         FROM adj
         WHERE _adj_psf IS NOT NULL
           AND NOT (excl_duplicate OR excl_low_price OR excl_first_hand OR excl_non_market
-                   OR excl_bulk OR excl_outlier OR excl_quarantine OR excl_parking)
+                   OR excl_bulk OR excl_outlier OR excl_quarantine OR excl_parking
+                   OR excl_bad_date)
         GROUP BY building_id
     )
     SELECT adj.* EXCLUDE (source_rank, _cls, _month, _adj_psf),
@@ -542,7 +560,7 @@ VIEWS_DDL = [
     SELECT * FROM txn_all
     WHERE NOT (excl_duplicate OR excl_low_price OR excl_first_hand OR excl_non_market
                OR excl_bulk OR excl_outlier OR excl_quarantine OR excl_parking
-               OR excl_price_check)
+               OR excl_price_check OR excl_bad_date)
     """,
 ]
 
