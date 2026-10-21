@@ -27,6 +27,23 @@ from hkestate import normalise as n
         ("低層", None, "band"),
         ("", None, "unknown"),
         ("天台特色戶?", None, "unknown"),
+        # Chinese numerals (Centadata's older buildings: 五樓, 十二樓, 二十三樓)
+        ("一", 1, "number"),
+        ("五", 5, "number"),
+        ("十", 10, "number"),
+        ("十二", 12, "number"),
+        ("二十", 20, "number"),
+        ("二十三", 23, "number"),
+        ("三十", 30, "number"),
+        ("三十七", 37, "number"),
+        ("廿三", 23, "number"),
+        ("十二樓", 12, "number"),
+        # forms that are not one numbered floor stay as they were
+        ("高層地下", None, "unknown"),
+        ("閣", None, "unknown"),
+        ("2-3", None, "unknown"),
+        ("13號", None, "unknown"),
+        ("三五", None, "unknown"),
     ],
 )
 def test_parse_floor(label, num, kind):
@@ -39,6 +56,14 @@ def test_floor_label_is_cleaned_but_kept_as_text():
     assert n.parse_floor("g/f").label == "G"
     assert n.parse_floor("地下").label == "G"
     assert n.parse_floor("高層").label == "高層"
+
+
+def test_chinese_numeral_label_is_kept_as_text():
+    # the unit key is building|floor label|flat: stored units are keyed '五', not '5', and a
+    # re-scrape must land on the same unit
+    assert n.parse_floor("五樓").label == "五"
+    assert n.parse_floor("十二").label == "十二"
+    assert n.infer_skipped(["一", "二", "三", "五", "六"]) == {4}
 
 
 def test_infer_skipped_floors_from_labels_seen():

@@ -1,9 +1,10 @@
 """Turn Chinese page text into comparable values: floor labels, names, prices, areas, rooms.
 
 Floor labels are kept as text (the unit key uses them) and also mapped to a number:
-G/F and podium = 0, basements negative, numbered floors as labelled. Hong Kong buildings
-often skip unlucky labels (4, 13, 14, 24, ...), so label 15 can be the 12th storey;
-`physical_floor` corrects for that given the labels a building skips.
+G/F and podium = 0, basements negative, numbered floors as labelled, Chinese numerals
+(五, 十二, 二十三: Centadata's older buildings) as their number with the text kept as the
+label. Hong Kong buildings often skip unlucky labels (4, 13, 14, 24, ...), so label 15 can
+be the 12th storey; `physical_floor` corrects for that given the labels a building skips.
 """
 
 from __future__ import annotations
@@ -22,6 +23,9 @@ _BASEMENT = {"LG": -1, "低地": -1, "B": -1, "B1": -1, "B2": -2}
 _PODIUM = {"平台", "PODIUM", "P"}
 _TOP = {"頂層", "頂樓", "PH", "天台", "頂"}
 _BANDS = {"高層", "中層", "低層"}
+# Chinese numerals as floor labels (Centadata's older buildings: 五樓, 十二樓, 二十三樓)
+_ZH_DIGITS = {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9}
+_ZH_NUMERAL = re.compile(r"[一二三四五六七八九十廿卅]+")
 
 
 @dataclass(frozen=True)
@@ -31,12 +35,31 @@ class FloorInfo:
     kind: str  # number, ground, basement, podium, top, band, unknown
 
 
+def chinese_number(text: str) -> int | None:
+    """'五' -> 5, '十' -> 10, '十二' -> 12, '二十三' -> 23, '廿三' -> 23, '卅' -> 30. None for
+    anything that is not one number under 100 (e.g. '三五')."""
+    if not _ZH_NUMERAL.fullmatch(text):
+        return None
+    text = text.replace("廿", "二十").replace("卅", "三十")
+    if "十" in text:
+        tens, _, ones = text.partition("十")
+        if len(tens) > 1 or len(ones) > 1 or "十" in ones:
+            return None
+        return (_ZH_DIGITS[tens] if tens else 1) * 10 + (_ZH_DIGITS[ones] if ones else 0)
+    return _ZH_DIGITS[text] if len(text) == 1 else None
+
+
 def parse_floor(text: str | None) -> FloorInfo:
     raw = unicodedata.normalize("NFKC", text or "").strip().upper()
     core = re.sub(r"(樓|/F|F)$", "", raw).strip()
     core = core.replace("/", "")
     if re.fullmatch(r"\d+", core):
         return FloorInfo(str(int(core)), int(core), "number")
+    zh = chinese_number(core)
+    if zh is not None:
+        # the label stays the source's text ('五', not '5'): stored unit keys are built from
+        # it, and a re-scrape must land on the same unit
+        return FloorInfo(core, zh, "number")
     if core in _GROUND:
         return FloorInfo("G", 0, "ground")
     if core in _BASEMENT:
