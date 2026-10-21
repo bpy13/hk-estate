@@ -19,6 +19,11 @@ Three fits, all with the same settings:
    out-of-time residuals (split conformal, per group: pilot estates with full history vs the
    territory, which so far has only Centadata's latest deal per flat)
 
+Error by decade (plan 2026-10-21 Task 5): a random share of the pre-cut-off deals is held
+out of fit 2, so an old sale the model never saw can be valued; this shows whether the RVD
+index puts 1990s prices on today's level well enough. A training window (`since`) and a
+comparison with a previous model folder are optional; both go into model_eval.md.
+
 SHAP values come from LightGBM's TreeSHAP (`pred_contrib=True`); see decisions.md.
 """
 
@@ -71,6 +76,8 @@ COVERAGE = 0.8  # 80% intervals
 MIN_GROUP_N = 50  # fewer calibration residuals in a group: use all groups' residuals
 COMPS_MONTHS = 24
 COMPS_MIN = 3  # the comparables check needs this many same-building deals
+HOLDOUT_FRAC = 0.05  # share of pre-cut-off deals held out of the test-stage model (by decade)
+HOLDOUT_SEED = 11
 
 LABELS = {
     "area_sqft": "size", "rooms": "rooms", "floor_num": "floor", "rel_floor": "floor position",
@@ -93,8 +100,18 @@ def group_of(df: pd.DataFrame) -> pd.Series:
     return pd.Series(np.where(df["is_pilot"].astype(bool), "pilot", "territory"), index=df.index)
 
 
-def trainable(deals: pd.DataFrame) -> pd.DataFrame:
-    return deals[deals["exclude_reason"].isna() & deals["log_psf"].notna()].copy()
+def trainable(deals: pd.DataFrame, since: int | None = None) -> pd.DataFrame:
+    """Clean deals with a target; `since` keeps only sales from that year on (the training
+    window; None = every year, the default per decisions.md "all data")."""
+    ok = deals["exclude_reason"].isna() & deals["log_psf"].notna()
+    if since is not None:
+        ok &= deals["agreement_date"] >= pd.Timestamp(year=int(since), month=1, day=1)
+    return deals[ok].copy()
+
+
+def decade_of(dates) -> pd.Series:
+    """'1990s', '2000s', ... from dates."""
+    return (pd.to_datetime(pd.Series(dates)).dt.year // 10 * 10).astype(int).astype(str) + "s"
 
 
 # ---- time and index --------------------------------------------------------------------------
@@ -216,6 +233,21 @@ class EvalResult:
     split: dict
     importance: pd.Series
     counts: dict = field(default_factory=dict)
+    by_district: pd.DataFrame = field(default_factory=pd.DataFrame)  # out-of-time test deals
+    by_decade: pd.DataFrame = field(default_factory=pd.DataFrame)  # held-out earlier deals
+
+
+def error_table(part: pd.DataFrame, key: str) -> pd.DataFrame:
+    """Per value of `key`: deals, median abs % error, share within 10%, and the previous
+    model's median error on the same deals when it was scored (`ape_prev`)."""
+    rows = []
+    for k, g in part.groupby(key, dropna=False, sort=True):
+        row = {key: k, "n": len(g), "mdape": g["ape"].median(),
+               "within_10": float((g["ape"] <= 0.10).mean())}
+        if "ape_prev" in g:
+            row["mdape_prev"] = g["ape_prev"].median()
+        rows.append(row)
+    return pd.DataFrame(rows)
 
 
 def _summary(tp: pd.DataFrame) -> pd.DataFrame:
@@ -240,8 +272,24 @@ def _summary(tp: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def evaluate(deals: pd.DataFrame, index_df: pd.DataFrame, rounds: int = ROUNDS) -> EvalResult:
-    tr = trainable(deals)
+def score_previous(prev: FairPrice, index_df: pd.DataFrame, df: pd.DataFrame,
+                   known_until: pd.Timestamp) -> np.ndarray:
+    """Log price per sq ft a previous model predicts for `df`, with the index frozen at
+    `known_until` like the current model's test. Its output sits at its own reference month,
+    so it is moved to the cut-off month first (as rank.py moves listings)."""
+    adj = predict_adj(prev, df)
+    cls = df["rvd_class"]
+    logd = np.log(deflator(index_df, cls, df["agreement_date"], known_until))
+    ref_prev = pd.Series([pd.Timestamp(prev.meta["index_reference_month"])] * len(df))
+    ref_now = pd.Series([pd.Timestamp(known_until)] * len(df))
+    shift = np.log(deflator(index_df, cls, ref_now)) - np.log(deflator(index_df, cls, ref_prev))
+    return adj + logd + shift
+
+
+def evaluate(deals: pd.DataFrame, index_df: pd.DataFrame, rounds: int = ROUNDS,
+             since: int | None = None, previous: FairPrice | None = None,
+             holdout_frac: float = HOLDOUT_FRAC) -> EvalResult:
+    tr = trainable(deals, since)
     s = time_split(tr)
 
     # 1. calibration residuals (model trained up to T-12, frozen index at T-12)
@@ -251,10 +299,14 @@ def evaluate(deals: pd.DataFrame, index_df: pd.DataFrame, rounds: int = ROUNDS) 
     cal_pred = b1.predict(matrix(s.cal, c1)) + logd_cal
     q_cal = conformal_q(np.abs(s.cal["log_psf"].to_numpy() - cal_pred), group_of(s.cal))
 
-    # 2. the out-of-time test (trained up to T-6, frozen index at T-6)
+    # 2. the out-of-time test (trained up to T-6, frozen index at T-6), with a random share
+    # of the earlier deals held out so the error by decade is on sales the model never saw
     hist = pd.concat([s.fit, s.cal])
     y_hist, _ = _target(hist, index_df, s.test_start)
-    b2, c2 = fit(hist, y_hist, rounds)
+    held = hist.sample(frac=holdout_frac, random_state=HOLDOUT_SEED) if holdout_frac else \
+        hist.iloc[0:0]
+    keep = ~hist.index.isin(held.index)
+    b2, c2 = fit(hist[keep], y_hist[keep], rounds)
     Xt = matrix(s.test, c2)
     shap = shap_frame(b2, Xt)
     pred_adj = shap.sum(axis=1).to_numpy()
@@ -263,7 +315,7 @@ def evaluate(deals: pd.DataFrame, index_df: pd.DataFrame, rounds: int = ROUNDS) 
     comps = comparables(hist, y_hist, s.test, s.test_start)
 
     tp = s.test[["source", "source_id", "building_id", "unit_id", "agreement_date",
-                 "price_hkd", "area_sqft", "log_psf", "is_pilot"]].copy()
+                 "price_hkd", "area_sqft", "log_psf", "is_pilot", "district"]].copy()
     tp["group"] = group_of(s.test)
     tp["pred_adj"] = pred_adj
     tp["pred_log_psf"] = pred_log
@@ -275,13 +327,28 @@ def evaluate(deals: pd.DataFrame, index_df: pd.DataFrame, rounds: int = ROUNDS) 
     tp["comps_log_psf"] = comps["comps_adj"] + logd_test
     tp["comps_ape"] = pd.Series(abs_pct_error(tp["log_psf"], tp["comps_log_psf"]),
                                 index=tp.index).where(tp["comps_log_psf"].notna())
+    if previous is not None:
+        tp["ape_prev"] = abs_pct_error(
+            tp["log_psf"], score_previous(previous, index_df, s.test, s.test_start))
     tp = pd.concat([tp, shap], axis=1)
+
+    hp = held[["agreement_date", "district", "log_psf"]].copy()
+    if not held.empty:
+        _, logd_held = _target(held, index_df, s.test_start)
+        hp["ape"] = abs_pct_error(hp["log_psf"], b2.predict(matrix(held, c2)) + logd_held)
+        if previous is not None:
+            hp["ape_prev"] = abs_pct_error(
+                hp["log_psf"], score_previous(previous, index_df, held, s.test_start))
+    hp["decade"] = decade_of(hp["agreement_date"])
 
     gain = pd.Series(b2.feature_importance("gain"), index=b2.feature_name())
     split = {k: str(getattr(s, k).date()) for k in ("cal_start", "test_start", "end")}
-    counts = {"fit": len(s.fit), "cal": len(s.cal), "test": len(s.test)}
+    counts = {"fit": len(s.fit), "cal": len(s.cal), "test": len(s.test), "holdout": len(held),
+              "hist_fit": int(keep.sum())}
     return EvalResult(_summary(tp), tp.reset_index(drop=True), q_cal, split,
-                      (gain / gain.sum()).sort_values(ascending=False), counts)
+                      (gain / gain.sum()).sort_values(ascending=False), counts,
+                      by_district=error_table(tp, "district"),
+                      by_decade=error_table(hp, "decade") if not hp.empty else pd.DataFrame())
 
 
 # ---- explanations ------------------------------------------------------------------------------
@@ -404,15 +471,31 @@ def valuation_month(tr: pd.DataFrame) -> int:
     return int(ok.index.max() if not ok.empty else counts.index.max())
 
 
-def train(raw: dict, rounds: int = ROUNDS, today: date | None = None, log=print) -> dict:
-    """Evaluate, fit the final model, save it with its intervals, write model_eval.md."""
+def train(raw: dict, rounds: int = ROUNDS, today: date | None = None, log=print,
+          since: int | None = None, compare_since: int | None = None,
+          previous: Path | None = None) -> dict:
+    """Evaluate, fit the final model, save it with its intervals, write model_eval.md.
+
+    `since`: training window (first year; None = all years). `compare_since`: also evaluate
+    a model trained from that year and report both out-of-time errors side by side (the
+    saved model is not changed). `previous`: a folder with an earlier fair_price.txt/.json
+    whose errors are compared and which is scored on the same test and held-out deals."""
     today = today or date.today()
     deals = features.deal_features(raw)
-    log(f"deals: {len(deals)}, trainable {deals['exclude_reason'].isna().sum()}")
-    ev = evaluate(deals, raw["index"], rounds)
+    log(f"deals: {len(deals)}, trainable {deals['exclude_reason'].isna().sum()}"
+        + (f", training window from {since}" if since else ""))
+    prev = load(Path(previous)) if previous is not None else None
+    if prev is not None and prev.meta.get("features") != FEATURES:
+        log(f"previous model in {previous} uses other features: not scored")
+        prev = None
+    ev = evaluate(deals, raw["index"], rounds, since=since, previous=prev)
     log(f"out-of-time test: {ev.summary.to_dict('records')}")
+    compare = None
+    if compare_since is not None:
+        compare = evaluate(deals, raw["index"], rounds, since=compare_since)
+        log(f"training window from {compare_since}: {compare.summary.to_dict('records')}")
 
-    tr = trainable(deals)
+    tr = trainable(deals, since)
     y_all, _ = _target(tr, raw["index"], None)
     booster, cats = fit(tr, y_all, rounds)
     tp = ev.test_predictions
@@ -428,7 +511,17 @@ def train(raw: dict, rounds: int = ROUNDS, today: date | None = None, log=print)
         "q": q_final, "coverage": COVERAGE, "index_reference_month": index_last,
         "valuation_month_idx": valuation_month(tr),
         "n_train": len(tr), "n_train_pilot": int(tr["is_pilot"].sum()),
-        "eval": ev.summary.to_dict("records"), "split": ev.split, "data": raw["meta"],
+        "eval": ev.summary.to_dict("records"), "split": ev.split, "counts": ev.counts,
+        "by_district": ev.by_district.to_dict("records"),
+        "by_decade": ev.by_decade.to_dict("records"),
+        "data": raw["meta"], "window_since": since,
+        "previous": None if prev is None else {
+            "path": str(previous), "trained_at": prev.meta.get("trained_at"),
+            "n_train": prev.meta.get("n_train"), "window_since": prev.meta.get("window_since"),
+            "eval": prev.meta.get("eval"), "split": prev.meta.get("split")},
+        "compare": None if compare is None else {
+            "since": compare_since, "eval": compare.summary.to_dict("records"),
+            "counts": compare.counts},
     }
     save_model_files(booster, meta, out_dir)
     test_path = out_dir / "test_predictions.parquet"
@@ -453,6 +546,135 @@ def train(raw: dict, rounds: int = ROUNDS, today: date | None = None, log=print)
 
 def _pct(x) -> str:
     return "–" if x is None or (isinstance(x, float) and math.isnan(x)) else f"{x:.1%}"
+
+
+def _window_text(since) -> str:
+    return f"from {since}" if since else "all years"
+
+
+def _comparison_lines(ev: EvalResult, meta: dict) -> list[str]:
+    """Report sections: the previous run (overall, by district, by decade) and the training
+    window comparison. Empty when neither was asked for."""
+    prev, cmp_ = meta.get("previous"), meta.get("compare")
+    lines: list[str] = []
+    if prev is not None:
+        prev_eval = {r["group"]: r for r in prev.get("eval") or []}
+        this_eval = {r["group"]: r for r in meta["eval"]}
+        pdate = (prev.get("trained_at") or "?")[:10]
+        lines += [
+            f"## Compared with the previous run ({pdate})",
+            "",
+            "Each run's own out-of-time test: trained on deals up to its cut-off, tested on "
+            "its last 6 months with the index frozen at the cut-off. The previous run's "
+            f"window was {(prev.get('split') or {}).get('test_start', '?')} to "
+            f"{(prev.get('split') or {}).get('end', '?')}; this run's is "
+            f"{meta['split']['test_start']} to {meta['split']['end']}.",
+            "",
+            "| Group | Previous: trained on | Previous: test deals | Previous: median abs % "
+            "error | Previous: within 10% | This run: trained on | This run: test deals | "
+            "This run: median abs % error | This run: within 10% |",
+            "|---|---:|---:|---:|---:|---:|---:|---:|---:|",
+        ]
+        for g in ("all", "pilot", "territory"):
+            p, t = prev_eval.get(g), this_eval.get(g)
+            if p is None or t is None:
+                continue
+            lines.append(
+                f"| {g} | {prev.get('n_train') or 0:,} | {int(p['n_test']):,} | "
+                f"{_pct(p['mdape'])} | {_pct(p['within_10'])} | {meta['n_train']:,} | "
+                f"{int(t['n_test']):,} | {_pct(t['mdape'])} | {_pct(t['within_10'])} |")
+        lines.append("")
+    has_prev = "mdape_prev" in ev.by_district.columns
+    lines += [
+        "### By district (this run's out-of-time test deals)",
+        "",
+    ]
+    if has_prev:
+        lines += [
+            "The previous model is scored on the same deals, but it was trained on sales up "
+            "to its own cut-off, so most of these deals were in its training data: expect "
+            "its column to look better than it would on new sales.",
+            "",
+        ]
+    head = "| District | Test deals | Median abs % error | Within 10% |"
+    sep = "|---|---:|---:|---:|"
+    if has_prev:
+        head, sep = head + " Previous model, same deals |", sep + "---:|"
+    lines += [head, sep]
+    for _, r in ev.by_district.sort_values("n", ascending=False).iterrows():
+        row = (f"| {r['district'] if pd.notna(r['district']) else 'unknown'} | {int(r['n']):,} "
+               f"| {_pct(r['mdape'])} | {_pct(r['within_10'])} |")
+        if has_prev:
+            row += f" {_pct(r['mdape_prev'])} |"
+        lines.append(row)
+    lines += [
+        "",
+        "### By decade of sale (earlier deals held out of the test-stage model)",
+        "",
+        f"A random {HOLDOUT_FRAC:.0%} of the deals before the cut-off "
+        f"({ev.counts.get('holdout', 0):,}) were left out of the test-stage model and valued "
+        "by it, so each decade's error is on sales the model never saw (its buildings it "
+        "usually has). A decade with a much larger error than the rest means the RVD index "
+        "does not carry that decade's prices to today's level well.",
+        "",
+    ]
+    if has_prev:
+        lines += [
+            "The previous model was trained mostly on Centadata's latest deal per flat and "
+            "28Hse deals since 2018, so most older sales here are new to it.",
+            "",
+        ]
+    head = "| Decade | Deals | Median abs % error | Within 10% |"
+    sep = "|---|---:|---:|---:|"
+    if "mdape_prev" in ev.by_decade.columns:
+        head, sep = head + " Previous model, same deals |", sep + "---:|"
+    lines += [head, sep]
+    for _, r in ev.by_decade.iterrows():
+        row = f"| {r['decade']} | {int(r['n']):,} | {_pct(r['mdape'])} | {_pct(r['within_10'])} |"
+        if "mdape_prev" in ev.by_decade.columns:
+            row += f" {_pct(r['mdape_prev'])} |"
+        lines.append(row)
+    lines.append("")
+    if cmp_ is not None:
+        this_all = next(r for r in meta["eval"] if r["group"] == "all")
+        cmp_all = next(r for r in cmp_["eval"] if r["group"] == "all")
+        kept = _window_text(meta.get("window_since"))
+        other = _window_text(cmp_["since"])
+        diff = cmp_all["mdape"] - this_all["mdape"]
+        lines += [
+            "## Training window",
+            "",
+            "Two models were trained the same way and tested on the same last 6 months, one "
+            f"on {kept} (the saved model) and one on sales {other}. The question is whether "
+            "old sales, put on today's price level by the RVD index, help or hurt the "
+            "valuation of recent sales.",
+            "",
+            "| Window | Trained on (test stage) | Test deals | Median abs % error | "
+            "Within 10% | 80% interval held |",
+            "|---|---:|---:|---:|---:|---:|",
+            f"| {kept} (saved) | {ev.counts.get('hist_fit', 0):,} | {int(this_all['n_test']):,} "
+            f"| {_pct(this_all['mdape'])} | {_pct(this_all['within_10'])} | "
+            f"{_pct(this_all['interval_coverage'])} |",
+            f"| {other} | {cmp_['counts'].get('hist_fit', 0):,} | {int(cmp_all['n_test']):,} | "
+            f"{_pct(cmp_all['mdape'])} | {_pct(cmp_all['within_10'])} | "
+            f"{_pct(cmp_all['interval_coverage'])} |",
+            "",
+            (f"On recent sales the saved model ({kept}) is {'more' if diff > 0 else 'less'} "
+             f"accurate than the one trained {other}: {_pct(this_all['mdape'])} against "
+             f"{_pct(cmp_all['mdape'])} median error, a gap of {abs(diff) * 100:.1f} "
+             "percentage points"
+             + (" (a tie in practice)." if abs(diff) < 0.002 else ".")),
+            "",
+        ]
+        if meta.get("window_since") is None and diff < -0.002:
+            lines += [
+                "The saved model keeps all years, as decided (decisions.md: all data unless "
+                "the early years clearly hurt); a gap this small is not that. Old sales do "
+                "not confuse the model, they only add a little noise to the newest ones. To "
+                f"switch, run `hkestate train --since {cmp_['since']}`.",
+                "",
+            ]
+    return lines
 
 
 def write_report(path: Path, ev: EvalResult, deals: pd.DataFrame, listings: pd.DataFrame,
@@ -488,6 +710,9 @@ def write_report(path: Path, ev: EvalResult, deals: pd.DataFrame, listings: pd.D
         f"- Rows: fit {ev.counts['fit']:,}, calibration {ev.counts['cal']:,}, test "
         f"{ev.counts['test']:,}. Final model trained on all {meta['n_train']:,} "
         f"({meta['n_train_pilot']:,} pilot).",
+        "- Training window: " + (f"sales from {meta['window_since']} on."
+                                 if meta.get("window_since") else
+                                 "every year available (decisions.md: all data)."),
         f"- Dates: agreement dates; 28Hse registration dates moved back "
         f"{meta['data'].get('agreement_lag_days')} days (median Centadata gap).",
         "",
@@ -532,6 +757,7 @@ def write_report(path: Path, ev: EvalResult, deals: pd.DataFrame, listings: pd.D
             "about 9 days) adds full histories; retrain then and compare.",
             "",
         ]
+    lines += _comparison_lines(ev, meta)
     lines += [
         "## Rows left out of training",
         "",

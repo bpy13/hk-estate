@@ -86,6 +86,56 @@ def test_evaluate_reports_error_by_group_and_comparables(deals, raw):
     assert np.allclose(pred[shap_cols].sum(axis=1), pred["pred_adj"], atol=1e-6)
 
 
+def test_trainable_window_drops_deals_before_the_start_year(deals):
+    """`since` is the training window (plan 2026-10-21 Task 5: all years vs 2010+)."""
+    all_years = model.trainable(deals)
+    since = model.trainable(deals, since=2021)
+    assert all_years["agreement_date"].min().year < 2021
+    assert since["agreement_date"].min().year >= 2021
+    assert len(since) == int((all_years["agreement_date"].dt.year >= 2021).sum()) < len(all_years)
+
+
+def test_evaluate_reports_error_by_decade_and_by_district(deals, raw):
+    """Error by district on the out-of-time test deals; by decade of sale on a random share of
+    the earlier deals held out of the test-stage model (an old sale the model never saw)."""
+    ev = model.evaluate(deals, raw["index"], rounds=150)
+    assert {"decade", "n", "mdape", "within_10"} <= set(ev.by_decade.columns)
+    assert "2020s" in set(ev.by_decade["decade"])
+    assert ev.by_decade["n"].sum() == ev.counts["holdout"] > 0
+    assert ev.counts["holdout"] + ev.counts["hist_fit"] == ev.counts["fit"] + ev.counts["cal"]
+    assert {"district", "n", "mdape", "within_10"} <= set(ev.by_district.columns)
+    assert ev.by_district["n"].sum() == ev.counts["test"]
+    assert "district" in ev.test_predictions.columns
+
+
+def test_train_compares_with_the_previous_model_and_a_training_window(tmp_path, monkeypatch,
+                                                                       raw):
+    import shutil
+
+    monkeypatch.setenv("HKESTATE_DATA_DIR", str(tmp_path))
+    first = model.train(raw, rounds=60, today=date(2026, 10, 17))
+    prev_dir = tmp_path / "previous"
+    prev_dir.mkdir()
+    for name in ("fair_price.txt", "fair_price.json"):
+        shutil.copy(model.model_dir() / name, prev_dir / name)
+
+    out = model.train(raw, rounds=60, today=date(2026, 10, 17), since=2021, compare_since=2023,
+                      previous=prev_dir)
+    meta = out["meta"]
+    assert meta["window_since"] == 2021
+    assert meta["n_train"] < first["meta"]["n_train"]
+    assert meta["previous"]["trained_at"] == first["meta"]["trained_at"]
+    assert meta["compare"]["since"] == 2023
+    ev = out["eval"]
+    assert ev.by_decade["mdape_prev"].notna().any()
+    assert ev.by_district["mdape_prev"].notna().any()
+    text = out["report_path"].read_text("utf-8")
+    assert "## Compared with the previous run" in text
+    assert "## Training window" in text
+    assert "from 2021" in text and "from 2023" in text
+    assert "By decade" in text and "By district" in text
+
+
 def test_reasons_name_the_three_biggest_effects():
     shap = pd.Series({"shap_floor_num": 0.05, "shap_area_sqft": -0.02, "shap_district": 0.10,
                       "shap_age_years": -0.001})

@@ -25,6 +25,7 @@ import json
 import logging
 import sys
 from datetime import datetime
+from pathlib import Path
 
 from hkestate import db, locks
 from hkestate.config import get_data_dir
@@ -392,7 +393,8 @@ def cmd_train(args) -> int:
     def work(log):
         raw = features.load_snapshot() if args.from_snapshot else features.snapshot(args.db)
         log(f"snapshot: {raw['meta']}")
-        out = model.train(raw, rounds=args.rounds, log=log)
+        out = model.train(raw, rounds=args.rounds, log=log, since=args.since,
+                          compare_since=args.compare_since, previous=args.previous)
         mdape = {r["group"]: round(r["mdape"], 4) for r in out["meta"]["eval"]}
         return out["meta"]["n_train"], {"mdape": mdape, "report": str(out["report_path"])}
 
@@ -570,6 +572,12 @@ def main(argv: list[str] | None = None) -> int:
     t.add_argument("--from-snapshot", action="store_true",
                    help="reuse data/model/snapshot instead of reading the database")
     t.add_argument("--rounds", type=int, default=800, help="boosting rounds")
+    t.add_argument("--since", type=int, default=None, metavar="YEAR",
+                   help="training window: sales from this year on (default: all years)")
+    t.add_argument("--compare-since", type=int, default=None, metavar="YEAR",
+                   help="also evaluate a model trained from this year and report both")
+    t.add_argument("--previous", type=Path, default=None, metavar="DIR",
+                   help="folder with an earlier fair_price.txt/.json to compare against")
     t.set_defaults(func=cmd_train)
     rk = sub.add_parser("rank", help="rank active sale listings by discount to fair price")
     rk.add_argument("--from-snapshot", action="store_true",
