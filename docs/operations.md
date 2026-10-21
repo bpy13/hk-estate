@@ -13,8 +13,8 @@ Registered for the current user by `scripts\register_task.ps1` (rerun it to upda
 | `watchdog` | every 15 minutes | `scripts\watchdog.ps1` → `hkestate watchdog` (restarts jobs that died; see Watchdog) |
 | `weekly deals` | Sundays 07:00 | `scripts\daily.ps1 -Command update` → `hkestate update` |
 | `weekly ricacorp` | Sundays 10:00 | `scripts\daily.ps1 -Command ricacorp` → `hkestate ricacorp` (a pass is about 7 hours; the task may run 14) |
-| `daily rank` | every day 14:00 | `scripts\daily.ps1 -Command rank` → `hkestate rank` (after the 08:00 listings, ~4.5 h; about 1 minute) |
-| `weekly train` | Sundays 12:00 | `scripts\daily.ps1 -Command train` → `hkestate train` (after the deal update; about 1 minute) |
+| `daily rank` | every day 14:00 | `scripts\daily.ps1 -Command rank` → `hkestate rank` (after the 08:00 listings, ~4.5 h; about 1-3 minutes, of which the database read is about 1 minute) |
+| `weekly train` | Sundays 12:00 | `scripts\daily.ps1 -Command train` → `hkestate train` (after the deal update; about 5 minutes) |
 | `monthly blocked-check` | 1st of each month 09:00 | `scripts\daily.ps1 -Command check-blocked` → `hkestate check-blocked` (see below; a few seconds) |
 
 `daily.ps1` starts Python in its own hidden console (`Start-Process`) and waits for it, so a
@@ -269,6 +269,32 @@ the database** unless you pass `--read-db`; it writes a log file but no `run_log
 `--no-fetch` skips the Land Registry download (22 small files, cached 30 days), leaving the
 yearly table without a verdict. About a minute on 2.3 million deals. Nothing is changed or
 deleted: odd rows are listed for a decision.
+
+## Model and growth study by hand
+
+`rank` took 2+ hours on 2026-10-21 and blocked the scrapers; fixed the same day (the duplicate
+check no longer uses an OR join, `extract` reads the sales once): the database read is now
+about 1 minute, the whole `rank` 1-3 minutes.
+
+```powershell
+conda run -n hk-estate hkestate train --from-snapshot              # ~5 min; --since YEAR, --compare-since YEAR, --previous DIR
+conda run -n hk-estate hkestate rank --from-snapshot
+conda run -n hk-estate hkestate report --settings standard --from-snapshot   # ~25 min, ~9 GB
+conda run -n hk-estate hkestate report --start 2008-10-01 --end 2021-09-30   # one window
+```
+
+- `train` writes `data\reports\model_eval.md`. The model from 2026-10-18 is saved in
+  `data\model\backup_20261018\`; to restore it, stop the dashboard and run
+  `Copy-Item data\model\backup_20261018\* data\model\ -Recurse -Force` (from the repo folder).
+- `report --settings standard` runs `all`, `since-2000`, the phases `crash-1997-2003`,
+  `recovery-2003-2008`, `boom-2008-2021`, `fall-2021-2024`, `recent-2024-now`,
+  `bought-after-crash` (from Jul 2003) and the 1-year-hold sensitivities `fall-2021-2024-1y`
+  and `recent-2024-now-1y`. A pair counts when both sales fall inside the window. It is not
+  scheduled; run it after `train`. Results: `data\reports\growth\<date>\<setting>\`
+  (`effects.csv`, `districts.csv`, `index.csv`, `returns.csv`, `settings.json`) and
+  `data\reports\findings_<date>.md`.
+- The dashboard page "Growth study" (`?page=growth&setting=<name>`) reads the newest
+  `growth\<date>\` folder and needs no database.
 
 ## Manual building map
 

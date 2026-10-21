@@ -225,6 +225,6 @@ throughout. The 28Hse territory backfill (about 7% done) is not waited for.
   - Done when: tests for the data loader pass; the dashboard is launched on port 8531, the
     page opens without errors for `all` and one phase setting (checked in a real browser or
     with Streamlit's AppTest), then stopped by port.
-- [ ] **Task 10: docs**
+- [x] **Task 10: docs**
   - Files: `README.md`, `docs/operations.md`, `CLAUDE.md` (command list)
   - Done when: `report --start/--end/--settings` and `datacheck` are documented.

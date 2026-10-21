@@ -29,16 +29,55 @@ conda run -n hk-estate hkestate crosscheck --estates pilot  # compare with Centa
 conda run -n hk-estate hkestate status                      # recent runs and row counts
 conda run -n hk-estate python scripts/spot_check.py         # 50 deals vs the live site
 
-conda run -n hk-estate hkestate train     # fair-price model + data/reports/model_eval.md (~1 min)
-conda run -n hk-estate hkestate rank      # data/reports/ranked_listings_<date>.csv (~1 min)
-conda run -n hk-estate hkestate report    # growth study: data/reports/findings_<date>.md (~1.5 min)
+conda run -n hk-estate hkestate datacheck # checks on the loaded sales: data/reports/datacheck_<date>.md (~1 min)
+conda run -n hk-estate hkestate train     # fair-price model + data/reports/model_eval.md (~5 min)
+conda run -n hk-estate hkestate rank      # data/reports/ranked_listings_<date>.csv (1-3 min)
+conda run -n hk-estate hkestate report    # growth study, all data: data/reports/findings_<date>.md
+conda run -n hk-estate hkestate report --settings standard   # all settings below (~25 min, ~9 GB)
 conda run -n hk-estate streamlit run app/dashboard.py   # dashboard at http://localhost:8501
 ```
+
+`datacheck` reads the saved snapshot and does not open the database (`--read-db` takes a fresh
+snapshot first; `--no-fetch` skips the Land Registry download).
+
+`train` options: `--since YEAR` trains only on sales from that year, `--compare-since YEAR`
+also trains from that year and reports both, `--previous DIR` compares with an earlier model
+folder. The model from 2026-10-18 is kept in `data\model\backup_20261018\`; to go back to it,
+close the dashboard and copy its files over `data\model\`:
+
+```powershell
+Copy-Item data\model\backup_20261018\* data\model\ -Recurse -Force   # run from the repo folder
+```
+
+**Growth study windows.** `report --start YYYY-MM-DD --end YYYY-MM-DD` keeps a pair only when
+both its sales fall inside the window (default: all data). `report --settings standard` runs
+these windows from one snapshot (or `--settings name,name`); a pair needs a 3-year hold, so a
+window too short for enough pairs says so instead of giving a verdict:
+
+| Setting | Pairs counted |
+|---|---|
+| `all` | every pair, 1995 on |
+| `since-2000` | bought from 2000 |
+| `crash-1997-2003` | bought and sold Oct 1997 - Jul 2003 |
+| `recovery-2003-2008` | bought and sold Aug 2003 - Sep 2008 |
+| `boom-2008-2021` | bought and sold Oct 2008 - Sep 2021 |
+| `fall-2021-2024` | bought and sold Oct 2021 - Oct 2024 |
+| `recent-2024-now` | bought and sold since Nov 2024 |
+| `bought-after-crash` | bought from Jul 2003 (does the crash drive `all`?) |
+| `fall-2021-2024-1y`, `recent-2024-now-1y` | the last two phases again with a 1-year minimum hold, because the 3-year rule leaves almost no pairs; labelled sensitivities, never mixed into the main verdicts |
+
+The standard run takes about 25 minutes and about 9 GB of memory (close other big programs).
+Results go to `data/reports/growth/<date>/<setting>/` (CSV files and `settings.json`);
+the findings text is `data/reports/findings_<date>.md`.
+
+The dashboard's **Growth study** page (sidebar, or `?page=growth&setting=<name>`) shows the
+newest saved results: a setting selector, which attributes hold in which phases, the effect
+per attribute, and the districts with their price index.
 
 A stopped backfill carries on where it left off when run again. Logs go to `data/logs/`,
 reports to `data/reports/`.
 
-`train`, `rank` and `report` read the database once (about 40 seconds) and save a snapshot in
+`train`, `rank` and `report` read the database once (about 1 minute) and save a snapshot in
 `data/model/`; add `--from-snapshot` to reuse it. Retrain as data grows (the territory
 backfill, geocoding); rerun `rank` after each day's listings and `report` after `train`
 (the findings report is preliminary until the territory backfill finishes). The scheduled

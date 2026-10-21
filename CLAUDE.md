@@ -21,9 +21,13 @@ Read these before substantial changes:
 - Run: `conda run -n hk-estate hkestate <command>`: `backfill --estates pilot` (resumable),
   `rvd`, `crosscheck --estates pilot`, `cd-history` (every sale per flat from Centadata; resumable;
   `--estates`, `--limit`, `--max-hours`), `listings`, `daily`, `update`, `prune-cache`,
-  `status`, `train`, `rank` (fair price; `--from-snapshot` reuses `data/model/snapshot`),
-  `report` (growth study, `data/reports/findings_<date>.md`). Notebook: `notebooks/explore.ipynb`.
-  Dashboard: `conda run -n hk-estate streamlit run app/dashboard.py`. Scheduled jobs and
+  `status`, `datacheck` (checks on the snapshot; `--read-db`, `--no-fetch`),
+  `train` (`--since`, `--compare-since`, `--previous`; the 2026-10-18 model is in
+  `data/model/backup_20261018/`), `rank` (fair price; `--from-snapshot` reuses
+  `data/model/snapshot`), `report` (growth study, `data/reports/findings_<date>.md`;
+  `--start/--end`; `--settings standard` runs all windows, ~25 min, ~9 GB, saved in
+  `data/reports/growth/<date>/<setting>/`). Notebook: `notebooks/explore.ipynb`.
+  Dashboard: `conda run -n hk-estate streamlit run app/dashboard.py` (page "Growth study"). Scheduled jobs and
   locks: `docs/operations.md`. Spot-check:
   `conda run -n hk-estate python scripts/spot_check.py`. Logs in `data/logs/`, reports in
   `data/reports/`.
