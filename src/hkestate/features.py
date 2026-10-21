@@ -15,8 +15,10 @@ Facing and sea view are properties of a flat (the same letter on every floor fac
 way), so a listing that states them lends them to every deal on that building + flat.
 
 Rows left out of training (column `exclude_reason`, docs/decisions.md "Phase 4"):
-- the `txn_all` exclusions (duplicate, under HK$500k, first-hand, non-market, bulk, outlier)
-- first-hand sales by rule where SRPE doesn't cover the building (`first_hand_rule`)
+- the `txn_all` exclusions (duplicate, under HK$500k, first-hand, non-market, bulk, outlier;
+  deals dated before 1990 fall under `too_old`)
+- first-hand sales by rule where SRPE doesn't cover the building and Centadata gives no
+  first/second-hand label of its own (`first_hand_rule`)
 - deals that include a parking space (28Hse 連車位, SRPE parking column)
 - houses, villas and subsidised estates (master list coverage filter, SRPE house registers)
 - Ricacorp previous deals derived from days held and % gain (not a recorded price)
@@ -256,7 +258,7 @@ def _deals_sql() -> str:
         a.deal_type, a.price_hkd, a.area_sqft, a.area_basis, a.psf_hkd, a.gain_pct,
         coalesce(a.rooms, u.rooms) AS rooms, a.floor_num, a.floor_kind,
         a.excl_duplicate, a.excl_low_price, a.excl_first_hand, a.excl_non_market,
-        a.excl_bulk, a.excl_outlier,
+        a.excl_bulk, a.excl_outlier, a.excl_bad_date, a.first_hand_label,
         CASE WHEN json_valid(a.raw_json) THEN
             coalesce(json_extract_string(a.raw_json, '$.with_parking') = 'true'
                      OR json_extract_string(a.raw_json, '$.has_parking') = 'true', false)
@@ -502,9 +504,12 @@ def deal_features(raw: dict) -> pd.DataFrame:
     buildings = building_table(raw)
     d = _attach(d, raw, buildings)
 
-    parsed = d["floor_label"].map(lambda x: parse_floor(x).num if isinstance(x, str) else None)
+    # a floor the unit table has no number for (e.g. a Chinese-numeral label stored before
+    # parse_floor read them, Task 4b) is read from the label here; parsed once per label
+    labels = [x for x in d["floor_label"].dropna().unique() if isinstance(x, str)]
+    parsed = {lab: parse_floor(lab).num for lab in labels}
     d["floor_num"] = pd.to_numeric(d["floor_num"], errors="coerce").fillna(
-        pd.to_numeric(parsed, errors="coerce"))
+        pd.to_numeric(d["floor_label"].map(parsed), errors="coerce"))
     d["rel_floor"] = [relative_floor(n, t) for n, t in zip(d["floor_num"], d["top_floor"],
                                                            strict=True)]
     attrs = flat_attributes(raw["listings"])
@@ -525,6 +530,11 @@ def deal_features(raw: dict) -> pd.DataFrame:
     eligible = ~d["excl_duplicate"].astype(bool) & d["building_id"].notna()
     rule = pd.Series(False, index=d.index)
     rule[eligible] = first_hand_rule(d.loc[eligible])
+    # Centadata's own label (first_hand_label, Task 4b) beats the rule: a labelled row keeps
+    # the label's verdict (already in excl_first_hand). Labelled rows still take part in the
+    # rule's input, so a labelled launch sale is still the flat's first deal for the rest.
+    if "first_hand_label" in d:  # snapshots before 2026-10-21 lack the column
+        rule &= d["first_hand_label"].isna()
     d["first_hand_rule"] = rule
     d["first_hand"] = d["excl_first_hand"].astype(bool) | rule
 

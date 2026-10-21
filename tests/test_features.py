@@ -209,6 +209,35 @@ def test_one_row_per_deal_with_exclusion_reasons(snap):
     assert deals["first_hand"].sum() >= 7
 
 
+def test_centadata_label_beats_the_first_hand_rule_and_chinese_floors_are_read(tmp_path):
+    """Task 4b (e): the first-hand rule applies only where Centadata gives no label; a
+    SecondHand label keeps a deal the rule would mark, a FirstHand label marks one it would
+    miss. (a): a Chinese-numeral floor label with no stored floor number is read on the fly."""
+    path = make_db(tmp_path / "t.duckdb", n_deals=120)
+    con = db.connect(path)
+    # a launch of 6 flats in a new building (no completion date): the rule marks the
+    # unlabelled ones; two carry the source's own SecondHand label
+    for i in range(6):
+        raw = {"firstOrSecondHand": "SecondHand"} if i < 2 else {}
+        add_deal(con, f"new{i}", "cd-1-NEW", 10 + i, "A", date(2026, 3, 1 + i), 7_000_000,
+                 source="centadata", raw=raw)
+    # a 2010 sale in a building completed in 2005: outside the rule's window, labelled first-hand
+    add_deal(con, "lab-fh", "cd-1-AAA", 25, "D", date(2010, 3, 1), 3_000_000,
+             source="centadata", raw={"firstOrSecondHand": "FirstHand"})
+    add_deal(con, "zh", "cd-1-AAA", "十二", "E", date(2025, 3, 1), 4_000_000,
+             source="centadata")
+    raw = features.extract(con)
+    con.close()
+    deals = features.deal_features(raw).set_index("source_id")
+    reasons = deals["exclude_reason"]
+    assert reasons["lab-fh"] == "first_hand"
+    assert (reasons[["new2", "new3", "new4", "new5"]] == "first_hand_rule").all()
+    assert reasons[["new0", "new1"]].isna().all()
+    assert not deals.loc[["new0", "new1"], "first_hand"].any()
+    assert deals.loc["zh", "floor_num"] == 12
+    assert deals.loc["zh", "rel_floor"] == pytest.approx(12 / 30)
+
+
 def test_deal_feature_definitions(snap):
     deals = features.deal_features(snap).set_index("source_id")
     for col in ["area_sqft", "rooms", "floor_num", "rel_floor", "top_floor", "facing",
