@@ -48,6 +48,14 @@ cache pruning.)*
   that flat out (slower). Your call whether that is worth it.
 
 ## Pending work
+- **`QUARANTINE_SQL` matches nothing now.** The 14,562 wrong LOHAS Park rows were deleted
+  on 2026-10-18, so the guard in `db.py` is a no-op (data check 2026-10-21). Harmless; remove
+  it when convenient.
+- **Two SRPE rows carry dates from the developer's register that look wrong:** one sale
+  dated 2055-09-26 (the register's own typo; the parser now uses the PASP date in such cases,
+  but the stored row keeps 2055 until that register is re-read) and one dated 2026-10-26 (in
+  the future). Both are excluded from analysis as odd dates only if Task 4b's rule catches
+  them; re-read those registers when SRPE runs next.
 - [x] **`rank` holds the database too long and blocks the scrapers.** *(Fixed 2026-10-21,
   commits 02b6e7c, ed1fad4: the duplicate test's OR join split into two joins; rank's
   database read is now about 1 minute.)* Its extract

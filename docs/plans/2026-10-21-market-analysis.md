@@ -117,6 +117,26 @@ throughout. The 28Hse territory backfill (about 7% done) is not waited for.
     Fixes that are plain parsing bugs (e.g. a 2055 date) are made with a test; anything that
     needs deleting rows goes to open items.
 
+- [ ] **Task 4b: fix what the data check found** *(added 2026-10-21 after Task 4)*
+  - Files: `src/hkestate/normalise.py`, `src/hkestate/db.py` (`txn_all_sql`),
+    `src/hkestate/features.py`, `src/hkestate/sources/centadata_history.py` if needed; tests
+  - (a) `parse_floor` reads Chinese numerals (五, 十二, 二十三, 三十, plus forms like 地下, 低座
+    left as now): ~285k Centadata deals (13%) have no floor today. The fix must reach the
+    analysis without rewriting stored raw rows; if the `unit.floor_num` column has to be
+    refilled, add a `hkestate refresh-floors` command that updates in short batches (each
+    session a few seconds) for the main session to run.
+  - (b) Same-source duplicates: two rows of one source for the same unit, same day and same
+    price (Centadata stores some sales under two ids, 4,193 pairs) are flagged
+    `excl_duplicate` on all but one copy (keep the lowest `source_id`).
+  - (c) Deal dates before 1990 are excluded (new flag or `excl_outlier`), 38 rows.
+  - (e) Centadata history rows carry `firstOrSecondHand` in `raw_json`: use it for
+    `first_hand` where present (it is the source's own label), keeping the first-hand rule
+    only where the label is missing. Report how many sales change status.
+  - Done when: tests for each; on the database copy, `hkestate datacheck --no-fetch` (pointed
+    at a fresh extract of the copy) shows floor coverage for Centadata ≥ 97%, same-day
+    duplicate pairs left under 100, no pre-1990 dates in clean data. Full pytest and ruff
+    green.
+
 ## Phase 3 – Fair price and ranking on the full data (fable)
 
 - [ ] **Task 5: retrain and compare**
