@@ -47,8 +47,8 @@ LR_URL = "https://www.landreg.gov.hk/datagovhk/consideration_{year}.json"
 LR_FIRST_YEAR = 2005
 _MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 
-# Odd-value limits (plan Task 4, check 3)
-MIN_DEAL_YEAR = 1990
+# Odd-value limits (plan Task 4, check 3); txn_all flags dates before MIN_DEAL_YEAR (Task 4b)
+MIN_DEAL_YEAR = db.MIN_DEAL_DATE.year
 PRICE_MIN, PRICE_MAX = db.MIN_PRICE_HKD, 500_000_000
 AREA_MIN, AREA_MAX = 100.0, 5_000.0
 PSF_MIN, PSF_MAX = 1_000.0, 100_000.0
@@ -59,7 +59,7 @@ COVERAGE_MIN = {"building": 0.99, "area": 0.80, "floor": 0.90}
 COVERAGE_MIN_DEALS = 1_000  # a decade with fewer sales is shown but not judged
 
 EXCL_FLAGS = ["excl_duplicate", "excl_low_price", "excl_first_hand", "excl_non_market",
-              "excl_bulk", "excl_outlier"]
+              "excl_bulk", "excl_outlier", "excl_bad_date"]
 EXAMPLES = 5
 
 
@@ -348,7 +348,8 @@ def write_report(res: dict, raw: dict, path: Path | None = None) -> Path:
          f"Snapshot taken {meta.get('extracted_at', '?')}: {res['deals']:,} deal rows, "
          f"{res['stored']:,} stored sales (one copy each, Ricacorp derived rows left out), "
          f"{res['clean']:,} clean resales (after the txn_all flags: duplicate, under HK$500k, "
-         "first-hand, non-market, bulk, outlier, parking). Nothing was changed or deleted.",
+         f"first-hand, non-market, bulk, outlier, dated before {MIN_DEAL_YEAR}, parking). "
+         "Nothing was changed or deleted.",
          "", "## Verdicts", "", "| Check | Verdict |", "|---|---|"]
     for k, v in res["verdicts"].items():
         L.append(f"| {k} | **{v}** |")

@@ -21,8 +21,8 @@ def _deal(source, sid, unit, day, price, area=500.0, basis="saleable", building=
         "psf_hkd": price / area if area and basis in ("saleable", "converted") else None,
         "gain_pct": None, "rooms": None, "floor_num": floor_num, "floor_kind": "number",
         "excl_duplicate": False, "excl_low_price": price < 500_000, "excl_first_hand": False,
-        "excl_non_market": False, "excl_bulk": False, "excl_outlier": False, "parking": False,
-        "cd_feature": None,
+        "excl_non_market": False, "excl_bulk": False, "excl_outlier": False,
+        "excl_bad_date": False, "parking": False, "cd_feature": None,
     }
     row.update(flags)
     return row
@@ -44,7 +44,9 @@ def raw():
         # odd values, 2026 (year to date)
         _deal("srpe", "s1", "cd-1-B|30|A", "2055-09-26", 35_000_000, floor="30",
               deal_type="first_hand", excl_first_hand=True),  # date in the future
-        _deal("centadata", "c5", "cd-1-B|1|A", "1988-03-14", 3_700_000, floor="1", floor_num=1),
+        # dated before 1990: txn_all flags it (Task 4b), so it is stored but not clean
+        _deal("centadata", "c5", "cd-1-B|1|A", "1988-03-14", 3_700_000, floor="1", floor_num=1,
+              excl_bad_date=True),
         _deal("centadata", "c6", "cd-1-B|2|A", "2026-01-05", 300_000, floor="2", floor_num=2),
         _deal("centadata", "c7", "cd-1-B|3|A", "2026-01-06", 600_000_000, area=4_000.0,
               floor="3", floor_num=3),  # price over 500m; psf 150,000
@@ -146,8 +148,9 @@ def test_odd_values_check_counts_each_rule_by_source(raw):
     # (excl_low_price) nor the 2055 SRPE row (first-hand)
     assert r["price under HK$500k"]["clean"] == 0
     assert r["date in the future"]["clean"] == 0
+    assert r["date before 1990"]["clean"] == 0  # excl_bad_date
     assert r["price per sq ft under 1,000"]["clean"] == 1  # c9 only
-    assert res["clean"] == 8 and res["verdict"] == "look at this"  # c5, c7 x2, c8, c9 x2, c10, c11
+    assert res["clean"] == 7 and res["verdict"] == "look at this"  # c7 x2, c8, c9 x2, c10, c11
     assert set(r["date in the future"]["examples"]["source_id"]) == {"s1"}
 
 
@@ -174,7 +177,7 @@ def test_run_writes_the_report_and_returns_the_numbers(raw, tmp_path, monkeypatc
     assert res["verdicts"] == {"sales per year": "look at this", "duplicates left": "look at this",
                                "odd values": "look at this", "coverage": "ok"}
     assert res["flagged_years"] == [2005, 2025, 2026]
-    assert (res["deals"], res["stored"], res["clean"]) == (19, 17, 15)
+    assert (res["deals"], res["stored"], res["clean"]) == (19, 17, 14)  # c5 (1988) not clean
     path = datacheck.write_report(res, raw)
     assert path == tmp_path / "reports" / "datacheck_20261021.md"
     text = path.read_text("utf-8")
