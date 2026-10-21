@@ -203,6 +203,22 @@ def test_two_sale_centadata_history_makes_one_real_pair():
     assert row["years"] == pytest.approx(14.5, abs=0.05)
 
 
+def test_window_keeps_only_pairs_with_both_sales_inside():
+    # Task 6: a pair counts when both its sales fall inside [start, end]
+    d = frame(
+        # inside; ends after the window; starts before it
+        deal("b|1|A", "1996-01-10", 3_000_000), deal("b|1|A", "2001-01-10", 2_000_000),
+        deal("b|2|A", "1996-01-10", 3_000_000), deal("b|2|A", "2005-01-10", 2_500_000),
+        deal("b|3|A", "1994-01-10", 3_000_000), deal("b|3|A", "1999-01-10", 2_500_000),
+    )
+    p = pairs.real_pairs(d)
+    assert len(p) == 3
+    inside = p[pairs.in_window(p, "1995-01-01", "2003-07-31")]
+    assert list(inside["unit_id"]) == ["b|1|A"]
+    assert pairs.in_window(p).all()  # no window: everything
+    assert list(p[pairs.in_window(p, start="1995-01-01")]["unit_id"]) == ["b|1|A", "b|2|A"]
+
+
 def test_a_gain_pair_whose_start_date_is_now_known_is_not_a_gain_pair_any_more():
     d = frame(
         # held 14 years: a real pair; its "% change" no longer stands alone

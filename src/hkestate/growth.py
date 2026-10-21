@@ -132,10 +132,12 @@ def _ols_cluster(y: np.ndarray, X: pd.DataFrame, groups) -> pd.DataFrame:
     xtx_inv = np.linalg.pinv(Xv.T @ Xv)
     g = pd.factorize(pd.Series(groups).astype(str))[0]
     n_g = g.max() + 1
-    scores = np.zeros((n_g, Xv.shape[1]))
-    np.add.at(scores, g, Xv * resid[:, None])
-    meat = scores.T @ scores
     n, k = Xv.shape
+    # per-cluster sums of X * residual, as a sparse indicator product (np.add.at took
+    # minutes on half a million pairs)
+    member = sp.csr_matrix((np.ones(n), (g, np.arange(n))), shape=(n_g, n))
+    scores = np.asarray(member @ (Xv * resid[:, None]))
+    meat = scores.T @ scores
     adj = (n_g / max(n_g - 1, 1)) * ((n - 1) / max(n - k, 1))
     cov = adj * xtx_inv @ meat @ xtx_inv
     se = np.sqrt(np.clip(np.diag(cov), 0, None))
@@ -243,22 +245,20 @@ def rs_index(p: pd.DataFrame, smooth: float = SMOOTH) -> pd.Series:
     month) - index(start month), least squares, first month fixed at 0, with a small penalty
     on month-to-month changes so months with few sales borrow from their neighbours.
     Returns the index level (first month = 100)."""
-    s = p["start_date"].dt.to_period("M")
-    e = p["end_date"].dt.to_period("M")
-    months = pd.period_range(min(s.min(), e.min()), max(s.max(), e.max()), freq="M")
-    pos = {m: i for i, m in enumerate(months)}
-    n, k = len(p), len(months) - 1  # column j = month j+1 (month 0 is the base)
-    rows, cols, vals = [], [], []
-    for r, (a, b) in enumerate(zip(s, e, strict=True)):
-        ia, ib = pos[a], pos[b]
-        if ib > 0:
-            rows.append(r)
-            cols.append(ib - 1)
-            vals.append(1.0)
-        if ia > 0:
-            rows.append(r)
-            cols.append(ia - 1)
-            vals.append(-1.0)
+    s, e = pd.to_datetime(p["start_date"]), pd.to_datetime(p["end_date"])
+    sm = (s.dt.year * 12 + s.dt.month).to_numpy()  # months counted from year 0
+    em = (e.dt.year * 12 + e.dt.month).to_numpy()
+    base, top = int(min(sm.min(), em.min())), int(max(sm.max(), em.max()))
+    months = pd.date_range(pd.Timestamp(year=(base - 1) // 12, month=(base - 1) % 12 + 1,
+                                        day=1), periods=top - base + 1, freq="MS")
+    n, k = len(p), top - base  # column j = month j+1 (month 0 is the base)
+    if k == 0:
+        return pd.Series([100.0], index=months, name="index")
+    ia, ib = sm - base, em - base
+    r = np.arange(n)
+    rows = np.concatenate([r[ib > 0], r[ia > 0]])
+    cols = np.concatenate([ib[ib > 0] - 1, ia[ia > 0] - 1])
+    vals = np.concatenate([np.ones((ib > 0).sum()), -np.ones((ia > 0).sum())])
     A = sp.csr_matrix((vals, (rows, cols)), shape=(n, k))
     # smoothness rows: sqrt(smooth) * (x_j - x_{j-1}), with x_{-1} = 0 (base month)
     D = sp.diags([np.ones(k), -np.ones(k - 1)], [0, -1], shape=(k, k)) * math.sqrt(smooth)
@@ -267,7 +267,7 @@ def rs_index(p: pd.DataFrame, smooth: float = SMOOTH) -> pd.Series:
                         np.zeros(k)])
     x = lsqr(M, y, atol=1e-10, btol=1e-10)[0]
     level = 100 * np.exp(np.concatenate([[0.0], x]))
-    return pd.Series(level, index=months.to_timestamp(), name="index")
+    return pd.Series(level, index=months, name="index")
 
 
 def drawdown(index: pd.Series, start=None, end=None) -> dict:

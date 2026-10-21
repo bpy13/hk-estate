@@ -61,6 +61,24 @@ def test_cluster_ols_matches_least_squares_coefficients():
     assert res.loc["x", "p"] < 1e-6
 
 
+def test_cluster_standard_errors_match_the_textbook_formula():
+    rng = np.random.default_rng(4)
+    n, groups = 600, np.arange(600) % 40
+    X = pd.DataFrame({"const": 1.0, "x": rng.normal(size=n), "z": rng.normal(size=n)})
+    y = 1 + 2 * X["x"].to_numpy() + rng.normal(size=n) + rng.normal(size=40)[groups]
+    res = growth._ols_cluster(y, X, groups)
+    # the same sandwich, written out plainly: sum over clusters of (X' e)(X' e)'
+    Xv = X.to_numpy()
+    beta = np.linalg.lstsq(Xv, y, rcond=None)[0]
+    e = y - Xv @ beta
+    meat = sum(np.outer(Xv[groups == g].T @ e[groups == g], Xv[groups == g].T @ e[groups == g])
+               for g in range(40))
+    bread = np.linalg.inv(Xv.T @ Xv)
+    adj = (40 / 39) * ((n - 1) / (n - 3))
+    se = np.sqrt(np.diag(adj * bread @ meat @ bread))
+    assert res["se"].to_numpy() == pytest.approx(se)
+
+
 def test_regression_finds_the_planted_effect_and_marks_it_robust():
     d = growth.attribute_frame(synthetic_pairs())
     v = growth.verdicts(d)
@@ -113,6 +131,14 @@ def test_rs_index_recovers_a_known_path():
     idx = growth.rs_index(p, smooth=0.5)
     got = np.log(idx / 100)
     assert np.abs(got.to_numpy() - true.to_numpy()).max() < 0.03
+
+
+def test_rs_index_with_every_pair_in_one_month_is_flat():
+    p = pd.DataFrame({"start_date": pd.to_datetime(["2020-01-05", "2020-01-20"]),
+                      "end_date": pd.to_datetime(["2020-01-25", "2020-01-28"]),
+                      "start_price": [1e6, 2e6], "end_price": [1.1e6, 2.1e6]})
+    idx = growth.rs_index(p)
+    assert len(idx) == 1 and idx.iloc[0] == 100.0
 
 
 def test_drawdown_finds_the_worst_fall():

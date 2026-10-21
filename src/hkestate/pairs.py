@@ -174,6 +174,21 @@ def undated_gain_pairs(deals: pd.DataFrame, recorded: pd.DataFrame) -> pd.DataFr
     return gain_pairs(deals, exclude=pd.concat(frames, ignore_index=True) if frames else None)
 
 
+def in_window(p: pd.DataFrame, start=None, end=None) -> pd.Series:
+    """True where a pair falls inside the study window: bought on or after `start` and sold
+    (or valued) on or before `end`; `None` means no limit on that side (decisions.md
+    "History: all data, adjustable window"). A pair with no start date fails a `start`
+    limit: it cannot be shown to be inside."""
+    ok = pd.Series(True, index=p.index)
+    if p.empty:
+        return ok
+    if start is not None:
+        ok &= pd.to_datetime(p["start_date"]) >= pd.Timestamp(start)
+    if end is not None:
+        ok &= pd.to_datetime(p["end_date"]) <= pd.Timestamp(end)
+    return ok
+
+
 def _matches_end(g: pd.DataFrame, real: pd.DataFrame, days: int = 90) -> pd.Series:
     """True where a real pair ends on the same unit within `days` of the gain pair's end."""
     r = real[["unit_id", "end_date"]].assign(end_date=lambda x: pd.to_datetime(x["end_date"]))
