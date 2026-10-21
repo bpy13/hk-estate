@@ -4,7 +4,8 @@
 
 Reads what `hkestate train` and `hkestate rank` write to data/model/ (no long database
 access; the run-status banner reads `run_log` read-only). Pages can be opened directly:
-?page=ranked, ?page=detail&listing=<source>:<id>, ?page=model.
+?page=ranked, ?page=detail&listing=<source>:<id>, ?page=model, ?page=growth&setting=<name>
+(the growth page reads the CSVs under data/reports/growth/, nothing from the database).
 """
 
 from __future__ import annotations
@@ -23,7 +24,8 @@ st.set_page_config(page_title="HK Estate", layout="wide")
 # Reference palette (dataviz skill): blue raises the value, red lowers it; text labels carry
 # the sign too, so colour is never the only cue.
 RAISES, LOWERS, SERIES = "#2a78d6", "#e34948", "#2a78d6"
-PAGES = {"ranked": "Ranked listings", "detail": "Listing detail", "model": "Model"}
+PAGES = {"ranked": "Ranked listings", "detail": "Listing detail", "model": "Model",
+         "growth": "Growth study"}
 
 
 @st.cache_data(ttl=300)
@@ -255,9 +257,171 @@ def page_model() -> None:
         st.markdown(text)
 
 
+@st.cache_data(ttl=300)
+def load_growth(folder_mtime: float):
+    """Cached on the folder's modified time so a rerun of `hkestate report` shows up."""
+    return dd.load_growth()
+
+
+def _setting_name(s: dd.GrowthSetting) -> str:
+    tag = f"Sensitivity ({s.min_hold_years:g}-year minimum hold): " if s.sensitivity else ""
+    return f"{tag}{s.label}"
+
+
+def effect_chart(rows: pd.DataFrame, order: list[str]) -> alt.Chart:
+    """One attribute across settings: the effect with a 95% interval; the zero line marks
+    'no effect'. Blue = raises growth, red = lowers; the sign is also in the label."""
+    d = rows.assign(direction=["raises growth" if e >= 0 else "lowers growth"
+                               for e in rows["effect"]],
+                    text=[f"{e:+.2f}" for e in rows["effect"]])
+    y = alt.Y("setting:N", sort=order, title=None)
+    zero = alt.Chart(pd.DataFrame({"x": [0]})).mark_rule(color="#52514e").encode(x="x:Q")
+    bars = alt.Chart(d).mark_rule(strokeWidth=2).encode(
+        y=y, x=alt.X("low:Q", title="Effect on annual growth (percentage points a year)"),
+        x2="high:Q", color=alt.Color(
+            "direction:N", title=None, scale=alt.Scale(
+                domain=["raises growth", "lowers growth"], range=[RAISES, LOWERS]),
+            legend=alt.Legend(orient="top")))
+    dots = alt.Chart(d).mark_point(filled=True, size=90).encode(
+        y=y, x="effect:Q", color=alt.Color("direction:N", legend=None, scale=alt.Scale(
+            domain=["raises growth", "lowers growth"], range=[RAISES, LOWERS])),
+        tooltip=[alt.Tooltip("setting:N"), alt.Tooltip("text:N", title="Effect (pp/yr)"),
+                 alt.Tooltip("verdict:N", title="Verdict"),
+                 alt.Tooltip("n:Q", title="Pairs", format=",")])
+    labels = alt.Chart(d).mark_text(dy=-12, color="#52514e").encode(
+        y=y, x="effect:Q", text="text:N")
+    return (zero + bars + dots + labels).properties(height=max(60, 34 * len(d)))
+
+
+def index_chart(idx: pd.DataFrame, shown: list[str]) -> alt.Chart:
+    d = idx[idx["District"].isin(shown)]
+    return alt.Chart(d).mark_line(strokeWidth=1.8).encode(
+        x=alt.X("month:T", title=None),
+        y=alt.Y("level:Q", title="Price index (first month = 100)",
+                scale=alt.Scale(type="log")),
+        color=alt.Color("District:N", title=None),
+        tooltip=[alt.Tooltip("District:N"), alt.Tooltip("month:T", format="%b %Y"),
+                 alt.Tooltip("level:Q", format=",.0f")]).properties(height=340)
+
+
+def page_growth() -> None:
+    st.title("Which flat features go with better price growth?")
+    folder = dd.latest_growth_dir()
+    study = load_growth(folder.stat().st_mtime if folder else 0.0)
+    if study is None or not study.settings:
+        st.info("No growth study yet: run `hkestate report --settings standard`.")
+        return
+    main, sens = study.main, study.sensitivities
+    sb = st.sidebar
+    sb.header("Growth study")
+    names = {s.name: _setting_name(s) for s in study.settings}
+    wanted = st.query_params.get("setting")
+    keys = list(names)
+    pick = sb.selectbox("Setting", keys, index=keys.index(wanted) if wanted in keys else 0,
+                        format_func=names.get)
+    if pick != wanted:
+        st.query_params["setting"] = pick
+    ptype = sb.radio("Pairs", list(dd.PAIRS_TYPES), format_func=dd.PAIRS_TYPES.get,
+                     help="Recorded = a flat's two registered sales. Estimated = the "
+                          "second sale is a model price for today (a cross-check).")
+    setting = study.get(pick)
+    st.caption(
+        f"Study of {study.date}. Each pair is one flat sold twice; the study asks which "
+        "features go with faster annual price growth between the two sales, after allowing "
+        "for the other features. Numbers are percentage points of growth a year: "
+        "+1.00 means 1 point a year faster, which compounds over a holding period.")
+
+    # ---- verdicts across settings (main settings only) --------------------------------
+    st.subheader("Do the findings hold across market phases?")
+    vt = dd.verdict_table(main, ptype)
+    if vt.empty:
+        st.info("No attribute results for this pair type.")
+    else:
+        st.dataframe(vt.set_index("Attribute"), use_container_width=True)
+        st.caption(
+            "**robust** = clearly different from zero and the same direction in both halves "
+            "of the data (by time and by district). **significant only** = clear but not "
+            "steady across halves. **no effect found** = indistinguishable from zero. "
+            "**too few pairs** = the period holds too few flats sold twice for a verdict. "
+            "The number in brackets is the effect in percentage points a year.")
+    if sens:
+        with st.expander("Sensitivity checks (shorter minimum holding period)"):
+            st.caption(
+                "These re-run the recent phases allowing pairs held only "
+                f"{', '.join(sorted({f'{s.min_hold_years:g}' for s in sens if s.min_hold_years}))}"
+                " year(s) instead of 3, because those phases hold almost no 3-year pairs. "
+                "Short holds are dominated by trading costs and noise: read them as hints, "
+                "not as findings, and they never feed the table above.")
+            st.dataframe(dd.verdict_table(sens, ptype).set_index("Attribute"),
+                         use_container_width=True)
+            for s in sens:
+                if s.note:
+                    st.caption(f"{s.label}: {s.note}")
+
+    # ---- one attribute across settings ------------------------------------------------
+    st.subheader("One attribute across settings")
+    ev = dd.effect_rows(study.settings, ptype)
+    if ev.empty:
+        st.info("No effects to chart.")
+    else:
+        labels = ev.drop_duplicates("attribute").set_index("attribute")["label"]
+        attr = st.selectbox("Attribute", list(labels.index), format_func=labels.get)
+        st.markdown(f"**{labels[attr]}**: {dd.attribute_sentence(attr, main, ptype)}")
+        one = ev[ev["attribute"] == attr].copy()
+        one["setting"] = one["setting"].map(names)
+        st.altair_chart(effect_chart(one, [names[s.name] for s in study.settings]),
+                        use_container_width=True)
+        st.caption("Dot = estimated effect; line = 95% range. A line crossing zero means the "
+                   "data can't tell the effect from nothing. Sensitivity settings are "
+                   "labelled in the axis.")
+
+    # ---- districts for the selected setting -------------------------------------------
+    st.subheader(f"Districts: {setting.label}")
+    if setting.sensitivity:
+        st.warning("This is a sensitivity setting (short minimum hold): hints only.")
+    if setting.note:
+        st.info(setting.note)
+    dt = dd.district_table(setting, ptype)
+    if dt.empty:
+        st.caption("No district results for this setting.")
+        return
+    st.dataframe(
+        dt[["District", "pairs", "median_years", "growth", "net_growth", "rental_yield",
+            "total_return", "drawdown", "peak", "trough"]],
+        hide_index=True, use_container_width=True, column_config={
+            "pairs": st.column_config.NumberColumn("Pairs", format="%d"),
+            "median_years": st.column_config.NumberColumn("Median hold (yrs)", format="%.1f"),
+            "growth": st.column_config.NumberColumn("Growth a year", format="percent"),
+            "net_growth": st.column_config.NumberColumn("After costs", format="percent"),
+            "rental_yield": st.column_config.NumberColumn("Rental yield", format="percent"),
+            "total_return": st.column_config.NumberColumn("Total return a year",
+                                                         format="percent"),
+            "drawdown": st.column_config.NumberColumn("Worst fall", format="percent"),
+            "peak": "Fall from", "trough": "Fall to"})
+    st.caption("Growth = median annual price growth between a flat's two sales. After costs "
+               "= after stamp duty and agent fees. Total return = after-cost growth plus "
+               "rental yield. Worst fall = biggest peak-to-trough drop of the district's price "
+               "index in this period (blank if under 100 pairs).")
+    idx = dd.district_index(setting, ptype)
+    if idx.empty:
+        st.caption("No price index for this setting.")
+        return
+    avail = sorted(idx["District"].unique())
+    default = [d for d in dt["District"].head(4) if d in avail]
+    shown = st.multiselect("Districts on the chart", avail, default=default)
+    if shown:
+        st.altair_chart(index_chart(idx, shown), use_container_width=True)
+        st.caption("Price index built from the same flats sold twice (repeat sales), so it "
+                   "tracks like-for-like price moves; the first month of each line is 100. "
+                   "Log scale: equal slopes mean equal percentage changes.")
+
+
 def main() -> None:
     page = nav()
     banner()
+    if page == "growth":
+        page_growth()
+        return
     df, deals, meta = load()
     if page == "ranked":
         page_ranked(df, meta)

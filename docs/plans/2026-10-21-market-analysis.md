@@ -213,7 +213,9 @@ throughout. The 28Hse territory backfill (about 7% done) is not waited for.
 
 ## Phase 5 – Dashboard growth page (sonnet)
 
-- [ ] **Task 9: growth-study page**
+- [x] **Task 9: growth-study page** *(2026-10-21: `?page=growth`; AppTest on the real folder
+  for `all`, `boom-2008-2021`, `fall-2021-2024` with no exceptions; live server on 8531 gave
+  200, stopped by port)*
   - Files: modify `app/dashboard.py`, `src/hkestate/dashboard_data.py`; test
     `tests/test_dashboard.py`
   - Reads the newest `data/reports/growth/<date>/`; a setting selector; the attribute ×

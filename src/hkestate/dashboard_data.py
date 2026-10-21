@@ -11,11 +11,13 @@ from __future__ import annotations
 import json
 import time
 from dataclasses import dataclass
+from pathlib import Path
 
 import duckdb
 import pandas as pd
 
 from hkestate import db, model
+from hkestate.config import get_data_dir
 
 FLAG_LABELS = {
     "haunted": "haunted", "tenanted": "tenanted", "sea_view": "sea view",
@@ -98,6 +100,219 @@ def unit_history(all_deals: pd.DataFrame, row) -> tuple[pd.DataFrame, str]:
     else:
         what = f"flat {row['flat']} on any floor"
     return d.sort_values("agreement_date"), what
+
+
+# ---- growth study (data/reports/growth/<date>/, written by `hkestate report`) ----------------
+
+DISTRICT_EN = {
+    "中西區": "Central and Western", "灣仔區": "Wan Chai", "東區": "Eastern",
+    "南區": "Southern", "油尖旺區": "Yau Tsim Mong", "深水埗區": "Sham Shui Po",
+    "九龍城區": "Kowloon City", "黃大仙區": "Wong Tai Sin", "觀塘區": "Kwun Tong",
+    "荃灣區": "Tsuen Wan", "屯門區": "Tuen Mun", "元朗區": "Yuen Long", "北區": "North",
+    "大埔區": "Tai Po", "沙田區": "Sha Tin", "西貢區": "Sai Kung", "葵青區": "Kwai Tsing",
+    "離島區": "Islands", "unknown": "Unknown",
+}
+PAIRS_TYPES = {"recorded": "Recorded sales (real pairs)",
+               "estimated": "Estimated (model-priced) pairs"}
+VERDICT_SHORT = {"robust": "robust", "significant, not robust": "significant only",
+                 "not significant": "no effect found"}
+
+
+def district_label(name: str) -> str:
+    """'東區' -> 'Eastern 東區' (English first, Chinese kept alongside)."""
+    en = DISTRICT_EN.get(name)
+    if en is None:
+        return name
+    return en if name == "unknown" else f"{en} {name}"
+
+
+@dataclass
+class GrowthSetting:
+    name: str
+    label: str
+    enough: bool  # a regression could be run on recorded pairs
+    note: str | None  # why not, when not enough
+    sensitivity: bool  # a labelled side-check (e.g. 1-year minimum hold), not a main setting
+    min_hold_years: float | None
+    start: str | None
+    end: str | None
+    pairs: dict
+    effects: pd.DataFrame
+    districts: pd.DataFrame
+    index: pd.DataFrame
+    returns: pd.DataFrame
+
+    @property
+    def has_verdicts(self) -> bool:
+        return self.enough and not self.effects.empty
+
+
+@dataclass
+class GrowthStudy:
+    folder: Path
+    date: str
+    settings: list[GrowthSetting]
+
+    @property
+    def main(self) -> list[GrowthSetting]:
+        return [s for s in self.settings if not s.sensitivity]
+
+    @property
+    def sensitivities(self) -> list[GrowthSetting]:
+        return [s for s in self.settings if s.sensitivity]
+
+    def get(self, name: str) -> GrowthSetting | None:
+        return next((s for s in self.settings if s.name == name), None)
+
+
+def latest_growth_dir(root: Path | None = None) -> Path | None:
+    """Newest dated folder (YYYYMMDD) under data/reports/growth, or None."""
+    root = root or get_data_dir() / "reports" / "growth"
+    if not root.is_dir():
+        return None
+    dated = sorted(p for p in root.iterdir() if p.is_dir() and p.name.isdigit())
+    return dated[-1] if dated else None
+
+
+def _read_csv(path: Path) -> pd.DataFrame:
+    try:
+        return pd.read_csv(path, encoding="utf-8") if path.exists() else pd.DataFrame()
+    except (pd.errors.EmptyDataError, OSError, UnicodeDecodeError):
+        return pd.DataFrame()
+
+
+def load_growth(folder: Path | None = None) -> GrowthStudy | None:
+    """Everything the growth page shows, tolerant of a changing folder: any number of
+    settings, missing CSVs or settings.json, settings with too few pairs (empty effects),
+    and sensitivity settings (`"sensitivity": true`, `"min_hold_years"`)."""
+    folder = folder or latest_growth_dir()
+    if folder is None or not folder.is_dir():
+        return None
+    meta_path = folder / "settings.json"
+    try:
+        meta = json.loads(meta_path.read_text("utf-8")) if meta_path.exists() else {}
+    except (ValueError, OSError):
+        meta = {}
+    info = meta.get("settings") or {}
+    on_disk = sorted(p.name for p in folder.iterdir() if p.is_dir())
+    names = [n for n in meta.get("order", list(info)) if n in info or n in on_disk]
+    names += [n for n in list(info) + on_disk if n not in names]
+    names = list(dict.fromkeys(names))
+    settings = []
+    for n in names:
+        i, d = info.get(n) or {}, folder / n
+        effects = _read_csv(d / "effects.csv")
+        settings.append(GrowthSetting(
+            name=n, label=i.get("label") or n,
+            enough=bool(i.get("enough", not effects.empty)), note=i.get("note"),
+            sensitivity=bool(i.get("sensitivity", False)),
+            min_hold_years=i.get("min_hold_years"), start=i.get("start"), end=i.get("end"),
+            pairs=i.get("pairs") or {}, effects=effects,
+            districts=_read_csv(d / "districts.csv"), index=_read_csv(d / "index.csv"),
+            returns=_read_csv(d / "returns.csv")))
+    return GrowthStudy(folder, str(meta.get("date") or folder.name), settings)
+
+
+def _pairs_rows(df: pd.DataFrame, pairs_type: str) -> pd.DataFrame:
+    if df.empty or "pairs_type" not in df:
+        return df
+    return df[df["pairs_type"] == pairs_type]
+
+
+def verdict_cell(row: pd.Series | None) -> str:
+    if row is None:
+        return "–"
+    return f"{VERDICT_SHORT.get(row['verdict'], row['verdict'])} ({row['coef'] * 100:+.2f})"
+
+
+def verdict_table(settings: list[GrowthSetting], pairs_type: str = "recorded") -> pd.DataFrame:
+    """Attribute × setting, one text cell each: 'robust (+2.20)' = verdict and the effect in
+    percentage points of annual growth. A setting with no verdicts shows 'too few pairs' (or
+    '–' if the file is missing). Pass the main settings only; sensitivities go in their own
+    call so they never mix into this table."""
+    labels: dict[str, str] = {}
+    cols: dict[str, dict[str, str]] = {}
+    for s in settings:
+        e = _pairs_rows(s.effects, pairs_type)
+        cell: dict[str, str] = {}
+        for _, r in e.iterrows():
+            labels.setdefault(r["attribute"], r["label"])
+            cell[r["attribute"]] = verdict_cell(r)
+        cols[s.name] = cell
+    t = pd.DataFrame(index=list(labels))
+    for s in settings:
+        fill = "too few pairs" if not s.has_verdicts else "–"
+        t[s.name] = [cols[s.name].get(a, fill) for a in t.index]
+    t.insert(0, "Attribute", [labels[a] for a in t.index])
+    return t
+
+
+def effect_rows(settings: list[GrowthSetting], pairs_type: str = "recorded") -> pd.DataFrame:
+    """Long table for the effect chart: attribute, setting, effect (pp a year), 95% interval."""
+    parts = []
+    for s in settings:
+        e = _pairs_rows(s.effects, pairs_type)
+        if e.empty:
+            continue
+        parts.append(pd.DataFrame({
+            "attribute": e["attribute"], "label": e["label"], "setting": s.name,
+            "effect": e["coef"] * 100, "low": (e["coef"] - 1.96 * e["se"]) * 100,
+            "high": (e["coef"] + 1.96 * e["se"]) * 100, "verdict": e["verdict"],
+            "n": e["n"]}))
+    return pd.concat(parts, ignore_index=True) if parts else pd.DataFrame(
+        columns=["attribute", "label", "setting", "effect", "low", "high", "verdict", "n"])
+
+
+def attribute_sentence(attribute: str, settings: list[GrowthSetting],
+                       pairs_type: str = "recorded") -> str:
+    """One plain-language line on whether an attribute holds across the main settings."""
+    robust, signif, none, signs = [], [], [], set()
+    for s in settings:
+        e = _pairs_rows(s.effects, pairs_type)
+        r = e[e["attribute"] == attribute] if not e.empty else e
+        if r.empty:
+            continue
+        r = r.iloc[0]
+        {"robust": robust, "significant, not robust": signif}.get(r["verdict"], none).append(
+            s.name)
+        if r["verdict"] != "not significant":
+            signs.add(r["coef"] > 0)
+    tested = len(robust) + len(signif) + len(none)
+    if tested == 0:
+        return "No result for this attribute."
+    if not robust and not signif:
+        return f"No clear effect in any of the {tested} settings."
+    direction = ("raises" if signs == {True} else "lowers" if signs == {False}
+                 else "pushes growth both ways, depending on the period")
+    verb = f"{direction} growth" if signs in ({True}, {False}) else direction
+    if len(robust) == tested:
+        return f"Holds in every setting ({tested}): {verb}."
+    if robust:
+        return (f"Robust in {len(robust)} of {tested} settings ({', '.join(robust)}); "
+                f"it {verb}.")
+    return (f"Shows up in {len(signif)} of {tested} settings but never robustly: treat "
+            "it as a hint, not a finding.")
+
+
+def district_table(s: GrowthSetting, pairs_type: str = "recorded") -> pd.DataFrame:
+    """District rows with English + Chinese names and percentages as numbers."""
+    d = _pairs_rows(s.districts, pairs_type)
+    if d.empty:
+        return d
+    d = d.copy()
+    d.insert(0, "District", d["district"].map(district_label))
+    return d.sort_values("total_return", ascending=False).reset_index(drop=True)
+
+
+def district_index(s: GrowthSetting, pairs_type: str = "recorded") -> pd.DataFrame:
+    """Monthly price index per district (first month = 100), long form with 'District'."""
+    i = _pairs_rows(s.index, pairs_type)
+    if i.empty:
+        return i
+    i = i[i["group"].str.startswith("district:")].copy()
+    i["District"] = i["group"].str[len("district:"):].map(district_label)
+    i["month"] = pd.to_datetime(i["month"])
+    return i
 
 
 @dataclass
