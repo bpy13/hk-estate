@@ -15,6 +15,10 @@ What was decided, why, and when. Change these only with a reason, and note the c
   (Centadata goes back to 1995) in everything, unless the 1997–2003 crash skews a result to
   a meaningless degree. The study takes an adjustable start and end date and is run in
   several meaningful settings (all data, each market phase, bought after the crash).
+- **Recent phases get a short-hold sensitivity** (2026-10-21, Claude's call): the
+  2021-2024 fall and 2024-now windows hold almost no 3-year pairs (1 and 0), so each also
+  runs as a clearly labelled sensitivity with a 1-year minimum hold. The 3-year hold stays
+  the main rule; the short-hold results are never mixed into the main verdicts.
 - **Don't wait for the 28Hse territory backfill before analysing** (2026-10-21, user).
 - **Dashboard gets a growth-study page** (2026-10-21, user).
 - **Two goals:**
