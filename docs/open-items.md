@@ -48,6 +48,18 @@ cache pruning.)*
   that flat out (slower). Your call whether that is worth it.
 
 ## Pending work
+- **Your call: keep the retrained price model (2026-10-21)?** Retrained on all 1.5M clean
+  sales since 1995. On recent sales it is a touch worse than the 2026-10-18 model on the same
+  deals (6.25% vs 6.10% typical error) but it knows 99% of listings' buildings (old: 91%, the
+  rest fell back to a rough estate/district guess) and is far better on older sales (2000s
+  5.5% vs 7.8%), which the growth study uses. Kept the new one; the old one is in
+  `data\model\backup_20261018\` (copy back to restore). Training on 2010+ only would gain
+  0.2 pp on recent sales (`hkestate train --since 2010`); kept all years as decided.
+- **Asking-vs-deal gap uses the assumed 5% for every listing** (`gap_pairs: 0`): no listing
+  has yet been matched to its later sale. Revisit once listings collected since 2026-10-16
+  start selling.
+- **9.5% of the model's test sales have no district** (their building has none in the
+  building table), so they get the weakest fallback; fill districts from `master_building`.
 - **Data check leftovers (2026-10-21, after Task 4b).** Small, not blocking the analysis:
   ~5k Centadata floor labels still unread (`G-1`, `閣` mezzanine, duplex ranges `2-3`,
   `高層地下`, house numbers); 309 clean same-day sales of one unit at different prices (likely
