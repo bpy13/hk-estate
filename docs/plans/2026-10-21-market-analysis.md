@@ -117,7 +117,12 @@ throughout. The 28Hse territory backfill (about 7% done) is not waited for.
     Fixes that are plain parsing bugs (e.g. a 2055 date) are made with a test; anything that
     needs deleting rows goes to open items.
 
-- [ ] **Task 4b: fix what the data check found** *(added 2026-10-21 after Task 4)*
+- [x] **Task 4b: fix what the data check found** *(added 2026-10-21 after Task 4; done
+  2026-10-21 17:45 on the database copy: Centadata floor coverage 85.2% -> 99.7%, duplicate
+  pairs left 4,473 -> 21, pre-1990 rows in clean data 38 -> 0; rows with two sales of one
+  unit on one day 4,138 -> 827 (309 clean, different prices). Centadata's own label moved
+  18,600 sales to first-hand and 5,351 to resale. No `refresh-floors` needed: the parser fix
+  is applied on read.)*
   - Files: `src/hkestate/normalise.py`, `src/hkestate/db.py` (`txn_all_sql`),
     `src/hkestate/features.py`, `src/hkestate/sources/centadata_history.py` if needed; tests
   - (a) `parse_floor` reads Chinese numerals (五, 十二, 二十三, 三十, plus forms like 地下, 低座
