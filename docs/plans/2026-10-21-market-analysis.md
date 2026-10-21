@@ -144,7 +144,16 @@ throughout. The 28Hse territory backfill (about 7% done) is not waited for.
 
 ## Phase 3 – Fair price and ranking on the full data (fable)
 
-- [ ] **Task 5: retrain and compare**
+- [x] **Task 5: retrain and compare** *(2026-10-21 18:08: trained on 1,500,603 clean deals
+  from the 17:54 snapshot in 4 min 16 s, peak 4.7 GB; `model_eval.md` compares with the
+  2026-10-18 run; old model files in `data/model/backup_20261018/`. Recent sales: 6.3% median
+  error on 22,043 test deals (old run 6.0% on 15,655; on the 13,356 deals in both tests, old
+  6.10% vs new 6.25%). Held-out older sales: 5.0% / 5.5% / 4.4% / 4.3% by decade 1990s-2020s
+  against the old model's 7.5% / 7.8% / 6.0% / 5.9%; the old model knew 14,187 buildings
+  (90.8% of today's listings), the new 19,151 (99.0%), so the new model stays. Window: all
+  years kept; 2010+ was 0.2 points better on recent sales (6.1% vs 6.3%), not "clearly".
+  `rank --from-snapshot` 18:27: 12,472 listings ranked; 68 of the old top 100 moved more than
+  10 places, 62 are still in the top 100; fair prices moved by a median -0.7%.)*
   - Files: modify `src/hkestate/model.py` only if training fails or exceeds 30 minutes or
     16 GB on the full data; `data/reports/model_eval.md` (generated)
   - Done when: `hkestate train --from-snapshot` finishes; `model_eval.md` gains a section
