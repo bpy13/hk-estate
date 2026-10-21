@@ -279,7 +279,7 @@ about 1 minute, the whole `rank` 1-3 minutes.
 ```powershell
 conda run -n hk-estate hkestate train --from-snapshot              # ~5 min; --since YEAR, --compare-since YEAR, --previous DIR
 conda run -n hk-estate hkestate rank --from-snapshot
-conda run -n hk-estate hkestate report --settings standard --from-snapshot   # ~14 min, up to ~9 GB
+conda run -n hk-estate hkestate report --settings standard --from-snapshot   # 5-15 min, up to ~9 GB
 conda run -n hk-estate hkestate report --start 2008-10-01 --end 2021-09-30   # one window
 ```
 

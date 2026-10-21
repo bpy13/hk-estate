@@ -33,7 +33,7 @@ conda run -n hk-estate hkestate datacheck # checks on the loaded sales: data/rep
 conda run -n hk-estate hkestate train     # fair-price model + data/reports/model_eval.md (~5 min)
 conda run -n hk-estate hkestate rank      # data/reports/ranked_listings_<date>.csv (1-3 min)
 conda run -n hk-estate hkestate report    # growth study, all data: data/reports/findings_<date>.md
-conda run -n hk-estate hkestate report --settings standard   # all settings below (~14 min, up to ~9 GB)
+conda run -n hk-estate hkestate report --settings standard   # all settings below (5-15 min, up to ~9 GB)
 conda run -n hk-estate streamlit run app/dashboard.py   # dashboard at http://localhost:8501
 ```
 
@@ -67,7 +67,8 @@ window too short for enough pairs says so instead of giving a verdict:
 | `bought-after-crash` | bought from Jul 2003 (does the crash drive `all`?) |
 | `fall-2021-2024-1y`, `recent-2024-now-1y` | the last two phases again with a 1-year minimum hold, because the 3-year rule leaves almost no pairs; labelled sensitivities, never mixed into the main verdicts |
 
-The standard run takes about 14 minutes and up to about 9 GB of memory (close other big programs).
+The standard run takes 5-15 minutes (less when the scrapers are idle) and up to about 9 GB of
+memory (close other big programs).
 Results go to `data/reports/growth/<date>/<setting>/` (CSV files and `settings.json`);
 the findings text is `data/reports/findings_<date>.md`.
 

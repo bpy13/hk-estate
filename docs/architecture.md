@@ -50,6 +50,10 @@ hkestate rank
        -> data/reports/ranked_listings_<date>.csv, asking_gap_<date>.csv
        -> data/model/ranked_latest.parquet
 streamlit run app/dashboard.py -> dashboard_data.py reads data/model/ (+ run_log read-only)
+       and data/reports/growth/<newest date>/ (page "Growth study")
+hkestate datacheck
+  └─ snapshot (+ Land Registry yearly counts, cached) -> datacheck.py
+       -> data/reports/datacheck_<date>.md (verdict per check; nothing deleted)
 hkestate report                              (growth study, Phase 5)
   └─ snapshot (+ deal_pair, RVD series) -> features.deal_features (clean = exclude_reason None)
        -> pairs.py: real, ricacorp, gain (% change; check only), estimated (model value now)
@@ -57,6 +61,10 @@ hkestate report                              (growth study, Phase 5)
        -> growth.py: regression + time/district checks, repeat-sales index, drawdown
        -> study.py (all of it) -> report.py + charts.py
        -> data/reports/findings_<date>.md + findings_<date>/*.svg
+       --start/--end: one window (pairs.in_window); --settings standard: study.STANDARD,
+       pairs built once (study.prepare), one analysis per window (study.analyse)
+       -> data/reports/growth/<date>/<setting>/{effects,districts,index,returns}.csv
+          + settings.json
 ```
 
 ## Modules
@@ -86,7 +94,8 @@ hkestate report                              (growth study, Phase 5)
 | `model.py` | fair-price LightGBM: time split, index-adjusted target, conformal intervals, comparables check, TreeSHAP reasons, `model_eval.md` |
 | `gap.py` | asking-vs-deal pairs and per-district gap (5% `assumed` under 30 pairs) |
 | `rank.py` | values active sale listings, discount, confidence, cross-site dedupe, ranked CSV |
-| `dashboard_data.py` | data and filters for `app/dashboard.py` (Streamlit: ranked list, detail, model page, run banner) |
+| `dashboard_data.py` | data and filters for `app/dashboard.py` (Streamlit: ranked list, detail, model page, growth-study page, run banner) |
+| `datacheck.py` | checks on the snapshot: sales per year vs the Land Registry, duplicates, odd values, coverage (`hkestate datacheck`) |
 | `pairs.py` | repeat-sales pairs: real, Ricacorp, % change (check), estimated (Phase 5) |
 | `costs.py` | stamp duty by date (IRD tables, cited), round-trip costs, RVD yields, listing anchor |
 | `growth.py` | attribute regression (clustered by building), out-of-sample checks, robust verdicts, repeat-sales index, drawdown, RVD long-run |
