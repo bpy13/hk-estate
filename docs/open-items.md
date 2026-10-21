@@ -48,6 +48,13 @@ cache pruning.)*
   that flat out (slower). Your call whether that is worth it.
 
 ## Pending work
+- [ ] **`rank` holds the database too long and blocks the scrapers.** Its extract
+  (`features.extract`, built on the `txn_latest` views) took 6 min on 10-17, 25 min on 10-20,
+  and on 2026-10-21 was still running after 2 h 10 min once cd-history added ~970k sales. During
+  that time the daily run died on the lock at 14:30 and backfill-territory sat waiting. I killed
+  it at 16:12 and restarted the daily run. The same will happen at 14:00 on 10-22 unless the
+  extract gets faster (e.g. read base tables instead of `txn_latest`) or stops holding the lock
+  for the whole read.
 - [x] Verify current (Feb 2026) stamp duty rules on IRD pages before modelling round-trip costs.
   *(Done in Phase 5, `src/hkestate/costs.py`: the 2026-27 Budget raised residential over
   HK$100m from 4.25% to 6.5% for agreements from 26 Feb 2026 (IRD AVD FAQ, government press
