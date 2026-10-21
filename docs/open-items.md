@@ -48,6 +48,13 @@ cache pruning.)*
   that flat out (slower). Your call whether that is worth it.
 
 ## Pending work
+- **Data check leftovers (2026-10-21, after Task 4b).** Small, not blocking the analysis:
+  ~5k Centadata floor labels still unread (`G-1`, `閣` mezzanine, duplex ranges `2-3`,
+  `高層地下`, house numbers); 309 clean same-day sales of one unit at different prices (likely
+  confirmor sales, no rule yet); the first-hand rule still decides 263k unlabelled rows and
+  could be tuned against Centadata's own label (agrees on 217,503 of 222,951 labelled
+  first-hand sales). `test_connect_gives_up_after_the_wait_limit` failed once under heavy CPU
+  load and passed on rerun (timing-sensitive test).
 - **`QUARANTINE_SQL` matches nothing now.** The 14,562 wrong LOHAS Park rows were deleted
   on 2026-10-18, so the guard in `db.py` is a no-op (data check 2026-10-21). Harmless; remove
   it when convenient.
