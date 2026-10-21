@@ -73,7 +73,7 @@ throughout. The 28Hse territory backfill (about 7% done) is not waited for.
     UNION of two equi-joins, one per arm, keeping every other condition and the
     `SELECT DISTINCT`. Measured on a copy of the database 2026-10-21: the OR join was still
     running after 600 s, the split takes 0.7 s, on 2.28 million latest rows.
-- [ ] **Task 2: extract reads `txn_latest` once**
+- [x] **Task 2: extract reads `txn_latest` once**
   - Files: modify `src/hkestate/features.py` (`extract`); test `tests/test_features.py`
   - Done when: `extract` materialises `txn_latest` once into a temp table and uses it for the
     quarantine count, the agreement lag, the model's input and `srpe_buildings`; existing

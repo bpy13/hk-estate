@@ -308,16 +308,22 @@ _LISTINGS_SQL = """
 
 
 def extract(con) -> dict:
-    """Everything the model, ranking and dashboard need, in one pass over the database."""
+    """Everything the model, ranking and dashboard need, in one pass over the database.
+
+    `txn_latest` (a window over the 2.3 million txn_raw rows) is read once into a temp table;
+    every reader below uses that, so the whole extract holds the file for a minute or two
+    (2026-10-21: as a view it was re-evaluated per query and `rank` held the file for hours).
+    """
     cd_master.ensure_tables(con)
     geo.ensure_tables(con)
-    con.execute("CREATE OR REPLACE TEMP VIEW _model_latest AS "
-                f"SELECT * FROM txn_latest WHERE NOT {db.QUARANTINE_SQL}")
+    con.execute("CREATE OR REPLACE TEMP TABLE _latest AS SELECT * FROM txn_latest")
+    con.execute("CREATE OR REPLACE TEMP TABLE _model_latest AS "
+                f"SELECT * FROM _latest WHERE NOT {db.QUARANTINE_SQL}")
     quarantined = con.execute(
-        f"SELECT count(*) FROM txn_latest WHERE {db.QUARANTINE_SQL}").fetchone()[0]
+        f"SELECT count(*) FROM _latest WHERE {db.QUARANTINE_SQL}").fetchone()[0]
     lag = con.execute("""
         SELECT median(date_diff('day', instrument_date, registration_date))
-        FROM txn_latest
+        FROM _latest
         WHERE source = 'centadata' AND instrument_date >= DATE '2018-01-01'
           AND date_diff('day', instrument_date, registration_date) BETWEEN 0 AND 120
     """).fetchone()[0]
@@ -340,12 +346,14 @@ def extract(con) -> dict:
             "FROM price_index UNION ALL "
             "SELECT 'rent', series, freq, period, class, region, value FROM rent_index").df(),
         "srpe_buildings": [r[0] for r in con.execute(
-            "SELECT DISTINCT building_id FROM txn_latest "
+            "SELECT DISTINCT building_id FROM _latest "
             "WHERE source = 'srpe' AND building_id IS NOT NULL").fetchall()],
         "run_log": con.execute(
             "SELECT run_id, command, args, started_at, finished_at, status, message "
             "FROM run_log ORDER BY run_id DESC LIMIT 200").df(),
     }
+    con.execute("DROP TABLE _model_latest")  # gigabytes on the full data: free them
+    con.execute("DROP TABLE _latest")
     raw["meta"] = {
         "quarantined_rows": int(quarantined),
         "agreement_lag_days": int(round(lag)) if lag is not None else AGREEMENT_LAG_DEFAULT,
