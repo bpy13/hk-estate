@@ -185,10 +185,55 @@ def _cell(row, i) -> str:
     return re.sub(r"\s+", " ", str(row[i] or "")).strip() if i < len(row) else ""
 
 
-def _parse_row(row) -> RegisterDeal | None:
+def _lines(row, i) -> list[str]:
+    """The non-empty lines of a cell, each with its spaces tidied."""
+    text = str(row[i] or "") if i < len(row) else ""
+    return [s for s in (re.sub(r"\s+", " ", x).strip() for x in text.split("\n")) if s]
+
+
+def _parse_row(row) -> list[RegisterDeal]:
     pasp, asp = _date(_cell(row, 0)), _date(_cell(row, 1))
     if not (pasp or asp) or _date(_cell(row, 2)):  # no date, or the sale was terminated
-        return None
+        return []
+    if len(row) != _HOUSE_COLUMNS:
+        n = len(_lines(row, 3))
+        if n > 1:
+            return _parse_multi_flat_row(row, n, pasp, asp)
+    deal = _parse_single(row, pasp, asp)
+    return [deal] if deal else []
+
+
+_AMOUNT_LINE = re.compile(r"^\W*\d[\d,]*(?:\.\d+)?")
+
+
+def _parse_multi_flat_row(row, n: int, pasp, asp) -> list[RegisterDeal]:
+    """One table row that lists several flats (block, floor, unit and price cells each hold
+    one line per flat, e.g. block "3\\n3", floor "2\\n5", unit "A\\nA", price
+    "$7,281,000\\n$14,452,000"). Read as one cell the prices joined into
+    HK$728,100,014,452,000 (development 3085). Lines are paired by position; when the counts
+    differ we cannot tell which price is whose, so the row raises (and is reported skipped)."""
+    cols = [_lines(row, i) for i in (3, 4, 5)]
+    prices = [s for s in _lines(row, 7) if _AMOUNT_LINE.match(s)]
+    if any(len(c) != n for c in cols) or len(prices) != n:
+        raise ValueError(f"row lists {n} flats but its cells do not line up")
+    related = _lines(row, 10)
+    deals = []
+    for k in range(n):
+        one = [""] * len(row)
+        one[0], one[1] = row[0], row[1]
+        one[3], one[4], one[5] = cols[0][k], cols[1][k], cols[2][k]
+        one[6], one[7] = row[6], prices[k]
+        if len(related) == n:
+            one[10] = related[k]
+        elif len(row) > 10:
+            one[10] = row[10]
+        deal = _parse_single(one, pasp, asp)
+        if deal:
+            deals.append(deal)
+    return deals
+
+
+def _parse_single(row, pasp, asp) -> RegisterDeal | None:
     if len(row) == _HOUSE_COLUMNS:
         # House sales: one description cell (house number/name), parking, price, revision,
         # payment terms, related party. No block/floor/unit, so the house is the "flat".
@@ -225,13 +270,10 @@ def parse_register_rows(rows, skipped: list[str] | None = None) -> list[Register
     deals = []
     for row in rows:
         try:
-            deal = _parse_row(row)
+            deals += _parse_row(row)
         except (ValueError, OverflowError):
             if skipped is not None:
                 skipped.append(" | ".join(_cell(row, i) for i in range(len(row))))
-            continue
-        if deal:
-            deals.append(deal)
     return deals
 
 

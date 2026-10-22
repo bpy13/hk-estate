@@ -220,6 +220,25 @@ def test_price_cell_with_a_long_note_uses_only_the_first_amount():
     assert deal.price_hkd == 3_723_048
 
 
+def test_row_with_two_flats_in_its_cells_gives_one_deal_per_flat():
+    # Development 3085, PASP 2016-12-03: the PDF cells hold two lines each (block 3 floor 2 flat
+    # A at $7,281,000; block 3 floor 5 flat A at $14,452,000). Joined, the prices read as
+    # HK$728,100,014,452,000.
+    row = ["03/12/2016", "14/12/2016", "", "3\n3", "2\n5", "A\nA", "",
+           "$7,281,000\n$14,452,000", "", "Pricelist No. 7D\nPricelist No. 7D", ""]
+    deals = srpe.parse_register_rows([row])
+    assert [(d.block, d.floor, d.flat, d.price_hkd) for d in deals] == [
+        ("3", "2", "A", 7_281_000), ("3", "5", "A", 14_452_000)]
+    assert all(d.deal_date == date(2016, 12, 14) for d in deals)
+
+
+def test_row_with_mismatched_line_counts_is_skipped_not_guessed():
+    row = ["03/12/2016", "", "", "3\n3", "2\n5", "A\nA", "", "$7,281,000", "", "", ""]
+    skipped = []
+    assert srpe.parse_register_rows([row], skipped) == []
+    assert len(skipped) == 1
+
+
 def test_absurd_price_is_a_skipped_row_not_a_crash():
     # the 8805 case: digits of a note were joined into a 32-digit number
     junk = ["01/02/2016", "", "", "L1", "5", "C", "", "24420241181016001436271182348288",

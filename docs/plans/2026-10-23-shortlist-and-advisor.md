@@ -170,7 +170,9 @@ could later serve others. Going public is on hold (user, 2026-10-23: monetisatio
 
 ## Phase 2 – Location coverage and data leftovers (sonnet; Task 8 fable)
 
-- [ ] **Task 6 (main session): geocode every master building (long job)**
+- [ ] **Task 6 (main session): geocode every master building (long job)** *(started
+  2026-10-23 01:19, PID 16964, log `data\logs\geo_20261023_011933.log`; 40,406 buildings at
+  ~35 a minute, so about 19 hours, ending around 20:00 on 10-23.)*
   - Run the existing resumable `geo.geocode_buildings` in the background through ALS. It
     reads about 40,000 buildings at ALS's polite pace, roughly 11-12 hours at 1 s. Then rerun
     the MTR distance step (`python -m hkestate.geo`). Check command: `geo_status` counts in
@@ -180,7 +182,9 @@ could later serve others. Going public is on hold (user, 2026-10-23: monetisatio
   - Notes: ALS is a government service, so record its host and pace in `docs/sources.md`.
     Use a new lock `geo`. Never hold the database while waiting on ALS (short sessions per
     batch, as the master pass does).
-- [ ] **Task 7: fill missing districts** `[parallel-ok]`
+- [ ] **Task 7: fill missing districts** `[parallel-ok]` *(code and tests done 570bd54,
+  `geo.fill_districts`; live run pending: after the geocoding job, run
+  `python -m hkestate.geo --stations-only`, which now calls it.)*
   - Files: modify `src/hkestate/geo.py`. Test `tests/test_geo.py`.
   - Done when:
     - a test shows a building with no district gets one: from its ALS answer, or from the
@@ -203,7 +207,7 @@ could later serve others. Going public is on hold (user, 2026-10-23: monetisatio
     - it removes most of the non-real ones and under 10% of the real ones in the sample
 
     Green.
-- [ ] **Task 9: SRPE glued prices** `[parallel-ok]`
+- [x] **Task 9: SRPE glued prices** `[parallel-ok]`
   - Files: modify `src/hkestate/sources/srpe.py`. Test `tests/test_srpe.py`.
   - Done when: a test built from row `3085:3 3:2 5:A A:2016-12-03` (HK$728,100,014,452,000)
     gives one row per flat with one price each. Existing SRPE tests pass. Green.
