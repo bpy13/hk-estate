@@ -262,7 +262,8 @@ TABLES_DDL = [
         url           VARCHAR,
         building_text VARCHAR,
         building_id   VARCHAR,               -- master building, NULL if not matched
-        match_method  VARCHAR,               -- single, exact, fuzzy, manual, ambiguous, none
+        match_method  VARCHAR,               -- manual, single, exact, range, block_code, contains,
+                                             -- fuzzy, ambiguous, check_match, none
         floor_band    VARCHAR,               -- low, mid, high, unknown
         flat          VARCHAR,
         price_hkd     BIGINT,

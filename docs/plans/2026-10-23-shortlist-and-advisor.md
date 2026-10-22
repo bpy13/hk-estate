@@ -139,7 +139,7 @@ Checked 御海灣 in the main session: since 2024-10, 22 first-ever sales at med
 ft vs 20 second sales at HK$15,044. The master list's `me_excluded` is False for every
 building, so it finds no subsidised estate. Tasks 2-3 below follow
 `docs/ranking-diagnosis.md` section 4.)*
-- [ ] **Task 2: listing checks** (Tasks 2 and 3 go to one helper, in order)
+- [x] **Task 2: listing checks** (Tasks 2 and 3 go to one helper, in order)
   - Files: modify `src/hkestate/rank.py` and `src/hkestate/features.py` (`listing_features`
     only). Create `src/hkestate/subsidised_estates.csv` (tracked). Test `tests/test_rank.py`.
   - Done when: tests are written first and fail before the change. Each rule from
@@ -167,7 +167,15 @@ building, so it finds no subsidised estate. Tasks 2-3 below follow
     tests pass. Green.
   - Notes: rematching stored listings happens in the next daily run. Task 5 notes how many
     listings changed.
-- [ ] **Task 3: collapse duplicate listings**
+- [ ] **Task 2c: rematch already-matched territory listings** *(added after Task 2b: the
+  territory rematch in `listing_run.py` (~line 826) only touches rows with no building, so
+  the wrong matches 2b now rejects, e.g. 逸瓏灣, keep their old building.)*
+  - Files: modify `src/hkestate/listing_run.py`. Test `tests/test_territory_listings.py`.
+  - Done when: a test written first shows a territory listing matched by `contains` or
+    `single` to a building the new rules reject loses that building (or gets `check_match`)
+    at the next rematch. Rows matched `manual` or `exact` are left alone. Green.
+  - Notes: no direct database edit. The next daily run applies it.
+- [x] **Task 3: collapse duplicate listings**
   - Files: modify `src/hkestate/rank.py`. Test `tests/test_rank.py`.
   - Done when: a test shows two listings become one row when they share building, area
     within 2% and price within 2%, and their floor band and flat are equal **or either is
