@@ -16,34 +16,60 @@ from collections import defaultdict
 
 from hkestate.geo import haversine_m
 
-MIN_PER_STOP = 2.0
+MIN_PER_STOP = 2.0       # fallback when a station has no coordinates
+DWELL_MIN = 0.5          # time standing at a station
+# One average speed for every line, in metres a minute (1000 = 60 km/h) over straight-line
+# distance between stations, on top of the dwell. Chosen so that Tuen Mun to Admiralty is
+# about 44 min and Kowloon Tong to Admiralty about 10; the lines are long and fast in the
+# New Territories, so a slower figure fits the urban stretches better but misses Tuen Mun.
+SPEED_M_PER_MIN = 1000.0
 MIN_PER_CHANGE = 5.0
+# Footpaths between stations that the open data treats as separate: (a, b, walk minutes).
+# Hong Kong and Central are linked by a long walkway; TST and East TST by a subway.
+WALK_LINKS = [("HOK", "CEN", 5.0), ("TST", "ETS", 4.0)]
 WALK_DETOUR = 1.3        # streets are longer than the straight line
 WALK_M_PER_MIN = 80.0
 EXCLUDED_LINES = {"AEL"}
 NEAREST_STATIONS = 2
 
 # graph: node (station code, line code) -> list of neighbour nodes (one stop apart)
-Graph = dict[tuple[str, str], set[tuple[str, str]]]
+Graph = dict[tuple[str, str], dict[tuple[str, str], float]]
 
 
-def build_graph(csv_text: str) -> Graph:
+def build_graph(csv_text: str, coords: dict[str, tuple[float, float]] | None = None) -> Graph:
     """Line graph from the open-data CSV text. Each (station, line) is a node; stops that are
-    next to each other on a line (in any direction/branch sequence) are joined. Changing line
-    at a station is handled in the search, because it costs minutes rather than stops."""
+    next to each other on a line (in any direction/branch sequence) are joined, with the
+    minutes between them: dwell + straight-line distance / speed when `coords` ({station code:
+    (lat, lon)}) has both stations, else MIN_PER_STOP. Changing line at a station is handled
+    in the search, because it costs minutes rather than stops. Walking links join stations
+    the file does not connect (no line-change cost)."""
     rows: dict[tuple[str, str], list[tuple[float, str]]] = defaultdict(list)
     for r in csv.DictReader(io.StringIO(csv_text.lstrip("﻿"))):
         line, code = r["Line Code"], r["Station Code"]
         if line in EXCLUDED_LINES or not code:
             continue
         rows[(line, r["Direction"])].append((float(r["Sequence"]), code))
-    graph: Graph = defaultdict(set)
+    coords = coords or {}
+    graph: Graph = defaultdict(dict)
     for (line, _direction), stops in rows.items():
         stops.sort()
         for (_, a), (_, b) in zip(stops, stops[1:], strict=False):
             if a != b:
-                graph[(a, line)].add((b, line))
-                graph[(b, line)].add((a, line))
+                if a in coords and b in coords:
+                    d = haversine_m(*coords[a], *coords[b])
+                    mins = DWELL_MIN + d / SPEED_M_PER_MIN
+                else:
+                    mins = MIN_PER_STOP
+                graph[(a, line)][(b, line)] = mins
+                graph[(b, line)][(a, line)] = mins
+    by_station: dict[str, list[tuple[str, str]]] = defaultdict(list)
+    for node in list(graph):
+        by_station[node[0]].append(node)
+    for a, b, walk in WALK_LINKS:
+        for na in by_station.get(a, []):
+            for nb in by_station.get(b, []):
+                graph[na][nb] = walk
+                graph[nb][na] = walk
     return dict(graph)
 
 
@@ -66,9 +92,9 @@ def train_minutes(graph: Graph, origin: str, dest: str) -> float | None:
         best[node] = cost
         if node[0] == dest:
             return cost
-        for nxt in graph[node]:
+        for nxt, step in graph[node].items():
             if nxt not in best:
-                heapq.heappush(heap, (cost + MIN_PER_STOP, nxt))
+                heapq.heappush(heap, (cost + step, nxt))
         for other in by_station[node[0]]:  # change line at this station
             if other[1] != node[1] and other not in best:
                 heapq.heappush(heap, (cost + MIN_PER_CHANGE, other))

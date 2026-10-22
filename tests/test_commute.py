@@ -58,3 +58,59 @@ def test_minutes_takes_best_of_two_nearest_stations():
     m2 = commute.minutes(22.3315, 114.1688, "ADM", stations, G)
     walk_kot = commute.walk_minutes(22.3315, 114.1688, stations[0])
     assert m2 == pytest.approx(min(15, walk_kot + 8), abs=0.5)
+
+
+# ---- distance-based times (Task 14b) ------------------------------------------------------------
+
+STEP_M = 1111.9  # 0.01 degrees of latitude
+# the East Rail stations in a straight line, 0.01 degrees apart
+LINE_COORDS = {c: (22.30 + 0.01 * i, 114.17)
+               for i, c in enumerate(["KOT", "MKK", "HUH", "EXC", "ADM"])}
+
+
+def test_with_coordinates_each_stop_is_half_a_minute_plus_distance_over_speed():
+    g = commute.build_graph(CSV, LINE_COORDS)
+    per_stop = commute.DWELL_MIN + STEP_M / commute.SPEED_M_PER_MIN
+    assert commute.train_minutes(g, "KOT", "ADM") == pytest.approx(4 * per_stop, rel=0.01)
+    assert commute.DWELL_MIN == 0.5
+
+
+def test_missing_coordinates_fall_back_to_two_minutes_a_stop():
+    partial = {k: v for k, v in LINE_COORDS.items() if k != "HUH"}  # HUH has no position
+    g = commute.build_graph(CSV, partial)
+    per_stop = commute.DWELL_MIN + STEP_M / commute.SPEED_M_PER_MIN
+    # KOT-MKK has coordinates; MKK-HUH, HUH-EXC fall back to 2; EXC-ADM has coordinates
+    assert commute.train_minutes(g, "KOT", "ADM") == pytest.approx(2 * per_stop + 4, rel=0.01)
+
+
+def test_no_coordinates_is_the_stop_count_estimate():
+    assert commute.train_minutes(commute.build_graph(CSV, None), "KOT", "ADM") == 8
+
+
+def test_average_speed_is_a_plausible_train_speed():
+    assert 600 <= commute.SPEED_M_PER_MIN <= 1200  # 36-72 km/h between stations
+
+
+WALK_CSV = HEADER + (
+    _rows("TCL", "DT", [(1, "TST"), (2, "HOK")])
+    + _rows("TWL", "UT", [(1, "CEN"), (2, "ADM")])
+    + _rows("TML", "UT", [(1, "ETS"), (2, "HUH")])
+    + _rows("EAL", "UT", [(1, "TST"), (2, "MKK")])
+)
+
+
+def test_walking_link_hong_kong_to_central_is_five_minutes():
+    g = commute.build_graph(WALK_CSV)
+    # HOK -> CEN walk 5, then one stop CEN -> ADM at the 2-minute fallback, no change cost
+    assert commute.train_minutes(g, "HOK", "ADM") == 5 + 2
+    assert commute.train_minutes(g, "ADM", "HOK") == 5 + 2
+
+
+def test_walking_link_tsim_sha_tsui_to_east_tsim_sha_tsui_is_four_minutes():
+    g = commute.build_graph(WALK_CSV)
+    assert commute.train_minutes(g, "TST", "HUH") == 4 + 2
+
+
+def test_walking_link_needs_both_stations():
+    g = commute.build_graph(HEADER + _rows("TCL", "DT", [(1, "HOK"), (2, "KOW")]))
+    assert commute.train_minutes(g, "HOK", "CEN") is None
