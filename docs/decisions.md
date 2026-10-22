@@ -524,7 +524,13 @@ weighted average by the profile's goal weights.
   effects from `effects.csv`, robust verdicts only, summed for the attributes the flat has:
   50 + 25 points per percentage point a year; rent yield (rent.py estimate x 12 / asking):
   100 at 6%; listing discount: 50 + 500 x discount (10% below fair price = 100), only for
-  normal-confidence rows. **Investment (rent)** = 50 + 500 x (1 - asking / rent estimate).
+  normal-confidence rows. **Investment (rent)** = 50 + 500 x (1 - asking / reference rent).
+  (changed 2026-10-23 after the pre-release review; it used the raw estimate whatever its
+  basis) The reference compares like with like by size: at the estimate's level (building,
+  estate or district), the median rent per sq ft of the other active rent listings within
+  +/-30% of the flat's area when 5 or more exist, else the level's median. Same trust rule
+  as for buying: a district reference is capped at the district's median rent per sq ft (all
+  sizes); an RVD-average estimate scores unknown ("no rent listings near this flat").
 - **Rent-yield trust** (Task 18b): the yield part counts in full only when the rent estimate
   rests on the building's or estate's own rent listings. A district-level estimate is pulled
   halfway to the district's median yield (the study's `rental_yield`; counts half when the
@@ -561,6 +567,12 @@ weighted average by the profile's goal weights.
   shift keeps low <= mid <= high. Without the study: 3%/yr +/- 3 pp, marked a guess. On the
   10-22 study, 10 years: 灣仔區 4.8% (-0.6 to 9.1), 沙田區 3.9% (-1.2 to 8.6).
 - **Rent growth** = price growth unless given (rents and prices move together long run).
+- **Which rent** (changed 2026-10-23 after the pre-release review; it used the raw estimate,
+  so district and RVD guesses fed every listing's figure): `advisor.comparison_rent`, the
+  same trust rule as the score's yield part. Building or estate rents as they are; a
+  district-level rent capped at the district's median yield x price (used as it is when the
+  study has no median for the district); an RVD-average rent gives no buy-vs-rent figures,
+  and the listing and its dashboard card say "no reliable rent figure for this building".
 - **Buying** counts: stamp duty (costs.py, the profile's buyer type, agreement date = today);
   agent 1% on the purchase and 1% on the sale; legal 0.3% once (costs.py's convention);
   mortgage interest at the profile's rate on the largest loan HKMA rules allow

@@ -59,6 +59,7 @@ DISTRICT_YIELD_PULL = 0.5      # a district-level rent estimate: yield pulled ha
 #                                estimates count in full, an RVD-average estimate not at all
 SAME_FLAT_TOLERANCE = 0.02     # same building and flat letter, area within 2% ...
 SAME_FLAT_PRICE_GAP = 0.05     # ... and asking within 5% of the cheaper: one flat
+SIZE_MATCH = 0.30              # rent intent: compare with listings within +/-30% of the area
 
 # ---- buy-vs-rent and sell-vs-let assumptions (Task 19; docs/decisions.md) -------------------
 # Rates: 5% of the rateable value, taken here as the flat's annual rent (Rating and
@@ -515,10 +516,8 @@ def _yield_part(row, district, data: AdvisorData) -> tuple[float, str]:
     y = est * 12 / row["price_hkd"]
     if basis in ("building", "estate"):
         return _clip(y * 100 / YIELD_FULL_PCT * 100), f"rent yield {y * 100:.1f}% ({basis} rents)"
-    med = data.district_growth["rental_yield"].get(district) if isinstance(district, str) \
-        and "rental_yield" in data.district_growth else None
-    if med is not None and pd.notna(med):
-        med = float(med)
+    med = _district_median_yield(district, data)
+    if med is not None:
         pulled = (1 - DISTRICT_YIELD_PULL) * y + DISTRICT_YIELD_PULL * med
         if pulled > med:  # a guess from district rents never earns more than a typical flat
             return (_clip(med * 100 / YIELD_FULL_PCT * 100),
@@ -531,21 +530,69 @@ def _yield_part(row, district, data: AdvisorData) -> tuple[float, str]:
             f"rent yield {y * 100:.1f}% (district rents; counts half)")
 
 
+_LEVEL_COLUMN = {"building": "building_id", "estate": "estate_key", "district": "district"}
+
+
+def _rent_references(c: pd.DataFrame, data: AdvisorData) -> tuple[dict, dict]:
+    """Rent intent's reference rent per listing and the words saying where it comes from
+    (changed 2026-10-23 after the pre-release review; it was the raw estimate, whatever its
+    basis and the flat's size). Like with like by size: at the estimate's level (building,
+    estate or district) the median rent per sq ft of the other active listings within
+    +/-SIZE_MATCH of the flat's area, when rent.MIN_LISTINGS or more exist; otherwise the
+    level's median (the estimate itself). The same trust rule as for buying: a district
+    reference never exceeds the district's median rent per sq ft (all sizes), and an
+    RVD-average estimate gives no reference (value unknown)."""
+    pool = data.rent_listings
+    groups: dict = {}
+    if not pool.empty:
+        psf = pool["rent"].astype(float) / pool["area_sqft"].astype(float)
+        p = pool.assign(_psf=psf)
+        for level, col in _LEVEL_COLUMN.items():
+            groups[level] = {k: (g["area_sqft"].to_numpy(float), g["_psf"].to_numpy(float),
+                                 g["key"].to_numpy(object))
+                             for k, g in p.dropna(subset=[col]).groupby(col)}
+    refs, hows = {}, {}
+    for i, row in c.iterrows():
+        est, basis, area = row["rent_est"], row["rent_basis"], row["area_sqft"]
+        if basis == "rvd":
+            refs[i], hows[i] = np.nan, "value unknown (no rent listings near this flat)"
+            continue
+        if basis not in _LEVEL_COLUMN or not (pd.notna(est) and est > 0 and area > 0):
+            refs[i], hows[i] = np.nan, "value unknown (no rent estimate)"
+            continue
+        level_psf = est / area  # the level's median rent per sq ft, all sizes
+        ref_psf, how = level_psf, f"{basis} level"
+        g = groups.get(basis, {}).get(row[_LEVEL_COLUMN[basis]])
+        if g is not None:
+            areas, psfs, keys = g
+            near = ((areas >= area * (1 - SIZE_MATCH)) & (areas <= area * (1 + SIZE_MATCH))
+                    & (keys != row["key"]))
+            if near.sum() >= rent.MIN_LISTINGS:
+                ref_psf = float(np.median(psfs[near]))
+                how = f"{int(near.sum())} {basis} listings of a similar size"
+        if basis == "district" and ref_psf > level_psf:
+            ref_psf = level_psf
+            how += ", capped at the district median"
+        refs[i], hows[i] = ref_psf * area, how
+    return refs, hows
+
+
 def _score_investment(c: pd.DataFrame, profile: Profile, data: AdvisorData
                       ) -> tuple[pd.Series, pd.Series]:
     scores, whys = [], []
-    for _, row in c.iterrows():
+    if profile.intent == "rent":
+        refs, hows = _rent_references(c, data)
+    for i, row in c.iterrows():
         if profile.intent == "rent":
-            est = row["rent_est"]
-            if not pd.notna(est) or not est > 0:
+            ref, how = refs[i], hows[i]
+            if not pd.notna(ref):
                 scores.append(np.nan)
-                whys.append("value unknown (no rent estimate)")
+                whys.append(how)
                 continue
-            fit = 1 - row["price_hkd"] / est
+            fit = 1 - row["price_hkd"] / ref
             scores.append(_clip(50 + DISCOUNT_TO_POINTS * fit))
-            whys.append(f"asking HK${row['price_hkd']:,.0f} vs estimate HK${est:,.0f} "
-                        f"({abs(fit) * 100:.0f}% {'below' if fit >= 0 else 'above'}, "
-                        f"{row['rent_basis']} level)")
+            whys.append(f"asking HK${row['price_hkd']:,.0f} vs HK${ref:,.0f} "
+                        f"({abs(fit) * 100:.0f}% {'below' if fit >= 0 else 'above'}; {how})")
             continue
         subs, parts = [], []
         d = row["district"]
@@ -940,30 +987,62 @@ def advise_owner(building_id: str, area_sqft: float, data: AdvisorData,
     return out
 
 
+NO_RELIABLE_RENT = "no reliable rent figure for this building"
+
+
+def _district_median_yield(district, data: AdvisorData) -> float | None:
+    med = data.district_growth["rental_yield"].get(district) if isinstance(district, str) \
+        and "rental_yield" in data.district_growth else None
+    return float(med) if med is not None and pd.notna(med) else None
+
+
+def comparison_rent(est, basis, price, district, data: AdvisorData) -> tuple[float, str]:
+    """The monthly rent buy-vs-rent may use, by the same trust rule as the score's yield part
+    (changed 2026-10-23 after the pre-release review; it used the raw estimate): building or
+    estate rents as they are; a district-level rent capped at the district's median yield x
+    price / 12 (as it is when the study has no median for the district); an RVD-average rent
+    or none: NaN. Returns (rent, note), the note naming a cap or why there is no rent."""
+    if not (pd.notna(est) and est > 0 and pd.notna(price) and price > 0):
+        return np.nan, "no rent estimate"
+    if basis in ("building", "estate"):
+        return float(est), ""
+    if basis == "district":
+        med = _district_median_yield(district, data)
+        if med is not None and est > med * price / 12:
+            return med * price / 12, (f"capped at the district's median yield "
+                                      f"{med * 100:.1f}%")
+        return float(est), ""
+    return np.nan, NO_RELIABLE_RENT
+
+
 def _vs_renting(c: pd.DataFrame, profile: Profile, data: AdvisorData) -> pd.DataFrame:
     """Per buy listing: the buy-vs-rent difference (mid, low, high; HK$, positive = buying
-    cheaper) and a one-line text, at the district's growth range. NaN and 'unknown' without
-    a rent estimate."""
+    ahead) and a one-line text, at the district's growth range, on the rent
+    `comparison_rent` trusts. NaN and a note without one."""
     c = c.copy()
     for col in ("vs_rent_hkd", "vs_rent_low_hkd", "vs_rent_high_hkd"):
         c[col] = np.nan
     c["vs_rent"] = "vs renting: unknown (no rent estimate)"
     ranges: dict = {}
     for i, row in c.iterrows():
-        est = row["rent_est"]
-        if not (pd.notna(est) and est > 0 and row["price_hkd"] > 0):
-            continue
         d = row["district"] if isinstance(row["district"], str) else None
+        est, note = comparison_rent(row["rent_est"], row["rent_basis"], row["price_hkd"], d,
+                                    data)
+        if not pd.notna(est):
+            if note == NO_RELIABLE_RENT:
+                c.at[i, "vs_rent"] = f"vs renting: {NO_RELIABLE_RENT}"
+            continue
         if d not in ranges:
             ranges[d] = growth_range(d, profile.years, data)
-        r = buy_vs_rent(float(row["price_hkd"]), float(est), profile.years, profile.rate,
+        r = buy_vs_rent(float(row["price_hkd"]), est, profile.years, profile.rate,
                         ranges[d], buyer=profile.buyer, mortgage_years=profile.mortgage_years,
                         on=data.today)
         cs = r["cases"]
         c.at[i, "vs_rent_hkd"] = cs["mid"]["difference"]
         c.at[i, "vs_rent_low_hkd"] = cs["low"]["difference"]
         c.at[i, "vs_rent_high_hkd"] = cs["high"]["difference"]
-        c.at[i, "vs_rent"] = (f"vs renting a similar flat (HK${est:,.0f}/month): "
+        c.at[i, "vs_rent"] = (f"vs renting a similar flat (HK${est:,.0f}/month"
+                              + (f", {note}" if note else "") + f"): "
                               f"{r['verdict']}; growth {ranges[d].mid * 100:.1f}%/yr "
                               f"({ranges[d].low * 100:.1f} to {ranges[d].high * 100:.1f})")
     return c

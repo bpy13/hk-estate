@@ -236,10 +236,47 @@ def test_rent_intent_ranks_by_fit_to_the_rent_estimate(data):
     r = advisor.recommend(p, data).listings
     assert r.iloc[0]["listing_id"] == "CHEAP"  # 20% under the building's level -> 100
     assert r.iloc[0]["score_investment"] == 100
-    assert "20% below, building level" in r.iloc[0]["reason"]
+    assert "20% below; 5 building listings of a similar size" in r.iloc[0]["reason"]
     assert r.iloc[-1]["listing_id"] == "DEAR"  # 50% over -> 0
     assert r.iloc[-1]["score_investment"] == 0
     assert (r["price_hkd"] <= 30_000).all()
+
+
+def test_rent_intent_trusts_the_rent_and_compares_like_sizes(data):
+    """Rent intent (changed 2026-10-23 after the pre-release review): the reference rent is
+    the median rent per sq ft of the other listings at the estimate's level (building, estate
+    or district) within +/-30% of the flat's area when 5 or more exist; a district reference
+    is capped at the district's median rent per sq ft; RVD averages score unknown."""
+    rows = (_rent_rows("b-harbour", 40.0, 5) + _rent_rows("b-harbour", 25.0, 5, area=1000.0)
+            + [{**_rent_rows("b-harbour", 32.0, 1)[0], "listing_id": "CHEAP"},
+               {**_rent_rows("b-harbour", 26.0, 1, area=1000.0)[0], "listing_id": "BIG"},
+               {**_rent_rows("b-mid", 30.0, 1)[0], "listing_id": "MIDR"},
+               {**_rent_rows("b-sunny", 30.0, 1)[0], "listing_id": "SUNNY"}])
+    raw = pd.DataFrame(rows)
+    li = rent.clean_rent_listings(raw).assign(month=pd.Timestamp("2026-08-01"))
+    model_ =rent.RentModel.from_frames(li, BUILDINGS[["estate_key", "district"]], _rvd())
+    d = replace(data, rent_listings=advisor.rent_candidates({"listings": raw}, BUILDINGS),
+                rent_model=model_)
+    p = advisor.Profile(intent="rent", weights={"investment": 1}, allow_unknown=True)
+    r = advisor.recommend(p, d).listings.set_index("listing_id")
+    # BIG (1,000 sq ft at HK$26) against the building's other 900-1,300 sq ft flats (HK$25),
+    # not the whole building's median (HK$29, mostly small flats): 4% above -> 50 - 20 = 30
+    big = r.loc["BIG"]
+    assert big["score_investment"] == pytest.approx(30)
+    assert "asking HK$26,000 vs HK$25,000 (4% above; 5 building listings of a similar size)" \
+        in big["reason"]
+    # CHEAP still 20% under its 500 sq ft neighbours (HK$40) -> 100
+    assert r.loc["CHEAP", "score_investment"] == 100
+    # MIDR (Mid Tower, no listings of its own) falls to 灣仔區: similar sizes say HK$40, but
+    # a district reference is capped at the district median, HK$30 a sq ft: 0% -> 50
+    midr = r.loc["MIDR"]
+    assert midr["rent_basis"] == "district"
+    assert midr["score_investment"] == pytest.approx(50)
+    assert "capped at the district median" in midr["reason"]
+    # SUNNY (屯門區, nothing near it) has only the RVD average: unknown, never good
+    sunny = r.loc["SUNNY"]
+    assert sunny["rent_basis"] == "rvd" and np.isnan(sunny["score_investment"])
+    assert sunny["reason"] == "value unknown (no rent listings near this flat)"
 
 
 def test_rent_intent_uses_the_same_living_goals(data):
@@ -442,6 +479,34 @@ def test_buy_listings_carry_a_vs_renting_line(data):
     none = advisor.recommend(INVESTOR, _data_without_rent()).listings.iloc[0]
     assert none["vs_rent"] == "vs renting: unknown (no rent estimate)"
     assert np.isnan(none["vs_rent_hkd"])
+
+
+def test_vs_renting_trusts_the_rent_like_the_score_does(data):
+    """The same trust rule as the yield part of the score (changed 2026-10-23 after the
+    pre-release review): a district-level rent is capped at the district's median yield x
+    price, and an RVD-average rent gives no buy-vs-rent figures at all."""
+    r = advisor.recommend(INVESTOR, data).listings.set_index("key")
+    # L3: district rents say 40 x 600 = 24,000 a month on a 6.5m flat (4.4%); 灣仔區's
+    # median yield is 3.0%, so the comparison uses 6.5m x 3% / 12 = 16,250
+    l3 = r.loc["L3"]
+    assert l3["vs_rent"].startswith("vs renting a similar flat (HK$16,250/month, capped at "
+                                    "the district's median yield 3.0%)")
+    capped = advisor.buy_vs_rent(6_500_000, 16_250, 10, 0.035,
+                                 advisor.growth_range("灣仔區", 10, data), on=TODAY)
+    assert l3["vs_rent_hkd"] == pytest.approx(capped["cases"]["mid"]["difference"])
+    assert advisor.comparison_rent(24_000, "district", 6_500_000, "灣仔區", data)[0] == 16_250
+    # a district rent below the median yield is used as it is; building rents always are
+    assert advisor.comparison_rent(12_000, "district", 6_500_000, "灣仔區", data)[0] == 12_000
+    assert advisor.comparison_rent(40_000, "building", 6_500_000, "灣仔區", data)[0] == 40_000
+    # RVD average only: no figures
+    raw = pd.DataFrame(_rent_rows("b-harbour", 40.0, 5))
+    li = rent.clean_rent_listings(raw).assign(month=pd.Timestamp("2026-08-01"))
+    only_harbour = rent.RentModel.from_frames(li, BUILDINGS[["estate_key", "district"]], _rvd())
+    l2 = advisor.recommend(INVESTOR, replace(data, rent_model=only_harbour)).listings \
+        .set_index("key").loc["L2"]
+    assert l2["rent_basis"] == "rvd"
+    assert l2["vs_rent"] == "vs renting: no reliable rent figure for this building"
+    assert np.isnan(l2["vs_rent_hkd"])
 
 
 def _price_index():

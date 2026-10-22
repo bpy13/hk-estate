@@ -363,6 +363,29 @@ def test_plan_cards_for_an_investor(plan):
     assert out.notes == [] or all("station" not in n for n in out.notes)
 
 
+def test_plan_cards_use_the_trusted_rent(plan):
+    """Buy-vs-rent on a card uses the same trusted rent as the advisor (changed 2026-10-23
+    after the pre-release review): Mid Tower's district rent (24,000) is capped at 灣仔區's
+    median yield (16,250); with only government averages there are no figures."""
+    from dataclasses import replace
+
+    import test_advisor as ta
+
+    from hkestate import rent
+    p = dd.plan_profile({"intent": "buy", "goals": {"investment": 3}, "budget": 10_000_000}, plan)
+    mid = [c for c in dd.plan_cards(p, plan).listings if c.title.startswith("Mid Tower")][0]
+    assert any("about HK$16,250 a month" in f and "capped at the district's median yield" in f
+               for f in mid.facts), mid.facts
+    assert len(mid.money) == 3
+    raw = pd.DataFrame(ta._rent_rows("b-harbour", 40.0, 5))
+    li = rent.clean_rent_listings(raw).assign(month=pd.Timestamp("2026-08-01"))
+    only = rent.RentModel.from_frames(li, ta.BUILDINGS[["estate_key", "district"]], ta._rvd())
+    out = dd.plan_cards(p, replace(plan, rent_model=only))
+    sunny = [c for c in out.listings if c.title.startswith("Sunny Garden")][0]
+    assert sunny.money == []
+    assert any("no reliable rent figure for this building" in f for f in sunny.facts)
+
+
 def test_plan_cards_for_a_family(plan):
     p = dd.plan_profile({"intent": "buy", "goals": {"near_place": 3, "school": 2, "space": 3},
                          "budget": 10_000_000, "min_sqft": 600, "min_rooms": 3,

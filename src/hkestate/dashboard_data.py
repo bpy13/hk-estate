@@ -405,7 +405,9 @@ LEFT_OUT_WORDS = {"budget": "over the budget (or failing the mortgage test)",
                   "size": "too small", "rooms": "too few rooms",
                   "commute": "too far, or commute unknown",
                   "school_net": "in another school net, or net unknown"}
-NO_STATIONS_NOTE = "No commute times yet: commute times appear once station data is loaded."
+NO_RELIABLE_RENT_TEXT = (f"{advisor.NO_RELIABLE_RENT} (only government average rents), so "
+                         "no buy-or-rent figures")
+NO_STATIONS_NOTE ="No commute times yet: commute times appear once station data is loaded."
 
 
 @dataclass
@@ -568,19 +570,24 @@ def _listing_card(row, profile: advisor.Profile, data: advisor.AdvisorData,
     if buy and disc is not None and row["confidence"] == "normal":
         facts.append(f"{abs(disc) * 100:.0f}% {'below' if disc >= 0 else 'above'} our "
                      f"fair-price estimate ({_hk(row['fair_hkd'], 2)})")
-    est = _num(row["rent_est"])
     money: list[str] = []
     if buy:
-        if est and est > 0:
+        # the rent the advisor trusts for buy-vs-rent (capped district rents, no RVD averages)
+        d = row["district"] if isinstance(row["district"], str) else None
+        est, note = advisor.comparison_rent(row["rent_est"], row["rent_basis"],
+                                            row["price_hkd"], d, data)
+        if pd.notna(est):
+            how = BASIS_WORDS.get(row["rent_basis"], row["rent_basis"])
             facts.append(f"Renting a similar flat: about HK${est:,.0f} a month "
-                         f"({BASIS_WORDS.get(row['rent_basis'], row['rent_basis'])})")
-            d = row["district"] if isinstance(row["district"], str) else None
+                         f"({how}" + (f", {note}" if note else "") + ")")
             if d not in ranges:
                 ranges[d] = advisor.growth_range(d, profile.years, data)
             r = advisor.buy_vs_rent(float(row["price_hkd"]), est, profile.years, profile.rate,
                                     ranges[d], buyer=profile.buyer,
                                     mortgage_years=profile.mortgage_years, on=data.today)
             money = _case_lines(r["cases"], profile.years, "buying", "renting")
+        elif note == advisor.NO_RELIABLE_RENT:
+            facts.append(f"Renting a similar flat: {NO_RELIABLE_RENT_TEXT}")
         else:
             facts.append("Renting a similar flat: no rent estimate, so no buy-or-rent figures")
     district = row["district"]
