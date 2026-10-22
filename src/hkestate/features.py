@@ -64,6 +64,9 @@ AGREEMENT_LAG_DEFAULT = 14
 # building's flats first sold within those 24 months, and not before 1998 (the data starts in
 # 1995, so an early first deal says nothing about the building's age).
 FIRST_HAND_WINDOW_DAYS = 730
+# Buildings completed in 2010 or later: 72 months (see docs/decisions.md, 2026-10-23).
+NEW_BUILDING_FROM_YEAR = 2010
+NEW_BUILDING_WINDOW_DAYS = 2191
 FIRST_DEAL_ANCHOR_MIN = pd.Timestamp("1998-01-01")
 LAUNCH_MIN_SHARE = 0.25
 
@@ -276,7 +279,13 @@ def first_hand_rule(df: pd.DataFrame) -> pd.Series:
     from_first = d["building_id"].map(b_first).where(
         d["building_id"].map(launch).fillna(False).astype(bool))
     anchor = anchor.where(anchor.notna(), from_first)
-    within = d["agreement_date"] < anchor + pd.Timedelta(days=FIRST_HAND_WINDOW_DAYS)
+    # Newer buildings: developers release flats slowly, so first-ever sales 24-72 months after
+    # completion are still developer sales (priced ~1.12x resales). Only for a completion date;
+    # an anchor taken from the building's first deal keeps 24 months.
+    completed = pd.to_datetime(d["anchor_date"])
+    days = np.where(completed.dt.year >= NEW_BUILDING_FROM_YEAR,
+                    NEW_BUILDING_WINDOW_DAYS, FIRST_HAND_WINDOW_DAYS)
+    within = d["agreement_date"] < anchor + pd.to_timedelta(days, unit="D")
     srpe = d["srpe_building"].fillna(False).astype(bool)
     return (is_first & anchor.notna() & within & ~srpe).fillna(False).astype(bool)
 

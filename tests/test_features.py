@@ -108,12 +108,30 @@ def test_first_hand_rule_compares_early_sales_with_all_flats_in_the_building():
 
 def test_first_hand_rule_with_completion_date():
     df = _rule_frame([
-        # completed 2020-06: a flat's first deal before 2022-06 is a developer sale
+        # completed 2020-06 (2010 or later: 72-month window): a flat's first deal before
+        # 2026-06 is a developer sale
         ("b|1|A", "b", pd.Timestamp("2020-03-01"), pd.Timestamp("2020-06-01"), False),
         ("b|1|A", "b", pd.Timestamp("2023-05-01"), pd.Timestamp("2020-06-01"), False),
-        ("b|2|A", "b", pd.Timestamp("2023-01-01"), pd.Timestamp("2020-06-01"), False),
+        ("b|2|A", "b", pd.Timestamp("2027-01-01"), pd.Timestamp("2020-06-01"), False),
     ])
     assert list(features.first_hand_rule(df)) == [True, False, False]
+
+
+def test_first_hand_window_is_72_months_for_buildings_completed_2010_or_later():
+    new = pd.Timestamp("2015-06-01")
+    old = pd.Timestamp("2005-06-01")
+    df = _rule_frame([
+        # first-ever sale 50 months after completion
+        ("n|1|A", "n", new + pd.DateOffset(months=50), new, False),
+        # a second sale of a flat is never first-hand
+        ("n|1|A", "n", new + pd.DateOffset(months=55), new, False),
+        # first sale 73 months after completion: outside the window
+        ("n|2|A", "n", new + pd.DateOffset(months=73), new, False),
+        # the same 50 months in a building completed before 2010: window stays 24 months
+        ("o|1|A", "o", old + pd.DateOffset(months=50), old, False),
+        ("o|2|A", "o", old + pd.DateOffset(months=20), old, False),
+    ])
+    assert list(features.first_hand_rule(df)) == [True, False, False, False, True]
 
 
 def test_first_hand_rule_from_first_deal_needs_a_cluster_of_early_sales():

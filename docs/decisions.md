@@ -482,6 +482,17 @@ index flat or falling). On the snapshot the rule removes 485 clean sales (1990s 
 193, 2010s 100, 2020s 67; 45 of them under HK$1,000/sq ft). The shared `txn` view is
 unchanged; the rule lives in the model's feature table only.
 
+- **First-hand window for newer buildings (2026-10-23, Claude's call).** In buildings with a
+  completion date in 2010 or later, a flat's first-ever sale counts as a developer sale up to
+  72 months after completion (was 24). Older buildings, and launches anchored on the
+  building's first deal (no completion date), keep 24 months. Why: developers of newer
+  buildings (e.g. 御海灣) release flats slowly, and those sales sit well above resales
+  (diagnosis section 2.5). On the snapshot the change removes 5,012 clean sales (by completion
+  year: 2010-13 491, 2014-17 1,079, 2018-21 1,674, 2022+ 1,768; by sale year mostly 2024-26,
+  2,773). Against other clean sales of the same building and year they are priced 1.05x at the
+  median (2,793 matched; 1.24x for 2010-13, 1.01x for 2014-17, 1.07x for 2018-21, 1.05x for
+  2022+), less than the diagnosis's 1.12x. Takes effect at the Task 11 retrain.
+
 ## Repository
 - **Public GitHub repo `hk-estate` on account `bpy13`** (2026-10-16). Because it is public:
   scraped data, the database and raw-page cache are never committed (`data/` ignored), and no
