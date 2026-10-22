@@ -265,11 +265,15 @@ def test_yield_counts_by_how_near_the_rent_evidence_is(data):
     r = advisor.recommend(INVESTOR, data).listings.set_index("key")
     # L3 (b-mid, no rent listings in its building or estate) falls to 灣仔區's 5 listings at
     # HK$40/sq ft: 40 x 600 x 12 / 6.5m = 4.4%, pulled halfway to the district median 3.0%
-    # -> 3.7%, scored 3.715 / 6 x 100 = 61.9
+    # -> 3.7%, then capped at the median itself: 3.0%, scored 3.0 / 6 x 100 = 50
     l3 = r.loc["L3"]
-    assert "rent yield 4.4% (district rents; scored as 3.7%, halfway to the district median " \
+    assert "rent yield 4.4% (district rents; scored as 3.0%, capped at the district median " \
            "3.0%)" in l3["reason"]
-    y3 = (0.5 * (40 * 600 * 12 / 6_500_000) + 0.5 * 0.03) * 100 / 6 * 100
+    y3 = 0.03 * 100 / 6 * 100
+    # a yield below the median is only pulled up halfway, never past the median
+    row = pd.Series({"rent_est": 20 * 600, "rent_basis": "district", "price_hkd": 6_500_000})
+    low_score, _ = advisor._yield_part(row, "灣仔區", data)
+    assert low_score == pytest.approx((0.5 * (20 * 600 * 12 / 6_500_000) + 0.015) * 100 / 6 * 100)
     # district 5%/yr -> 62.5; no robust attribute -> 50; yield 61.9; discount unknown -> 0
     assert l3["score_investment"] == pytest.approx((62.5 + 50 + y3 + 0) / 4, abs=0.1)
     # with rent listings only in Harbour Court, Sunny Garden's flat (屯門區, no listings)

@@ -521,6 +521,9 @@ weighted average by the profile's goal weights.
   study has none). An RVD-average estimate (no listings near the flat) scores the yield part
   as unknown (0). The reason names the basis: "rent yield 3.4% (estate rents)". On the
   10-22 snapshot 5,996 of 13,091 investor candidates had district-level rents.
+  Capped (Task 21 helper): a district-level estimate's scored yield never exceeds the
+  district's median yield, so cheap old flats with district rent guesses cannot max the yield
+  part. The investor top 5 on the 10-22 snapshot is unchanged (all estate or building rents).
 - **Near a place** = 100 at 15 minutes or less, 0 at 60 or more, linear; minutes are the
   average over the chosen stations of `commute.minutes`.
 - **School** = 100 when the building's net is the profile's, else 0.

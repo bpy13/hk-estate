@@ -484,7 +484,7 @@ def _yield_part(row, district, data: AdvisorData) -> tuple[float, str]:
     """The rent-yield part of the investment score, by how much the rent estimate can be
     trusted: a building or estate estimate counts in full; a district estimate is pulled
     halfway to the district's median yield (the growth study's `rental_yield`), or counts
-    half when the study has none; an RVD-average estimate (no listings near the flat at all)
+    half when the study has none, and never above that median; an RVD-average estimate (no listings near the flat at all)
     scores unknown. The reason names the basis: 'rent yield 3.4% (estate rents)'."""
     est, basis = row["rent_est"], row["rent_basis"]
     if not (pd.notna(est) and est > 0 and row["price_hkd"] > 0):
@@ -497,10 +497,15 @@ def _yield_part(row, district, data: AdvisorData) -> tuple[float, str]:
     med = data.district_growth["rental_yield"].get(district) if isinstance(district, str) \
         and "rental_yield" in data.district_growth else None
     if med is not None and pd.notna(med):
-        pulled = (1 - DISTRICT_YIELD_PULL) * y + DISTRICT_YIELD_PULL * float(med)
+        med = float(med)
+        pulled = (1 - DISTRICT_YIELD_PULL) * y + DISTRICT_YIELD_PULL * med
+        if pulled > med:  # a guess from district rents never earns more than a typical flat
+            return (_clip(med * 100 / YIELD_FULL_PCT * 100),
+                    f"rent yield {y * 100:.1f}% (district rents; scored as {med * 100:.1f}%, "
+                    f"capped at the district median {med * 100:.1f}%)")
         return (_clip(pulled * 100 / YIELD_FULL_PCT * 100),
                 f"rent yield {y * 100:.1f}% (district rents; scored as {pulled * 100:.1f}%, "
-                f"halfway to the district median {float(med) * 100:.1f}%)")
+                f"halfway to the district median {med * 100:.1f}%)")
     return (_clip(y * 100 / YIELD_FULL_PCT * 100) * DISTRICT_YIELD_PULL,
             f"rent yield {y * 100:.1f}% (district rents; counts half)")
 
