@@ -159,7 +159,7 @@ building, so it finds no subsidised estate. Tasks 2-3 below follow
     Excluded rows go to the end, never deleted. Full pytest and ruff green.
   - Notes: record the final thresholds in decisions.md as Claude's call (from the
     diagnosis).
-- [ ] **Task 2b: stop wrong `contains` matches** `[parallel-ok]`
+- [x] **Task 2b: stop wrong `contains` matches** `[parallel-ok]`
   - Files: modify `src/hkestate/match.py`. Test `tests/test_match.py`.
   - Done when: tests written first show two things. First, text that continues an estate
     name with another Chinese character (逸瓏灣 against estate 逸瓏) is no match. Second, text

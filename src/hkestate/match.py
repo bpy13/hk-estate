@@ -11,6 +11,9 @@ a street number). In order:
 5. fuzzy    - the whole text is close (rapidfuzz ratio >= 85) to exactly one building's
               "estate phase block" and clearly closer than to any other.
 Otherwise the listing stays unmatched ('ambiguous' when several buildings fit equally).
+Two guards run first: text that continues the estate name with another Chinese character
+(逸瓏灣 against 逸瓏) is no match, and a 'single' or 'contains' hit whose text names a block
+the estate lacks (豐盛苑 榮盛閣) returns (None, 'check_match') for the manual check.
 
 Listings without a flat get a floor band (low / mid / high, thirds of the building's height)
 so they can be valued per band (decisions.md, "Matching").
@@ -88,6 +91,52 @@ def _pick(hits: list[Building], tokens: set[str], compact: str) -> list[Building
     return [b for b in hits if scores[b.building_id] == best] if best > 0 else hits
 
 
+_CJK = re.compile(r"[一-鿿]")
+
+
+def _continues_estate_name(text: str, buildings: list[Building]) -> bool:
+    """True when the text names a longer estate than ours: the estate name is followed by
+    another Chinese character that starts neither a phase nor a block name (逸瓏灣 against
+    estate 逸瓏; Centanet's unspaced 太古城海天花園... is fine because 海天花園 is a phase).
+    A digit, letter or space after the name is a block code and does not count."""
+    estates = {_compact(b.estate) for b in buildings if len(_compact(b.estate)) >= 2}
+    follow = {_compact(b.phase) for b in buildings} | {_compact(b.block) for b in buildings}
+    follow.discard("")
+    found = False
+    spaced = norm_key(text)
+    for name in estates:
+        for m in re.finditer(re.escape(name), spaced):
+            found = True
+            rest = spaced[m.end():]
+            if not _CJK.match(rest) or any(rest.replace(" ", "").startswith(f) for f in follow):
+                return False
+    return found
+
+
+def _block_in_text(block: str, compact: str) -> bool:
+    """The block name occurs in the text; a block starting with a digit does not count when
+    it is only the tail of a longer number ('5座' inside '15座')."""
+    for m in re.finditer(re.escape(block), compact):
+        if block[0].isdigit() and m.start() and compact[m.start() - 1].isdigit():
+            continue
+        return True
+    return False
+
+
+def _unknown_block(text: str, buildings: list[Building]) -> bool:
+    """True when a word of the text names a block (ends in 閣 or 座) that none of the
+    estate's buildings, phases or the estate itself carries: '豐盛苑 榮盛閣' against an
+    estate with the single block 豐盛苑. A wing code after the block ('慧雅閣B座') is fine."""
+    known = {c for b in buildings for c in (_compact(b.block), _compact(b.phase),
+                                           _compact(b.estate)) if c}
+    for word in norm_key(text).split():
+        if not word.endswith(("閣", "座")) or not _CJK.search(word[:-1]):
+            continue  # a number or wing code ('63座', 'a座') is not a block name
+        if not any(k in word or word in k for k in known):
+            return True
+    return False
+
+
 def match_building(
     text: str | None,
     buildings: list[Building],
@@ -102,11 +151,17 @@ def match_building(
         if hit:
             return hit, "manual"
     if len(buildings) == 1:
+        if text and _continues_estate_name(text, buildings):
+            return None, "none"
+        if text and _unknown_block(text, buildings):
+            return None, "check_match"
         return buildings[0].building_id, "single"
     if not text or not buildings:
         return None, "none"
     tokens, ranged = _tokens(text)
     compact = _compact(text)
+    if _continues_estate_name(text, buildings):
+        return None, "none"
 
     exact = [b for b in buildings if norm_key(b.block) and set(norm_key(b.block).split()) <= tokens]
     exact = _pick(exact, tokens, compact)
@@ -121,7 +176,8 @@ def match_building(
         return None, "ambiguous"
 
     contains = [
-        b for b in buildings if len(_compact(b.block)) >= 2 and _compact(b.block) in compact
+        b for b in buildings
+        if len(_compact(b.block)) >= 2 and _block_in_text(_compact(b.block), compact)
     ]
     # prefer the longest block name ('21座' over '1座')
     if contains:
@@ -129,6 +185,8 @@ def match_building(
         contains = [b for b in contains if len(_compact(b.block)) == longest]
     contains = _pick(contains, tokens, compact)
     if len(contains) == 1:
+        if _unknown_block(text, buildings):
+            return None, "check_match"
         return contains[0].building_id, "contains"
     if contains:
         return None, "ambiguous"

@@ -94,6 +94,29 @@ def test_single_building_estate():
     assert m("高雲臺", [Building("gh", "高雲台", "", "高雲台", 41)]) == ("gh", "single")
 
 
+YIULUNG = [Building(f"yl-{n}", "逸瓏", "", f"{n}座", 10) for n in (1, 2, 3, 5, 6, 7)]
+
+
+def test_text_continuing_the_estate_name_is_no_match():
+    # 逸瓏灣 (Tai Po) is not 逸瓏 (Ho Man Tin); the block '5座' also sits inside '15座'
+    assert m("逸瓏灣 II 大廈15座", YIULUNG)[0] is None
+    assert m("逸瓏灣 I 大廈17座", YIULUNG)[0] is None
+    assert m("逸瓏5座", YIULUNG)[0] == "yl-5"
+    assert m("逸瓏 5座", YIULUNG)[0] == "yl-5"
+    # an estate name followed by its phase is still fine (no spaces, Centanet slug style)
+    assert m("太古城海天花園景天閣", TKS)[0] == "tks-63"
+
+
+def test_block_the_estate_lacks_needs_a_check():
+    one = [Building("fs", "豐盛苑", "", "豐盛苑", 30)]
+    assert m("豐盛苑 榮盛閣 (A座)", one) == (None, "check_match")
+    assert m("豐盛苑", one) == ("fs", "single")
+    ladder = [Building("hy-a", "慧雅苑", "", "慧雅閣", 20),
+              Building("hy-b", "慧雅苑", "", "慧安閣", 20)]
+    assert m("慧雅苑慧雅閣B座", ladder) == ("hy-a", "contains")  # B座 is the wing of the block
+    assert m("慧雅苑慧雅閣 富盛閣", ladder) == (None, "check_match")
+
+
 def test_manual_map_wins():
     manual = {("centanet", match.norm_key("太古城 怪名")): "tks-48"}
     assert m("太古城 怪名", TKS, source="centanet", manual=manual) == ("tks-48", "manual")
