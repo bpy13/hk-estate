@@ -3,6 +3,7 @@ and shows a banner when the last run failed. Rendered with Streamlit's AppTest o
 synthetic data folder (trained + ranked like the real one)."""
 
 import json
+import re
 import shutil
 from datetime import date
 from pathlib import Path
@@ -222,7 +223,7 @@ def test_verdict_table_keeps_sensitivities_out_and_marks_too_few_pairs(growth_ro
     assert "fall-1y" not in t.columns
     assert t.loc["size_small", "all"] == "robust (+1.00)"
     assert t.loc["sea_view", "boom"] == "no effect found (-0.20)"
-    assert t.loc["size_small", "fall"] == "too few pairs"
+    assert t.loc["size_small", "fall"] == "too few flats sold twice"
     s = dd.verdict_table(study.sensitivities)
     assert list(s.columns) == ["Attribute", "fall-1y"]
 
@@ -261,5 +262,16 @@ def test_growth_page_opens_for_all_and_a_phase_setting(growth_root, tmp_path, mo
         assert not at.exception, setting
         assert at.title[0].value.startswith("Which flat features")
         assert len(at.dataframe) >= 2
+    at = _app(data, monkeypatch, page="growth", setting="fall")
+    kind = next(r for r in at.sidebar.radio if r.label == "Which flats")
+    assert kind.options == ["Flats sold twice (two recorded sales)",
+                            "Model-valued flats (cross-check)"]
+    assert any("Too few flats sold twice" in i.value for i in at.info)  # the setting's note
+    shown = " ".join(m.value for m in at.markdown) + " ".join(c.value for c in at.caption)
+    assert not re.search(r"\bpairs?\b", shown, flags=re.I)
+    kind.set_value("estimated").run()  # the model-valued kind carries the caveat
+    assert not at.exception
+    assert any("trust it less than the result from flats sold twice" in w.value
+               for w in at.warning)
     at = _app(tmp_path / "empty", monkeypatch, page="growth")
     assert not at.exception and any("No growth study" in i.value for i in at.info)

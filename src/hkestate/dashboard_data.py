@@ -18,6 +18,7 @@ import pandas as pd
 
 from hkestate import db, model
 from hkestate.config import get_data_dir
+from hkestate.report import plain_words  # the study's labels and notes still say "pairs"
 from hkestate.study import district_label  # noqa: F401  (one label, shared with the report)
 
 FLAG_LABELS = {
@@ -110,8 +111,8 @@ def unit_history(all_deals: pd.DataFrame, row) -> tuple[pd.DataFrame, str]:
 # ---- growth study (data/reports/growth/<date>/, written by `hkestate report`) ----------------
 # District names are shown as the report shows them: `study.district_label`, 'Eastern (東區)'.
 
-PAIRS_TYPES = {"recorded": "Recorded sales (real pairs)",
-               "estimated": "Estimated (model-priced) pairs"}
+PAIRS_TYPES = {"recorded": "Flats sold twice (two recorded sales)",
+               "estimated": "Model-valued flats (cross-check)"}
 VERDICT_SHORT = {"robust": "robust", "significant, not robust": "significant only",
                  "not significant": "no effect found"}
 
@@ -193,8 +194,8 @@ def load_growth(folder: Path | None = None) -> GrowthStudy | None:
         i, d = info.get(n) or {}, folder / n
         effects = _read_csv(d / "effects.csv")
         settings.append(GrowthSetting(
-            name=n, label=i.get("label") or n,
-            enough=bool(i.get("enough", not effects.empty)), note=i.get("note"),
+            name=n, label=plain_words(i.get("label")) or n,
+            enough=bool(i.get("enough", not effects.empty)), note=plain_words(i.get("note")),
             sensitivity=bool(i.get("sensitivity", False)),
             min_hold_years=i.get("min_hold_years"), start=i.get("start"), end=i.get("end"),
             pairs=i.get("pairs") or {}, effects=effects,
@@ -217,7 +218,8 @@ def verdict_cell(row: pd.Series | None) -> str:
 
 def verdict_table(settings: list[GrowthSetting], pairs_type: str = "recorded") -> pd.DataFrame:
     """Attribute × setting, one text cell each: 'robust (+2.20)' = verdict and the effect in
-    percentage points of annual growth. A setting with no verdicts shows 'too few pairs' (or
+    percentage points of annual growth. A setting with no verdicts shows 'too few flats sold
+    twice' (or
     '–' if the file is missing). Pass the main settings only; sensitivities go in their own
     call so they never mix into this table."""
     labels: dict[str, str] = {}
@@ -231,7 +233,7 @@ def verdict_table(settings: list[GrowthSetting], pairs_type: str = "recorded") -
         cols[s.name] = cell
     t = pd.DataFrame(index=list(labels))
     for s in settings:
-        fill = "too few pairs" if not s.has_verdicts else "–"
+        fill = "too few flats sold twice" if not s.has_verdicts else "–"
         t[s.name] = [cols[s.name].get(a, fill) for a in t.index]
     t.insert(0, "Attribute", [labels[a] for a in t.index])
     return t

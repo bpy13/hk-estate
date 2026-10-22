@@ -4,14 +4,19 @@ snapshot) or `study.run` (one window); never committed (the repo is public and t
 holds the data).
 
 Order: a plain-language summary first (the owner relays it to non-technical people), then
-coverage, method, the verdicts by attribute and market phase (recorded pairs are the main
-evidence), the estimated-pair cross-check, the short-hold sensitivity, returns by attribute,
+coverage, method, the verdicts by attribute and market phase (flats sold twice are the main
+evidence), the model-valued cross-check, the short-hold sensitivity, returns by attribute,
 districts, indices, first-hand vs second-hand, checks, limits.
+
+Words (decisions.md "Report wording"): the code says "pairs"; text people read says "flats
+sold twice" (recorded: real + Ricacorp), "model-valued flats" (estimated) and "Ricacorp
+reported gains". `plain_words` translates the study's own labels and notes.
 """
 
 from __future__ import annotations
 
 import math
+import re
 from datetime import date
 from pathlib import Path
 
@@ -23,11 +28,38 @@ from hkestate.config import get_data_dir
 from hkestate.study import DISTRICT_GROUPS, ESTIMATED_INDEX_WINDOW, MIN_PAIRS, Study, district_label
 
 TYPE_NAMES = {
-    "real": "Real pairs (two recorded sales of the same flat)",
-    "ricacorp": "Ricacorp pairs (previous sale from Ricacorp's days-held and % gain)",
-    "recorded": "Recorded pairs (real + Ricacorp combined)",
-    "estimated": "Estimated pairs (sale before 2018 vs the model's value today)",
+    "real": "Flats with two recorded sales",
+    "ricacorp": "Ricacorp reported gains (previous sale from Ricacorp's days-held and % gain)",
+    "recorded": "Flats sold twice (recorded sales: the two kinds above combined)",
+    "estimated": "Model-valued flats (sale before 2018 vs the model's value today)",
 }
+# short names for sentences like "return to an owner (model-valued, median)"
+KIND = {"recorded": "sold twice", "estimated": "model-valued",
+        "real": "two recorded sales", "ricacorp": "Ricacorp reported gains"}
+
+# the study's own labels and notes (study.py, not edited here) still say "pairs"
+_PLAIN = [
+    (r"estimated-pair candidates", "model-valued flat candidates"),
+    (r"estimated pairs", "model-valued flats"),
+    (r"Ricacorp pairs", "Ricacorp reported gains"),
+    (r"recorded pairs", "flats sold twice"),
+    (r"Pairs", "Flats sold twice"),
+    (r"pairs", "flats sold twice"),
+    (r"pair", "flat sold twice"),
+]
+
+
+def plain_words(text: str | None) -> str | None:
+    """`text` with "pair(s)" in the words the owner uses; backticked names stay as they are."""
+    if not text:
+        return text
+    out = []
+    for part in re.split(r"(`[^`]*`)", text):
+        if not part.startswith("`"):
+            for pattern, new in _PLAIN:
+                part = re.sub(rf"\b{pattern}\b", new, part)
+        out.append(part)
+    return "".join(out)
 
 # the market-phase settings (study.STANDARD) and how the summary names them
 PHASES = {
@@ -124,7 +156,7 @@ def phase_reading(attr: str, cells: dict[str, dict | None], phases: list[str] | 
                     "significant but not robust" if base["significant"] else
                     "not significant") + ".")
     if not tested:
-        return head + " No market phase had enough pairs to test it on its own."
+        return head + " No market phase had enough flats sold twice to test it on its own."
     name = {p: PHASES.get(p, p) for p in phases}
 
     def with_effect(ps):
@@ -142,7 +174,7 @@ def phase_reading(attr: str, cells: dict[str, dict | None], phases: list[str] | 
                                                                  if p in RISING}
         where = ("in rising and falling markets" if kinds == {"rising", "falling"}
                  else f"in {'rising' if kinds == {'rising'} else 'falling'} markets only, the "
-                      "only kind with enough pairs")
+                      "only kind with enough flats sold twice")
         return (f"{head} Grew {_way(sign)} in every market phase tested: "
                 f"{with_effect(tested)}. Holds {where}.")
     if robust_in:
@@ -176,7 +208,7 @@ def matrix_lines(main: list[Study], key: str = "recorded") -> list[str]:
     attrs = [a for a in growth.ATTRIBUTES
              if any(cell(s, a, key) is not None for s in main)]
     if not attrs:
-        return ["No setting had enough pairs for a verdict.", ""]
+        return ["No setting had enough flats sold twice for a verdict.", ""]
     rows = []
     for a in attrs:
         row = {"Attribute": SHORT[a]}
@@ -187,8 +219,8 @@ def matrix_lines(main: list[Study], key: str = "recorded") -> list[str]:
              "Effects in percentage points of growth a year, like for like (same district, "
              "purchase year, price level and building age). **Bold** = robust (p < 0.05 and "
              "the same sign in both halves of a time split and of a district split); plain = "
-             "significant but failed a split; n.s. = not significant; – = too few pairs for a "
-             "verdict there.", ""]
+             "significant but failed a split; n.s. = not significant; – = too few flats sold "
+             "twice for a verdict there.", ""]
     phases = [s.setting for s in main if s.setting in PHASES]
     if phases:
         lines += ["**How to read each attribute across the market phases:**", ""]
@@ -250,12 +282,12 @@ def _summary(s: Study, main: list[Study], sens: list[Study]) -> list[str]:
         if not r.empty and pd.notna(r.iloc[0]["drawdown"]):
             r = r.iloc[0]
             lines.append(
-                f"- **Worst fall in our own resale pairs:** prices fell "
+                f"- **Worst fall in our own resale prices:** prices fell "
                 f"{_pct(r['drawdown'], 0)} from {r['peak']:%B %Y} to {r['trough']:%B %Y}.")
     v = s.verdicts.get("recorded")
     if v is not None and not v.empty:
         rob = v[v["robust"]]
-        who = "recorded pairs (two real prices for the same flat, all years)"
+        who = "flats sold twice (two real prices for the same flat, all years)"
         if rob.empty:
             lines.append(f"- **Attributes, {who}:** no attribute passed every check.")
         else:
@@ -273,7 +305,8 @@ def _summary(s: Study, main: list[Study], sens: list[Study]) -> list[str]:
         if tested:
             every, mixed, some, none = holds_everywhere(main)
             text = (f"- **Across market phases** ({len(tested)} of {len(phases)} phases had "
-                    "enough pairs: " + ", ".join(PHASES[m.setting] for m in tested) + "). ")
+                    "enough flats sold twice: "
+                    + ", ".join(PHASES[m.setting] for m in tested) + "). ")
             if every:
                 text += ("Held the same way in every phase tested: " + "; ".join(
                     f"{SHORT[a]} ({_way(c)}, {n} phases)" for a, c, n in every) + ". ")
@@ -289,28 +322,17 @@ def _summary(s: Study, main: list[Study], sens: list[Study]) -> list[str]:
                          "the effect in each phase and a line per attribute.")
         else:
             lines.append(f"- **Across market phases:** none of the {len(phases)} phases run "
-                         "had enough 3-year pairs for a verdict of its own.")
+                         "had enough flats sold twice (held 3+ years) for a verdict of its own.")
         short = [m for m in phases if not m.enough]
         if short:
             lines.append("  Not tested: " + "; ".join(
-                f"{PHASES[m.setting]} has {len(m.pairs['recorded']):,} recorded "
-                f"pair{'' if len(m.pairs['recorded']) == 1 else 's'} held 3+ years"
-                for m in short) + ": too few for a verdict (a phase shorter than about four "
-                "years holds almost no 3-year pairs).")
-    if "recorded" in s.verdicts and "estimated" in s.verdicts:
-        a, b = s.verdicts["recorded"], s.verdicts["estimated"]
-        common = a.index.intersection(b.index)
-        both = [x for x in common if a.loc[x, "robust"] and b.loc[x, "robust"]
-                and np.sign(a.loc[x, "coef"]) == np.sign(b.loc[x, "coef"])]
-        clash = [x for x in common if a.loc[x, "robust"] and b.loc[x, "robust"]
-                 and np.sign(a.loc[x, "coef"]) != np.sign(b.loc[x, "coef"])]
-        text = "- **Cross-check with estimated pairs** (a flat's last sale before 2018 against " \
-               "the model's value today): "
-        text += (f"agree and robust in both: {', '.join(SHORT[x] for x in both)}."
-                 if both else "no attribute is robust in both.")
-        if clash:
-            text += f" Robust in both but opposite: {', '.join(SHORT[x] for x in clash)}."
-        lines.append(text)
+                f"{PHASES[m.setting]} has {len(m.pairs['recorded']):,} "
+                "flat" + ("" if len(m.pairs["recorded"]) == 1 else "s") + " sold twice, held "
+                "3+ years" for m in short) + ": too few for a verdict (a phase shorter than "
+                "about four years holds almost no flats sold twice after a 3-year hold).")
+    cross = crosscheck_line(s)
+    if cross:
+        lines.append(cross)
     for m in sens:
         n = len(m.pairs["recorded"])
         v = m.verdicts.get("recorded")
@@ -319,9 +341,9 @@ def _summary(s: Study, main: list[Study], sens: list[Study]) -> list[str]:
             verdict = ("robust: " + ", ".join(rob)) if rob else "no attribute robust"
         else:
             verdict = "too few for a verdict"
-        what = (m.label or m.setting).removeprefix("Sensitivity: ")
-        lines.append(f"- **Short-hold sensitivity (`{m.setting}`):** {what}: {n:,} recorded "
-                     f"pairs held {m.min_hold_years:g}+ years; {verdict}. A side-check only "
+        what = plain_words(m.label or m.setting).removeprefix("Sensitivity: ")
+        lines.append(f"- **Short-hold sensitivity (`{m.setting}`):** {what}: {n:,} flats "
+                     f"sold twice, held {m.min_hold_years:g}+ years; {verdict}. A side-check only "
                      "(see its own section); not part of the main verdicts.")
     fh = s.first_hand
     if not fh.empty:
@@ -329,13 +351,13 @@ def _summary(s: Study, main: list[Study], sens: list[Study]) -> list[str]:
             part = fh[fh["pairs_type"] == k].set_index("start")
             if {"first-hand", "second-hand"} <= set(part.index):
                 lines.append(
-                    f"- **First-hand vs second-hand ({k} pairs):** flats bought from the "
+                    f"- **First-hand vs second-hand ({KIND[k]}):** flats bought from the "
                     f"developer grew {_pct(part.loc['first-hand', 'growth'])} a year (median) "
                     f"vs {_pct(part.loc['second-hand', 'growth'])} for resales.")
     for k, f in (("recorded", rec), ("estimated", est)):
         if f is not None and "total_return" in f:
             lines.append(
-                f"- **Return to an owner ({k} pairs, median):** price growth "
+                f"- **Return to an owner ({KIND[k]}, median):** price growth "
                 f"{_pct(f['ann_growth'].median())} a year; after buying and selling costs "
                 f"(stamp duty for a buyer who owns another flat, agents, lawyers) "
                 f"{_pct(f['net_ann_growth'].median())}; plus rent of about "
@@ -349,20 +371,44 @@ def _summary(s: Study, main: list[Study], sens: list[Study]) -> list[str]:
         if len(d) >= 2:
             lo, hi = d.iloc[0], d.iloc[-1]
             lines.append(
-                f"- **Districts (recorded pairs, medians):** growth ran from "
+                f"- **Districts (flats sold twice, medians):** growth ran from "
                 f"{_pct(lo['growth'])} a year in {district_label(lo['district'])} to "
                 f"{_pct(hi['growth'])} in {district_label(hi['district'])}"
                 f"{worst_fall_clause(d)}.")
     lines.append(
         f"- **How much data:** {_n(cov['clean'])} clean sales; "
-        f"{_n(len(s.pairs['real']))} real resale pairs, {_n(len(s.pairs['ricacorp']))} Ricacorp "
-        f"pairs, {_n(len(s.pairs['estimated']))} estimated pairs. Recorded pairs span "
+        f"{_n(len(s.pairs['real']))} flats sold twice with two recorded sales, "
+        f"{_n(len(s.pairs['ricacorp']))} Ricacorp reported gains, "
+        f"{_n(len(s.pairs['estimated']))} model-valued flats. Flats sold twice span "
         f"{_years(s.pairs['recorded'])}.")
-    lines += ["", "Words used below: a *pair* is two prices for the same flat (bought, then sold "
-              "or valued). *Robust* means the effect is statistically clear (p < 0.05) and points "
-              "the same way when the pairs are split by time and, separately, by district. "
+    lines += ["", "Words used below: *flats sold twice* have two recorded prices (bought, then "
+              "sold). *Ricacorp reported gains* are flats where Ricacorp states the previous "
+              "sale. *Model-valued flats* have an old sale and today's value from the model. "
+              "*Robust* means the effect is statistically clear (p < 0.05) and points the same "
+              "way when the flats are split by time and, separately, by district. "
               "*Drawdown* is the largest fall from a peak to a later low.", ""]
     return lines
+
+
+def crosscheck_line(s: Study) -> str | None:
+    """The summary's model-valued cross-check line, or None when the setting has no verdicts
+    for both kinds. It ends with the understatement warning (decisions.md "Report wording";
+    the reason is in "How it was done")."""
+    if "recorded" not in s.verdicts or "estimated" not in s.verdicts:
+        return None
+    a, b = s.verdicts["recorded"], s.verdicts["estimated"]
+    common = a.index.intersection(b.index)
+    both = [x for x in common if a.loc[x, "robust"] and b.loc[x, "robust"]
+            and np.sign(a.loc[x, "coef"]) == np.sign(b.loc[x, "coef"])]
+    clash = [x for x in common if a.loc[x, "robust"] and b.loc[x, "robust"]
+             and np.sign(a.loc[x, "coef"]) != np.sign(b.loc[x, "coef"])]
+    text = "- **Cross-check with model-valued flats** (a flat's last sale before 2018 " \
+           "against the model's value today): "
+    text += (f"agree and robust in both: {', '.join(SHORT[x] for x in both)}."
+             if both else "no attribute is robust in both.")
+    if clash:
+        text += f" Robust in both but opposite: {', '.join(SHORT[x] for x in clash)}."
+    return text + " (this check tends to understate differences; see How it was done)"
 
 
 def worst_fall_clause(d: pd.DataFrame) -> str:
@@ -406,7 +452,7 @@ def _coverage(s: Study) -> list[str]:
     lines += ["Clean sales by year: " + ", ".join(f"{int(y)}: {n:,}" for y, n in yrs.items()
                                                   if y >= 1995) + ".", ""]
     pc = pd.DataFrame([
-        {"Pair type": TYPE_NAMES.get(k, k), "Pairs": _n(len(v)),
+        {"Kind": TYPE_NAMES.get(k, k), "Flats": _n(len(v)),
          "Pilot share": _pct(v["is_pilot"].mean(), 0) if len(v) and "is_pilot" in v else "–",
          "Start years": f"{v['start_date'].min():%Y}-{v['start_date'].max():%Y}"
          if len(v) and v["start_date"].notna().any() else "unknown",
@@ -423,6 +469,15 @@ def _coverage(s: Study) -> list[str]:
     return lines
 
 
+# decisions.md "Report wording": the model leans back towards the old price, so the
+# model-valued check understates real differences
+CAVEAT = ("For flats whose last sale was before 2018, we compare that sale with the model's "
+          "estimate of the flat's value today. The model learned partly from that same old "
+          "sale, so its estimate leans back towards the old price. This hides part of any real "
+          "difference between kinds of flat: when this check shows 'no effect', trust it less "
+          "than the result from flats sold twice.")
+
+
 def _window_text(m: Study) -> str:
     start, end = m.window
     return (f"bought from {start or 'the earliest data'}, sold by {end or 'the latest data'}, "
@@ -434,18 +489,21 @@ def _method(s: Study, main: list[Study], sens: list[Study]) -> list[str]:
     checks = {k: v.attrs.get("checks", {}) for k, v in s.verdicts.items()}
     lines = [
         "## How it was done", "",
-        "- **Pairs.** Two sales of the same flat (building + floor + flat), consecutive among "
-        "clean sales, held at least 3 years. Clean: not a duplicate report, parking-space "
-        "sale, house, bulk sale, outlier, part-share-like price (under half or over double the "
-        "building's index-adjusted median), non-market transfer, or wrongly attached LOHAS Park "
-        "row. A developer sale may start a pair and is tagged first-hand.",
+        "- **Flats sold twice.** Two sales of the same flat (building + floor + flat), "
+        "consecutive among clean sales, held at least 3 years. Clean: not a duplicate report, "
+        "parking-space sale, house, bulk sale, outlier, part-share-like price (under half or "
+        "over double the building's index-adjusted median), non-market transfer, or wrongly "
+        "attached LOHAS Park row. A developer sale may be the first sale and is tagged "
+        "first-hand. Ricacorp reported gains (a flat's previous sale taken from Ricacorp's "
+        "days held and % gain) are counted with them.",
     ]
     if len(main) + len(sens) > 1:
         lines.append("- **Settings.** The same study in several date windows from one snapshot "
-                     "(a pair counts when both its sales fall inside):")
+                     "(a flat counts when both its sales fall inside):")
         for m in main + sens:
-            lines.append(f"  - `{m.setting}`: {m.label or m.setting}; {_window_text(m)}; "
-                         f"{len(m.pairs['recorded']):,} recorded pairs"
+            lines.append(f"  - `{m.setting}`: {plain_words(m.label or m.setting)}; "
+                         f"{_window_text(m)}; "
+                         f"{len(m.pairs['recorded']):,} flats sold twice"
                          + ("" if m.enough else " (too few for a verdict)")
                          + (" **[sensitivity]**" if m.sensitivity else "") + ".")
     lines += [
@@ -453,24 +511,24 @@ def _method(s: Study, main: list[Study], sens: list[Study]) -> list[str]:
         "building age at purchase (and its square), purchase year, sale year and purchase "
         "price per sq ft. Errors are clustered by building. Effects are in percentage points "
         "of growth a year.",
-        "- **Out-of-sample checks.** Time split: pairs ending by 2018 vs later where both "
-        "sides have 200+ pairs, otherwise by purchase year at the median inside the window "
-        "(estimated pairs all end today, so they always split by purchase year). Districts "
-        "are dealt into two halves of similar size. Robust = p < 0.05 on all pairs and the "
+        "- **Out-of-sample checks.** Time split: flats sold by 2018 vs later where both "
+        "sides have 200+ flats, otherwise by purchase year at the median inside the window "
+        "(model-valued flats all end today, so they always split by purchase year). Districts "
+        "are dealt into two halves of similar size. Robust = p < 0.05 on all flats and the "
         "same sign in both halves of both splits. Splits used in the headline setting:",
     ]
     for k, c in checks.items():
         if c:
-            lines.append(f"  - {k}: time split = {c.get('time')}; district split = "
-                         f"{c.get('district')}.")
+            lines.append(f"  - {KIND[k]}: time split = {plain_words(c.get('time'))}; "
+                         f"district split = {plain_words(c.get('district'))}.")
     lines += [
-        "- **Estimated pairs.** The fair-price model values each flat last sold before 2018 as "
-        "of the latest RVD index month. Model error (80% interval about ±11%) is in each "
-        "pair's growth; clustering by building covers errors shared by a building. Where the "
+        "- **Model-valued flats.** The fair-price model values each flat last sold before 2018 "
+        "as of the latest RVD index month. Model error (80% interval about ±11%) is in each "
+        "flat's growth; clustering by building covers errors shared by a building. Where the "
         "model's out-of-time error differs by attribute, an estimated effect smaller than "
-        "that tilt is not called robust. Estimated pairs are the cross-check, not the main "
+        "that tilt is not called robust. Model-valued flats are the cross-check, not the main "
         "evidence: their end price is a model value, and the model learns today's price "
-        "differences between attributes.",
+        "differences between attributes. " + CAVEAT,
         "- **Costs.** Buyer: Hong Kong permanent resident who owns another flat (decisions.md), "
         "so 2013-2024 purchases pay the higher Scale 1 / 15% / 7.5% rates; first-home buyer "
         "shown as a sensitivity. Agent 1% each side, legal 0.3% on purchase, stamp duty from "
@@ -484,7 +542,7 @@ def _method(s: Study, main: list[Study], sens: list[Study]) -> list[str]:
         "Asking rents run above achieved rents, so the anchor may overstate yields slightly.",
         "- **Drawdown.** A monthly repeat-sales index per group and per district (log price "
         "changes explained by month effects, lightly smoothed), worst peak-to-trough fall "
-        "inside the setting's window. Estimated pairs: "
+        "inside the setting's window. Model-valued flats: "
         f"{ESTIMATED_INDEX_WINDOW[0][:4]}-{ESTIMATED_INDEX_WINDOW[1][:4]} (their purchase "
         "dates; their end is always today).",
         "",
@@ -497,7 +555,7 @@ def _verdict_table(v: pd.DataFrame) -> list[str]:
     for _a, r in v.iterrows():
         lo, hi = r["coef"] - 1.96 * r["se"], r["coef"] + 1.96 * r["se"]
         rows.append({
-            "Attribute": r["label"], "Pairs with it": _n(r["n_with"]),
+            "Attribute": r["label"], "Flats with it": _n(r["n_with"]),
             "Effect (pp/yr)": _pp(r["coef"]), "95% range": f"{_pp(lo)} to {_pp(hi)}",
             "p": "<0.001" if r["p"] < 0.001 else f"{r['p']:.3f}",
             "Time halves": f"{_pp(r['time_a'])} / {_pp(r['time_b'])}",
@@ -507,7 +565,7 @@ def _verdict_table(v: pd.DataFrame) -> list[str]:
                 "significant, not robust" if r["significant"] else "not significant"),
         })
     return _table(pd.DataFrame(rows)) + ["", "Time / district halves: the estimate in each "
-                                         "half (– = too few pairs there to estimate, which "
+                                         "half (– = too few flats there to estimate, which "
                                          "counts as not holding).", ""]
 
 
@@ -524,7 +582,7 @@ def _groups_table(s: Study, key: str) -> list[str]:
             part = f[f[a] == lvl]
             g = a if lvl else f"not {a}"
             rows.append({
-                "Attribute": SHORT[a], "Has it": name, "Pairs": _n(len(part)),
+                "Attribute": SHORT[a], "Has it": name, "Flats": _n(len(part)),
                 "Growth/yr": _pct(part["ann_growth"].median()),
                 "After costs": _pct(part["net_ann_growth"].median()),
                 "Rent yield": _pct(part["rental_yield"].median()),
@@ -535,8 +593,8 @@ def _groups_table(s: Study, key: str) -> list[str]:
 
 
 def _verdict_sections(s: Study, main: list[Study], fig_dir: Path, rel: str) -> list[str]:
-    lines = ["## Verdicts by attribute and market phase (recorded pairs: the main evidence)", "",
-             "Recorded pairs are two real prices for the same flat. Each column is one "
+    lines = ["## Verdicts by attribute and market phase (flats sold twice: the main evidence)",
+             "", "Flats sold twice have two real prices. Each column is one "
              "setting (a date window; both sales inside it; held 3+ years).", ""]
     if len(main) > 1:
         lines += matrix_lines(main)
@@ -553,35 +611,39 @@ def _verdict_sections(s: Study, main: list[Study], fig_dir: Path, rel: str) -> l
             cr = pd.DataFrame(rows)
             groups = [m.setting for m in main if m.setting in set(cr["group"])]
             charts.dot_ci_chart(cr, fig_dir / "effects_settings.svg",
-                                "Attribute effects by setting (recorded pairs)", groups)
+                                "Attribute effects by setting (flats sold twice)", groups)
             lines += [f"![Attribute effects by setting]({rel}/effects_settings.svg)", ""]
     v = s.verdicts.get("recorded")
     if v is not None and not v.empty:
         lines += [f"### Detail: setting `{s.setting}`, {TYPE_NAMES['recorded'].lower()}", "",
-                  f"{len(s.frames['recorded']):,} pairs.", ""] + _verdict_table(v)
+                  f"{len(s.frames['recorded']):,} flats sold twice.", ""] + _verdict_table(v)
         vr = s.verdicts.get("real")
         n_rica = len(s.pairs["ricacorp"])
         if vr is not None and not vr.empty and n_rica:
             same = (vr.index.equals(v.index) and (vr["robust"] == v["robust"]).all()
                     and (vr["significant"] == v["significant"]).all())
             if same:
-                lines += [f"Real pairs alone ({len(s.frames['real']):,}, without the {n_rica} "
-                          "Ricacorp pairs) give the same verdicts; Ricacorp pairs alone are "
-                          f"too few for a regression (needs {MIN_PAIRS}).", ""]
+                lines += [f"Flats with two recorded sales alone ({len(s.frames['real']):,}, "
+                          f"without the {n_rica} Ricacorp reported gains) give the same "
+                          "verdicts; Ricacorp reported gains alone are too few for a "
+                          f"regression (needs {MIN_PAIRS}).", ""]
             else:
-                lines += [f"### Real pairs alone ({len(s.frames['real']):,}, without the "
-                          f"{n_rica} Ricacorp pairs)", ""] + _verdict_table(vr)
+                lines += [f"### Flats with two recorded sales alone "
+                          f"({len(s.frames['real']):,}, without the {n_rica} Ricacorp "
+                          "reported gains)", ""] + _verdict_table(vr)
         keys = [k for k in ("recorded", "estimated")
                 if k in s.verdicts and len(s.verdicts[k])]
         cr = pd.DataFrame([{"label": SHORT[a], "group": k, "est": 100 * r["coef"],
                             "lo": 100 * (r["coef"] - 1.96 * r["se"]),
                             "hi": 100 * (r["coef"] + 1.96 * r["se"])}
                            for k in keys for a, r in s.verdicts[k].iterrows()])
+        cr["group"] = cr["group"].map(KIND)
         charts.dot_ci_chart(cr, fig_dir / "effects.svg",
-                            f"Attribute effects on annual growth, setting {s.setting}", keys)
+                            f"Attribute effects on annual growth, setting {s.setting}",
+                            [KIND[k] for k in keys])
         lines += [f"![Attribute effects]({rel}/effects.svg)", ""]
     elif s.enough is False:
-        lines += [f"Setting `{s.setting}` has too few recorded pairs for a verdict.", ""]
+        lines += [f"Setting `{s.setting}` has too few flats sold twice for a verdict.", ""]
     return lines
 
 
@@ -589,11 +651,11 @@ def _estimated_section(s: Study, fig_dir: Path, rel: str) -> list[str]:
     v = s.verdicts.get("estimated")
     if v is None or v.empty:
         return []
-    lines = ["## Cross-check: estimated pairs", "",
-             f"{TYPE_NAMES['estimated']}: {len(s.frames['estimated']):,} pairs in setting "
+    lines = ["## Cross-check: model-valued flats", "",
+             f"{TYPE_NAMES['estimated']}: {len(s.frames['estimated']):,} flats in setting "
              f"`{s.setting}`. Their end price is a model value, so they are a check on the "
-             "recorded pairs (do the long-run purchases 1995-2017 tell the same story?), not "
-             "evidence on their own.", ""]
+             "flats sold twice (do the long-run purchases 1995-2017 tell the same story?), not "
+             "evidence on their own. " + CAVEAT, ""]
     rv = s.verdicts.get("recorded")
     if rv is not None and not rv.empty:
         rows = []
@@ -605,11 +667,12 @@ def _estimated_section(s: Study, fig_dir: Path, rel: str) -> list[str]:
                      and cr["robust"] and ce["robust"] else
                      "same sign" if cr and ce and np.sign(cr["coef"]) == np.sign(ce["coef"])
                      else "no")
-            rows.append({"Attribute": SHORT[a], "Recorded": cell_text(cr),
-                         "Estimated": cell_text(ce), "Agree (robust in both, same way)": agree})
+            rows.append({"Attribute": SHORT[a], "Sold twice": cell_text(cr),
+                         "Model-valued": cell_text(ce),
+                         "Agree (robust in both, same way)": agree})
         lines += _table(pd.DataFrame(rows)) + ["", "(The chart above shows both sets of "
                                                "effects side by side.)", ""]
-    lines += ["### Estimated pairs in detail", ""] + _verdict_table(v)
+    lines += ["### Model-valued flats in detail", ""] + _verdict_table(v)
     return lines
 
 
@@ -619,16 +682,17 @@ def _sensitivity_section(sens: list[Study]) -> list[str]:
     lines = ["## Short-hold sensitivity (1-year minimum hold; not part of the main verdicts)",
              "",
              "The two most recent phases are too short for 3-year holds, so each is rerun "
-             "with pairs held at least 1 year. Short holds are a different population (quick "
+             "with flats held at least 1 year. Short holds are a different population (quick "
              "flips, forced sales) and the verdicts here are a side-check only: they are "
              "never mixed into the table above. After-cost figures here ignore Special Stamp "
              "Duty (10-20% on resales within 36 months until 28 Feb 2024), so read the gross "
              "growth and the verdicts, not the after-cost numbers.", ""]
     for m in sens:
         n = len(m.pairs["recorded"])
-        lines += [f"### `{m.setting}`: {m.label or m.setting}", "",
-                  f"{_window_text(m).capitalize()}: {n:,} recorded pairs "
-                  f"({len(m.pairs['real']):,} real, {len(m.pairs['ricacorp']):,} Ricacorp)."]
+        lines += [f"### `{m.setting}`: {plain_words(m.label or m.setting)}", "",
+                  f"{_window_text(m).capitalize()}: {n:,} flats sold twice "
+                  f"({len(m.pairs['real']):,} with two recorded sales, "
+                  f"{len(m.pairs['ricacorp']):,} Ricacorp reported gains)."]
         f = m.frames.get("recorded")
         if f is not None and len(f):
             lines.append(f"Median hold {f['years'].median():.1f} years; median growth "
@@ -640,8 +704,9 @@ def _sensitivity_section(sens: list[Study]) -> list[str]:
         if v is not None and len(v):
             lines += _verdict_table(v)
         else:
-            note = next((x for x in m.notes if x.startswith("Too few")), "Too few pairs.")
-            lines += [note, ""]
+            note = next((x for x in m.notes if x.startswith("Too few")),
+                        "Too few flats sold twice.")
+            lines += [plain_words(note), ""]
     return lines
 
 
@@ -652,25 +717,26 @@ def _district_section(s: Study, fig_dir: Path, rel: str) -> list[str]:
     rec = d[d["pairs_type"] == "recorded"].copy()
     if rec.empty:
         return []
-    lines = [f"## By district (setting `{s.setting}`, recorded pairs)", "",
+    lines = [f"## By district (setting `{s.setting}`, flats sold twice)", "",
              "Medians per district (no controls). Growth = price growth a year; after costs "
              "= after stamp duty, agents and lawyers; total return = after-cost growth + gross "
              "rent yield; worst fall = the district's own repeat-sales index, peak to low "
-             "(blank under 100 pairs). Estimated growth = the cross-check pairs' median.", ""]
+             "(blank under 100 flats). Model-valued growth = the median for the "
+             "model-valued flats (the cross-check).", ""]
     est = d[d["pairs_type"] == "estimated"].set_index("district")["growth"] \
         if (d["pairs_type"] == "estimated").any() else pd.Series(dtype=float)
     rec = rec.sort_values("growth", ascending=False)
     rows = []
     for _, r in rec.iterrows():
         rows.append({
-            "District": district_label(r["district"]), "Pairs": _n(r["pairs"]),
+            "District": district_label(r["district"]), "Flats": _n(r["pairs"]),
             "Years held": f"{r['median_years']:.1f}", "Growth/yr": _pct(r["growth"]),
             "After costs": _pct(r["net_growth"]), "Rent yield": _pct(r["rental_yield"]),
             "Total return": _pct(r["total_return"]),
             "Worst fall": _pct(r["drawdown"], 0),
             "Peak → low": (f"{pd.Timestamp(r['peak']):%Y-%m} → {pd.Timestamp(r['trough']):%Y-%m}"
                            if pd.notna(r["drawdown"]) and r["peak"] is not None else "–"),
-            "Estimated growth/yr": _pct(est.get(r["district"], np.nan)),
+            "Model-valued growth/yr": _pct(est.get(r["district"], np.nan)),
         })
     lines += _table(pd.DataFrame(rows)) + [""]
     idx = s.indices.get("recorded", {})
@@ -695,7 +761,7 @@ def _district_section(s: Study, fig_dir: Path, rel: str) -> list[str]:
             drawn.append((group, fname))
     if drawn:
         lines += ["### Price index per district from 1995", "",
-                  "A repeat-sales index from the district's own recorded pairs (first month "
+                  "A repeat-sales index from the district's own flats sold twice (first month "
                   "= 100, log scale so equal slopes mean equal growth rates).", ""]
         for group, fname in drawn:
             lines += [f"![{group}]({rel}/{fname})", ""]
@@ -707,25 +773,26 @@ def _index_section(s: Study, fig_dir: Path, rel: str) -> list[str]:
     idx_rec = s.indices.get("recorded", {})
     if "all" in idx_rec:
         rec_idx = idx_rec["all"]
-        series = {"Recorded pairs": rec_idx / rec_idx.iloc[0] * 100}
+        series = {"Flats sold twice": rec_idx / rec_idx.iloc[0] * 100}
         rvd_all = _rvd_series(s, "rvd_price_index", "ALL", "ALL")
         if rvd_all is not None:
             r = rvd_all[rvd_all.index >= rec_idx.index[0]]
             if not r.empty:
                 series["RVD all classes"] = r / r.iloc[0] * 100
         charts.line_chart(series, fig_dir / "index_recorded.svg",
-                          f"Repeat-sales index from recorded pairs vs RVD "
+                          f"Repeat-sales index from flats sold twice vs RVD "
                           f"({rec_idx.index[0]:%Y} = 100, log scale)", "index", log_scale=True)
         lines += [f"![Recorded index]({rel}/index_recorded.svg)", "",
-                  "Our own index from every recorded pair in the setting, against the official "
-                  "RVD index over the same months. Agreement is a check on the pairs.", ""]
+                  "Our own index from every flat sold twice in the setting, against the "
+                  "official RVD index over the same months. Agreement is a check on our data.",
+                  ""]
     idx_est = s.indices.get("estimated", {})
     if "all" in idx_est:
-        # estimated pairs only have data at their purchase months: draw those (normalised
+        # model-valued flats only have data at their purchase months: draw those (normalised
         # to today = 100), not the smoothed join from 2018 to today
         cut = pd.Timestamp(ESTIMATED_INDEX_WINDOW[1])
         e = idx_est["all"]
-        series = {"Estimated pairs": (e / e.iloc[-1] * 100)[e.index <= cut]}
+        series = {"Model-valued flats": (e / e.iloc[-1] * 100)[e.index <= cut]}
         if "first_hand_start" in idx_est:
             f = idx_est["first_hand_start"]
             series["Est., first-hand start"] = (f / f.iloc[-1] * 100)[f.index <= cut]
@@ -733,13 +800,13 @@ def _index_section(s: Study, fig_dir: Path, rel: str) -> list[str]:
         if rvd_all is not None:
             series["RVD all classes"] = rvd_all / rvd_all.iloc[-1] * 100
         charts.line_chart(series, fig_dir / "index_long.svg",
-                          "Long-run index from estimated pairs (today = 100, log scale)",
+                          "Long-run index from model-valued flats (today = 100, log scale)",
                           "index", log_scale=True)
         lines += [f"![Long-run index]({rel}/index_long.svg)", "",
-                  "Estimated pairs give the index only at their purchase months (to 2017), "
+                  "Model-valued flats give the index only at their purchase months (to 2017), "
                   "relative to the model's value today; that they track the official RVD index "
                   "through the 1997-2003 crash and the 2003-2017 rise is a check on the model "
-                  "and the pairs.", ""]
+                  "and on these flats.", ""]
     if not s.rvd_long.empty:
         lt = s.rvd_long.copy()
         cls = {"A": "A (under 40 m2)", "B": "B (40-69.9 m2)", "C": "C (70-99.9 m2)",
@@ -770,7 +837,8 @@ def _index_section(s: Study, fig_dir: Path, rel: str) -> list[str]:
     if not s.drawdowns.empty:
         d = s.drawdowns[~s.drawdowns["group"].str.startswith("district:")]
         lines += ["### Drawdown by group", ""] + _table(pd.DataFrame({
-            "Pairs": d["pairs_type"], "Group": d["group"], "Pairs used": d["pairs"].map(_n),
+            "Kind": d["pairs_type"].map(KIND), "Group": d["group"],
+            "Flats used": d["pairs"].map(_n),
             "Worst fall": d["drawdown"].map(lambda x: _pct(x, 0)),
             "Peak": pd.to_datetime(d["peak"]).dt.strftime("%Y-%m"),
             "Low": pd.to_datetime(d["trough"]).dt.strftime("%Y-%m")})) + [""]
@@ -799,7 +867,7 @@ def write(s: Study, studies: dict[str, Study] | None = None, today: date | None 
     lines = [f"# Findings: which flat attributes grew faster ({today:%Y-%m-%d})",
              "", "Written by `hkestate report`. Generated, not edited by hand; rerun it after "
              "`hkestate train` as data grows. Not committed to git. Headline setting "
-             f"`{s.setting}`: pairs {_window_text(s)}."
+             f"`{s.setting}`: flats {_window_text(s)}."
              + (f" Settings run: {', '.join(f'`{m.setting}`' for m in main)}"
                 + (f"; sensitivities: {', '.join(f'`{m.setting}`' for m in sens)}" if sens
                    else "") + "." if len(studies) > 1 else ""), ""]
@@ -824,13 +892,14 @@ def write(s: Study, studies: dict[str, Study] | None = None, today: date | None 
     lines += _index_section(s, fig_dir, rel)
 
     lines += ["## First-hand vs second-hand", "",
-              "First-hand = the pair starts with the developer's sale (SRPE, or the project's "
+              "First-hand = the first sale is the developer's (SRPE, or the project's "
               "first-sale rule). Developer prices include launch discounts and incentives, so "
               "first-hand starts are compared separately.", ""]
     if not s.first_hand.empty:
         fh = s.first_hand
         lines += _table(pd.DataFrame({
-            "Pairs": fh["pairs_type"], "Start": fh["start"], "Count": fh["pairs"].map(_n),
+            "Kind": fh["pairs_type"].map(KIND), "Start": fh["start"],
+            "Count": fh["pairs"].map(_n),
             "Median years held": fh["median_years"].map(lambda x: f"{x:.1f}"),
             "Growth/yr": fh["growth"].map(_pct), "After costs": fh["net_growth"].map(_pct),
             "Total return": fh["total_return"].map(_pct)})) + [""]
@@ -838,18 +907,18 @@ def write(s: Study, studies: dict[str, Study] | None = None, today: date | None 
         v = s.verdicts.get(key)
         if v is not None and "first_hand_start" in v.index:
             r = v.loc["first_hand_start"]
-            lines.append(f"- {key}: like-for-like effect {_pp(r['coef'])} pp a year "
+            lines.append(f"- {KIND[key]}: like-for-like effect {_pp(r['coef'])} pp a year "
                          f"(p {r['p']:.3f}), {'robust' if r['robust'] else 'not robust'}.")
     lines.append("")
 
-    lines += ["## Checks", "", "### Centadata / 28Hse '% change' pairs", ""]
+    lines += ["## Checks", "", "### Centadata / 28Hse '% change' figures", ""]
     gc = s.gain_check
     lines.append(
         f"Where a flat's '% change vs the previous sale' can be compared with a recorded "
         f"previous sale ({_n(gc.get('n'))} cases), the implied previous price matches within "
         f"2% in {_pct(gc.get('within_2pct'), 0)} of cases (median difference "
         f"{_pct(gc.get('median_abs_diff'), 2)}). So the field is reliable for the price. It "
-        f"has no date, so {len(s.pairs['gain']):,} such pairs cannot be turned into growth "
+        f"has no date, so {len(s.pairs['gain']):,} such flats cannot be turned into growth "
         "a year and are not used in the verdicts.")
     if not s.gain_signs.empty:
         g = s.gain_signs.dropna(subset=["recorded_coef"])
@@ -865,7 +934,7 @@ def write(s: Study, studies: dict[str, Study] | None = None, today: date | None 
     lines.append("")
     if not s.model_bias.empty:
         b = s.model_bias
-        lines += ["### Model error by attribute (for estimated pairs)", "",
+        lines += ["### Model error by attribute (for model-valued flats)", "",
                   "The fair-price model's out-of-time error (median of model / actual - 1) for "
                   "flats with and without each attribute. A difference tilts estimated growth "
                   "by about the difference / holding years.", ""]
@@ -877,7 +946,7 @@ def write(s: Study, studies: dict[str, Study] | None = None, today: date | None 
     for k in ("recorded", "estimated"):
         f = s.frames.get(k)
         if f is not None and "net_ann_growth_first" in f:
-            lines.append(f"- Cost sensitivity ({k}): after-cost growth is "
+            lines.append(f"- Cost sensitivity ({KIND[k]}): after-cost growth is "
                          f"{_pct(f['net_ann_growth'].median())} a year for a buyer who owns "
                          f"another flat, {_pct(f['net_ann_growth_first'].median())} for a "
                          "first-home buyer (lower stamp duty 2013-2024).")
@@ -905,20 +974,22 @@ def _limits(s: Study) -> list[str]:
     fc = s.coverage.get("feature_cover", {})
     return [
         "## Limits", "",
-        "- **Only flats that were resold are in a recorded pair.** A flat bought and never "
-        "sold again contributes nothing, so pairs lean towards flats that change hands; the "
-        "estimated pairs (last sold before 2018, valued by the model) cover the rest.",
-        "- **Short phases hold few 3-year pairs.** A pair needs both sales inside the window, "
+        "- **Only flats that were resold are counted as sold twice.** A flat bought and never "
+        "sold again contributes nothing, so the results lean towards flats that change hands; "
+        "the model-valued flats (last sold before 2018, valued by the model) cover the rest.",
+        "- **Short phases hold few flats sold twice after a 3-year hold.** Both sales must be "
+        "inside the window, "
         "so a phase under about four years (the 2021-2024 fall, the market since late 2024) "
         "has no verdict of its own; the 1-year-hold sensitivity is the only read on them.",
         "- **Attribute coverage is uneven.** MTR distance is known for "
         f"{_pct(fc.get('MTR distance'), 0)} of clean sales, facing for "
         f"{_pct(fc.get('facing'), 0)}; sea view and facing come from listings only, so those "
         "effects rest on few flats.",
-        "- **Estimated pairs depend on the model.** Their end price is a model value (typical "
-        "error about 5%, 80% interval about ±11%). The model learns today's price differences "
-        "between attributes from recent sales, so an estimated effect reads as \"today's "
-        "premium vs the premium paid then\".",
+        "- **Model-valued flats depend on the model.** Their end price is a model value "
+        "(typical error about 5%, 80% interval about ±11%). The model learns today's price "
+        "differences between attributes from recent sales, so an estimated effect reads as "
+        "\"today's premium vs the premium paid then\". It also learned partly from the old "
+        "sale itself, so this check tends to understate differences (see How it was done).",
         "- **Asking rents** anchor the yields; achieved rents are usually lower.",
         "- **No leverage, no holding costs** (rates, management fees, repairs, vacancy, tax).",
         "- **Costs assume a permanent resident who owns another flat**; a first-home buyer "

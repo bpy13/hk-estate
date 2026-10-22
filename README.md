@@ -56,15 +56,15 @@ close the dashboard and copy its files over `data\model\`:
 Copy-Item data\model\backup_20261018\* data\model\ -Recurse -Force   # run from the repo folder
 ```
 
-**Growth study windows.** `report --start YYYY-MM-DD --end YYYY-MM-DD` keeps a pair only when
+**Growth study windows.** `report --start YYYY-MM-DD --end YYYY-MM-DD` keeps a flat only when
 both its sales fall inside the window (default: all data). `report --settings standard` runs
 these windows from one snapshot (or `--settings name,name`; not together with
-`--start/--end`, the presets carry their own dates); a pair needs a 3-year hold, so a
-window too short for enough pairs says so instead of giving a verdict:
+`--start/--end`, the presets carry their own dates); a flat sold twice needs a 3-year hold, so a
+window with too few of them says so instead of giving a verdict:
 
-| Setting | Pairs counted |
+| Setting | Flats sold twice counted |
 |---|---|
-| `all` | every pair, 1995 on |
+| `all` | every one, 1995 on |
 | `since-2000` | bought from 2000 |
 | `crash-1997-2003` | bought and sold Oct 1997 - Jul 2003 |
 | `recovery-2003-2008` | bought and sold Aug 2003 - Sep 2008 |
@@ -72,7 +72,14 @@ window too short for enough pairs says so instead of giving a verdict:
 | `fall-2021-2024` | bought and sold Oct 2021 - Oct 2024 |
 | `recent-2024-now` | bought and sold since Nov 2024 |
 | `bought-after-crash` | bought from Jul 2003 (does the crash drive `all`?) |
-| `fall-2021-2024-1y`, `recent-2024-now-1y` | the last two phases again with a 1-year minimum hold, because the 3-year rule leaves almost no pairs; labelled sensitivities, never mixed into the main verdicts |
+| `fall-2021-2024-1y`, `recent-2024-now-1y` | the last two phases again with a 1-year minimum hold, because the 3-year rule leaves almost no flats sold twice; labelled sensitivities, never mixed into the main verdicts |
+
+The report and the dashboard use three terms: **flats sold twice** (two recorded sales; the
+code calls them "pairs"), **model-valued flats** (a sale before 2018 against the model's
+value today) and **Ricacorp reported gains** (the previous sale taken from Ricacorp's days
+held and % gain). The model-valued check tends to understate real differences, because the
+model learned partly from the same old sale; trust a "no effect" there less than the result
+from flats sold twice.
 
 The standard run takes 5-15 minutes (less when the scrapers are idle) and up to about 9 GB of
 memory (close other big programs).

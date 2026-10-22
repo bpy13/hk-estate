@@ -346,6 +346,16 @@ building, so it finds no subsidised estate. Tasks 2-3 below follow
     Green.
   - Notes: if MTR open data publishes real station-to-station times, use them instead and
     say so in `docs/sources.md`.
+- [x] **Task 14b: distance-based train times** *(added after Task 14, 2e3ad21: a flat 2
+  minutes a stop gives Tuen Mun → Admiralty 31 min against roughly 45; Hong Kong and Central
+  aren't linked.)*
+  - Files: modify `src/hkestate/commute.py`. Test `tests/test_commute.py`.
+  - Done when: tests written first show that each stop's time is 0.5 min of dwell plus the
+    straight-line distance between the two stations at an average line speed. The speed is
+    set so Tuen Mun → Admiralty lands at 40-50 min and Kowloon Tong → Admiralty at 8-11 min.
+    A walking link of 5 min joins Hong Kong (HOK) and Central (CEN), and one of 4 min joins
+    Tsim Sha Tsui (TST) and East Tsim Sha Tsui (ETS). The stop-count estimate stays as a
+    fallback when coordinates are missing. Green.
 - [ ] **Task 15: rent estimate** `[parallel-ok]`
   - Files: create `src/hkestate/rent.py` and `tests/test_rent.py`.
   - Done when:

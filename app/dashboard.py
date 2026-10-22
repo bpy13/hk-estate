@@ -18,6 +18,7 @@ import streamlit as st
 
 from hkestate import dashboard_data as dd
 from hkestate import model
+from hkestate.report import CAVEAT as MODEL_VALUED_CAVEAT
 
 st.set_page_config(page_title="HK Estate", layout="wide")
 
@@ -98,7 +99,8 @@ def page_ranked(df: pd.DataFrame, meta: dict) -> None:
         f"Ranked on {df['ranked_on'].iloc[0]}; model trained {meta.get('trained_at', '?')[:10]}. "
         f"Showing {len(out):,} of {len(df):,}. Discount = how far the expected deal price "
         "(asking less the usual asking-vs-deal gap"
-        + (", **5% assumed** everywhere until enough listing-deal pairs exist" if assumed else "")
+        + (", **5% assumed** everywhere until enough listings can be matched to their sale"
+           if assumed else "")
         + ") sits below the model's fair price. Confidence and flags don't change the order.")
     table = out[["rank", "discount_pct", "estate_name", "building_name", "district", "floor",
                  "flat", "area_sqft", "asking_hkd", "fair_price_hkd", "fair_low_hkd",
@@ -292,7 +294,7 @@ def effect_chart(rows: pd.DataFrame, order: list[str]) -> alt.Chart:
             domain=["raises growth", "lowers growth"], range=[RAISES, LOWERS])),
         tooltip=[alt.Tooltip("setting:N"), alt.Tooltip("text:N", title="Effect (pp/yr)"),
                  alt.Tooltip("verdict:N", title="Verdict"),
-                 alt.Tooltip("n:Q", title="Pairs", format=",")])
+                 alt.Tooltip("n:Q", title="Flats", format=",")])
     labels = alt.Chart(d).mark_text(dy=-12, color="#52514e").encode(
         y=y, x="effect:Q", text="text:N")
     return (zero + bars + dots + labels).properties(height=max(60, 34 * len(d)))
@@ -326,35 +328,38 @@ def page_growth() -> None:
                         format_func=names.get)
     if pick != wanted:
         st.query_params["setting"] = pick
-    ptype = sb.radio("Pairs", list(dd.PAIRS_TYPES), format_func=dd.PAIRS_TYPES.get,
-                     help="Recorded = a flat's two registered sales. Estimated = the "
-                          "second sale is a model price for today (a cross-check).")
+    ptype = sb.radio("Which flats", list(dd.PAIRS_TYPES), format_func=dd.PAIRS_TYPES.get,
+                     help="Sold twice = a flat's two registered sales. Model-valued = the "
+                          "second price is the model's value for today (a cross-check).")
     setting = study.get(pick)
     st.caption(
-        f"Study of {study.date}. Each pair is one flat sold twice; the study asks which "
+        f"Study of {study.date}. It looks at flats sold twice and asks which "
         "features go with faster annual price growth between the two sales, after allowing "
         "for the other features. Numbers are percentage points of growth a year: "
         "+1.00 means 1 point a year faster, which compounds over a holding period.")
+    if ptype == "estimated":
+        st.warning(MODEL_VALUED_CAVEAT)
 
     # ---- verdicts across settings (main settings only) --------------------------------
     st.subheader("Do the findings hold across market phases?")
     vt = dd.verdict_table(main, ptype)
     if vt.empty:
-        st.info("No attribute results for this pair type.")
+        st.info("No attribute results for this kind of flat.")
     else:
         st.dataframe(vt.set_index("Attribute"), use_container_width=True)
         st.caption(
             "**robust** = clearly different from zero and the same direction in both halves "
             "of the data (by time and by district). **significant only** = clear but not "
             "steady across halves. **no effect found** = indistinguishable from zero. "
-            "**too few pairs** = the period holds too few flats sold twice for a verdict. "
+            "**too few flats sold twice** = the period holds too few for a verdict. "
             "The number in brackets is the effect in percentage points a year.")
     if sens:
         with st.expander("Sensitivity checks (shorter minimum holding period)"):
             st.caption(
-                "These re-run the recent phases allowing pairs held only "
+                "These re-run the recent phases allowing flats held only "
                 f"{', '.join(sorted({f'{s.min_hold_years:g}' for s in sens if s.min_hold_years}))}"
-                " year(s) instead of 3, because those phases hold almost no 3-year pairs. "
+                " year(s) instead of 3, because those phases hold almost no flats sold twice "
+                "after a 3-year hold. "
                 "Short holds are dominated by trading costs and noise: read them as hints, "
                 "not as findings, and they never feed the table above.")
             st.dataframe(dd.verdict_table(sens, ptype).set_index("Attribute"),
@@ -394,7 +399,7 @@ def page_growth() -> None:
         dt[["District", "pairs", "median_years", "growth", "net_growth", "rental_yield",
             "total_return", "drawdown", "peak", "trough"]],
         hide_index=True, use_container_width=True, column_config={
-            "pairs": st.column_config.NumberColumn("Pairs", format="%d"),
+            "pairs": st.column_config.NumberColumn("Flats", format="%d"),
             "median_years": st.column_config.NumberColumn("Median hold (yrs)", format="%.1f"),
             "growth": st.column_config.NumberColumn("Growth a year", format="percent"),
             "net_growth": st.column_config.NumberColumn("After costs", format="percent"),
@@ -403,10 +408,10 @@ def page_growth() -> None:
                                                          format="percent"),
             "drawdown": st.column_config.NumberColumn("Worst fall", format="percent"),
             "peak": "Fall from", "trough": "Fall to"})
-    st.caption("Growth = median annual price growth between a flat's two sales. After costs "
+    st.caption("Growth = median annual price growth between a flat's two prices. After costs "
                "= after stamp duty and agent fees. Total return = after-cost growth plus "
                "rental yield. Worst fall = biggest peak-to-trough drop of the district's price "
-               "index in this period (blank if under 100 pairs).")
+               "index in this period (blank if under 100 flats).")
     idx = dd.district_index(setting, ptype)
     if idx.empty:
         st.caption("No price index for this setting.")
