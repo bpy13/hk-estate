@@ -190,7 +190,12 @@ building, so it finds no subsidised estate. Tasks 2-3 below follow
       reasons, flags and URL
     - the dashboard's ranked list hides excluded rows by default (a checkbox shows them)
     - a dashboard check on port 8531 shows both
-- [ ] **Task 5 (main session): real run and manual check**
+- [ ] **Task 5 (main session): real run and manual check** *(first run 2026-10-23 02:59 on
+  the 10-22 snapshot and the 10-21 model: 24,983 ranked, 5,233 duplicates merged, 598
+  excluded. 14,661 active sale listings have no building match, so they are not ranked.
+  Shortlist ranks 2-3 are 御海灣 and rank 4 is Grand Yoho: newer estates whose fair price is
+  still inflated by first-hand sales. Task 8b fixes that only at the Task 11 retrain, so the
+  manual check of 20 URLs moves to after Task 11.)*
   - Run `hkestate rank --from-snapshot`. Open 20 shortlist URLs.
   - Done when: acceptance A1 holds. The result (data errors found, if any) is noted in this
     plan.
