@@ -70,8 +70,13 @@ MODEL_MIN_COMPS, MODEL_RATIO = 5, 1.25
 SUBSIDISED_RATIO, SUBSIDISED_MIN_DEALS = 0.7, 3
 BELOW_ALL_MIN_COMPS = 3        # below_all_recent needs this many deals in the window
 DUP_TOLERANCE = 0.02           # same-flat duplicates: area and price within 2%
+BLANK_FLAT_TOLERANCE = 0.01    # flat missing on a side: area and price must agree to 1%
+MAX_BLANK_FLAT_MERGES = 3      # and one kept row absorbs at most this many such rows
 _NOT_ONE_FLAT_WORDS = re.compile(r"複式|天台")
-CHECK_ORDER = ["subsidised", "check_match", "check_area", "check_combined", "check_area_basis",
+# No `check_match`: match_building returns no building for a doubtful match, so such a
+# listing never gets here (it is counted as "no building match"). Giving it a building id
+# would make gap.py, the facing/age tables and the dashboard treat it as a confirmed match.
+CHECK_ORDER = ["subsidised", "check_area", "check_combined", "check_area_basis",
                "check_price", "check_model", "check_subsidised"]
 
 
@@ -164,7 +169,6 @@ def listing_checks(li: pd.DataFrame, deals: pd.DataFrame, index: pd.DataFrame, t
 
     conditions = {
         "subsidised": name.isin(subsidised),
-        "check_match": li["match_method"].eq("check_match"),
         "check_price": (price_ratio < PRICE_RATIO[0]) | (price_ratio > PRICE_RATIO[1]),
         "check_model": (li["comps_24m"] >= MODEL_MIN_COMPS)
                        & (li["fair_psf"] > MODEL_RATIO * li["comps_median_psf"]),
@@ -200,24 +204,42 @@ def _collapse_same_flat(li: pd.DataFrame) -> pd.DataFrame:
     keys = li["key"].to_numpy()
     flat, flat_blank = li["flat"].to_numpy(dtype=object), _blank(li["flat"])
     band, band_blank = li["floor_band"].to_numpy(dtype=object), _blank(li["floor_band"])
+    also = li["also_listed"].to_numpy(dtype=object)
     for rows in li.groupby("building_id", sort=False).indices.values():
         for n, i in enumerate(rows):
             if drop[i]:
                 continue
             later = rows[n + 1:]
             later = later[~drop[later]]
-            hit = (np.abs(area[later] - area[i]) <= DUP_TOLERANCE * area[i]) \
-                & (np.abs(price[later] - price[i]) <= DUP_TOLERANCE * price[i]) \
-                & (flat_blank[later] | flat_blank[i] | (flat[later] == flat[i])) \
+            blank_flat = flat_blank[later] | flat_blank[i]
+            near = (np.abs(area[later] - area[i]) <= DUP_TOLERANCE * area[i]) \
+                & (np.abs(price[later] - price[i]) <= DUP_TOLERANCE * price[i])
+            # a flat missing on either side: nothing says the two are the same flat, so the
+            # floor band must be given and equal, and area and price within 1% (J3)
+            close = (np.abs(area[later] - area[i]) <= BLANK_FLAT_TOLERANCE * area[i]) \
+                & (np.abs(price[later] - price[i]) <= BLANK_FLAT_TOLERANCE * price[i]) \
+                & ~band_blank[later] & ~band_blank[i] & (band[later] == band[i])
+            hit = near & np.where(blank_flat, close, flat[later] == flat[i]) \
                 & (band_blank[later] | band_blank[i] | (band[later] == band[i]))
-            for j in later[hit]:
+            blank_taken = 0
+            for j, was_blank in zip(later[hit], blank_flat[hit], strict=True):
+                if was_blank:
+                    if blank_taken >= MAX_BLANK_FLAT_MERGES:
+                        continue
+                    blank_taken += 1
                 drop[j] = True
                 extra.setdefault(i, []).append(keys[j])
+                # the folded row's own cross-site keys move to the kept row
+                if isinstance(also[j], str):
+                    extra[i] += [k for k in also[j].split(", ") if k]
     kept = li[~drop].copy()
     for i, more in extra.items():
         row = li.index[i]
         old = kept.at[row, "also_listed"]
-        kept.at[row, "also_listed"] = ", ".join(([old] if isinstance(old, str) else []) + more)
+        mine = [k for k in ([old] if isinstance(old, str) else []) + more
+                for k in (k.split(", ") if ", " in k else [k])]
+        kept.at[row, "also_listed"] = ", ".join(
+            k for k in dict.fromkeys(mine) if k != keys[i])
     return kept
 
 
@@ -232,7 +254,7 @@ def _floor_text(row) -> str:
     if row["floor_basis"] == "exact":
         return f"{row['floor_num']:.0f}/F"
     if row["floor_basis"] == "band":
-        return f"{row['floor_band'] if row['floor_band'] != 'unknown' else 'band'} band"
+        return f"{row['floor_band']} band" if row["floor_band"] != "unknown" else "not given"
     return "not given"
 
 

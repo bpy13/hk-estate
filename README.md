@@ -109,7 +109,6 @@ the box) and stays in the CSV:
 |---|---|
 | `subsidised` | the estate is on the subsidised-estate list (`src/hkestate/subsidised_estates.csv`); outside this project's scope |
 | `check_subsidised` | name ends 苑 or 邨 and prices run far below its district: probably subsidised |
-| `check_match` | the listing text names a block the estate does not have: probably the wrong building |
 | `check_area` | area under 150 or over 5,000 sq ft, or far above the building's recorded areas: probably a typo |
 | `check_area_basis` | area 12-45% above the flat's recorded saleable area: probably gross area |
 | `check_combined` | the text says two adjacent flats are sold as one |

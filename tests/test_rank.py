@@ -45,7 +45,7 @@ def ranked(tmp_path, monkeypatch):
     # flats of one size at one price
     add_listing(con, "centanet", "SAME1", "cd-1-BBB", price=7_000_000, area=450.0, flat="E",
                 band="mid")
-    add_listing(con, "centanet", "SAME2", "cd-1-BBB", price=7_100_000, area=451.0)
+    add_listing(con, "centanet", "SAME2", "cd-1-BBB", price=7_030_000, area=450.0, band="mid")
     add_listing(con, "centanet", "DIFF1", "h28-1-b1", price=14_000_000, area=450.0, flat="G")
     add_listing(con, "centanet", "DIFF2", "h28-1-b1", price=14_000_000, area=450.0, flat="H")
     add_listing(con, "centanet", "DEAR", "h28-1-b1", price=40_000_000, area=610.0, flat="C",
@@ -122,7 +122,7 @@ def test_below_all_recent_is_information_only(ranked):
 
 def test_same_flat_listed_twice_on_one_site_is_one_row(ranked):
     df = ranked.table.set_index("listing_id")
-    # SAME2 has no flat or band: it matches SAME1 on building, area (2%) and price (2%)
+    # SAME2 has no flat: it matches SAME1 on building, floor band, area (1%) and price (1%)
     assert "SAME2" not in df.index
     assert "centanet:SAME2" in df.loc["SAME1", "also_listed"]
     # different flats of one size at one price stay two rows
@@ -178,9 +178,62 @@ def test_subsidised_names_and_the_stop_gap_flag():
     assert pd.isna(_check(_frame(estate_name="某大廈"), deals)["exclude_reason"][0])
 
 
-def test_the_wrong_match_method_is_flagged():
-    assert _check(_frame(match_method="check_match"), _deals())["exclude_reason"][0] == (
-        "check_match")
+def test_check_match_is_not_a_listing_check():
+    # match_building returns no building for a 'check_match', so such a listing never reaches
+    # the ranking (it is "no building match"); the reason is not in the list
+    assert "check_match" not in rank.CHECK_ORDER
+    assert pd.isna(_check(_frame(match_method="check_match"), _deals())["exclude_reason"][0])
+
+
+def _dups(rows):
+    base = {"_excluded": False, "building_id": "b", "area_sqft": 500.0, "asking_hkd": 5e6,
+            "flat": None, "floor_band": "unknown", "also_listed": None}
+    return pd.DataFrame([{**base, **r} for r in rows])
+
+
+def test_a_folded_row_carries_its_own_also_listed_keys():
+    li = _dups([{"key": "a", "asking_hkd": 5.0e6, "flat": "B", "floor_band": "high"},
+                {"key": "b", "asking_hkd": 5.01e6, "flat": "B", "floor_band": "high",
+                 "also_listed": "x:1, a"}])
+    kept = rank._collapse_same_flat(li)
+    assert list(kept["key"]) == ["a"]
+    # b's own list ("x:1, a") comes along, without the kept row's own key and without repeats
+    assert kept["also_listed"].iloc[0].split(", ") == ["b", "x:1"]
+
+
+def test_blank_flat_needs_same_band_and_one_percent():
+    same = {"flat": None, "floor_band": "mid"}
+    # blank flat, same band, within 1%: merged
+    kept = rank._collapse_same_flat(_dups([
+        {"key": "a", "flat": "E", "floor_band": "mid"},
+        {"key": "b", "asking_hkd": 5.04e6, "area_sqft": 502.0, **same}]))
+    assert list(kept["key"]) == ["a"]
+    # blank band on the blank-flat side, or a 1.5% price gap: kept apart
+    for other in ({"floor_band": "unknown", "flat": None},
+                  {"asking_hkd": 5.075e6, **same}, {"area_sqft": 508.0, **same}):
+        kept = rank._collapse_same_flat(_dups([
+            {"key": "a", "flat": "E", "floor_band": "mid"}, {"key": "b", **{**same, **other}}]))
+        assert len(kept) == 2, other
+    # both flats named and equal: the old 2% rule still holds
+    kept = rank._collapse_same_flat(_dups([
+        {"key": "a", "flat": "E"}, {"key": "b", "flat": "E", "asking_hkd": 5.09e6}]))
+    assert len(kept) == 1
+
+
+def test_one_row_absorbs_at_most_three_blank_flat_rows():
+    rows = [{"key": "a", "flat": "E", "floor_band": "mid"}]
+    rows += [{"key": f"z{i}", "flat": None, "floor_band": "mid"} for i in range(6)]
+    kept = rank._collapse_same_flat(_dups(rows))
+    assert kept[kept["key"] == "a"]["also_listed"].iloc[0].count("z") == 3
+
+
+def test_floor_text_never_says_band_band():
+    def text(basis, band, num=12.0):
+        return rank._floor_text({"floor_basis": basis, "floor_band": band, "floor_num": num})
+    assert text("exact", "mid") == "12/F"
+    assert text("band", "high") == "high band"
+    assert text("band", "unknown") == "not given"
+    assert text("none", "unknown") == "not given"
 
 
 def test_gross_area_band_for_a_flat_letter_and_without_one():

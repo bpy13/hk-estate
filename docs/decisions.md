@@ -440,7 +440,7 @@ exit 0xC000013A (a console Ctrl+C/close); the day before, all three long jobs di
 ## Listing checks (2026-10-23, Claude's call)
 From `docs/ranking-diagnosis.md` (rank.py `listing_checks`). A check never changes a value;
 it puts a reason in `exclude_reason` and the row goes to the end of the ranking, never
-deleted. One reason per row, first that applies: `subsidised`, `check_match`, `check_area`,
+deleted. One reason per row, first that applies: `subsidised`, `check_area`,
 `check_combined`, `check_area_basis`, `check_price`, `check_model`, `check_subsidised`.
 - `subsidised`: estate named in `src/hkestate/subsidised_estates.csv` (seed: 銀蔚苑; the
   Housing Authority's HOS/PSPS/TPS list still to be added). The master list's own flag finds
@@ -456,7 +456,10 @@ deleted. One reason per row, first that applies: `subsidised`, `check_match`, `c
   median (all clean deals). Lower bound 0.6 not the plan's 0.4: nothing real is below it.
   A typo guard, not a filter.
 - `check_model`: 5+ comps in 24 months and fair price over 1.25x their median.
-- `check_match`: reserved for the matcher's flag for a block the estate doesn't have (Task 2b).
+- `check_match` (matcher flag for a block the estate doesn't have) is not a ranking reason: the
+  matcher returns no building for it, so the listing is "no building match" and is not ranked.
+  Keeping its building id would make the gap, facing/age and dashboard code treat it as a
+  confirmed match (pre-release review, 2026-10-23).
 - `below_all_recent`: information only. Asking per sq ft under the building's lowest clean
   deal of the last 24 months, with 3+ such deals.
 - Duplicates: same building, area within 2%, price within 2%, floor band and flat equal or

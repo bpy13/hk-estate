@@ -187,7 +187,7 @@ The first-hand window is 24 months after completion, or 72 months for buildings 
 2010 or later (decisions.md "Cheap-sale rule").
 
 **Listings** get their own `exclude_reason` in `rank.listing_checks` (decisions.md "Listing
-checks"). One value per row, first that applies: `subsidised`, `check_match`, `check_area`,
+checks"). One value per row, first that applies: `subsidised`, `check_area`,
 `check_combined`, `check_area_basis`, `check_price`, `check_model`, `check_subsidised`. Rows
 with a value are ranked last and hidden by default on the dashboard; none are deleted.
 `below_all_recent` is a separate information flag.
