@@ -18,6 +18,7 @@ import csv
 import io
 import math
 import re
+import time
 from dataclasses import dataclass
 from datetime import date
 from html import unescape
@@ -291,6 +292,21 @@ def load_stations(fetcher, db_path=None, log=print) -> int:
     return missing
 
 
+def update_from_frame(con, frame, columns: list[str]) -> None:
+    """Write `columns` of master_building for every row of `frame` (which has a building_id
+    column) in ONE statement. Per-row UPDATEs of tens of thousands of buildings keep the
+    database file locked for minutes; this takes seconds."""
+    if frame.empty:
+        return
+    con.register("_upd", frame)
+    try:
+        sets = ", ".join(f"{c} = _upd.{c}" for c in columns)
+        con.execute(f"UPDATE master_building SET {sets} FROM _upd "
+                    "WHERE master_building.building_id = _upd.building_id")
+    finally:
+        con.unregister("_upd")
+
+
 def mark_mismatches(con) -> int:
     """Set geo_status = 'mismatch' on 'ok' geocodes whose ALS district differs from the
     building's own district (same first-two-characters test as geocode_buildings). Buildings
@@ -320,10 +336,25 @@ def assign_mtr(con) -> int:
     rows = con.execute(
         "SELECT building_id, lat, lon FROM master_building WHERE lat IS NOT NULL "
         "AND geo_status IS DISTINCT FROM 'mismatch'").fetchall()
-    for bid, lat, lon in rows:
-        name, m = nearest_station(lat, lon, stations)
-        con.execute("UPDATE master_building SET mtr_station = ?, mtr_m = ? WHERE building_id = ?",
-                    [name, round(m), bid])
+    if not rows:
+        return 0
+    import numpy as np
+    import pandas as pd
+
+    slat = np.radians(np.array([s[1] for s in stations], dtype=float))
+    slon = np.radians(np.array([s[2] for s in stations], dtype=float))
+    names = [s[0] for s in stations]
+    out_name, out_m = [], []
+    for _, lat, lon in rows:  # one numpy pass per building over the ~100 stations
+        p1 = math.radians(lat)
+        a = (np.sin((slat - p1) / 2) ** 2
+             + math.cos(p1) * np.cos(slat) * np.sin((slon - math.radians(lon)) / 2) ** 2)
+        i = int(a.argmin())  # haversine is monotonic in a; ties go to the first station
+        out_name.append(names[i])
+        out_m.append(round(2 * 6_371_000 * math.asin(math.sqrt(a[i]))))
+    frame = pd.DataFrame({"building_id": [r[0] for r in rows], "mtr_station": out_name,
+                          "mtr_m": out_m})
+    update_from_frame(con, frame, ["mtr_station", "mtr_m"])
     return len(rows)
 
 
@@ -344,24 +375,29 @@ def fill_districts(con) -> int:
     In order: (1) the building's own ALS answer, (2) the most common district of the other
     buildings of the same estate, (3) the district of the nearest geocoded building within
     1 km. Returns the number of buildings set."""
+    import pandas as pd
+
+    def write(pairs: list[tuple[str, str]]) -> int:
+        update_from_frame(con, pd.DataFrame(pairs, columns=["building_id", "district"]),
+                          ["district"])
+        return len(pairs)
+
     n = 0
+    found = []
     for bid, gd in con.execute(
             "SELECT building_id, geo_district FROM master_building "
             "WHERE district IS NULL AND geo_district IS NOT NULL").fetchall():
         d = _als_district(gd)
         if d:
-            con.execute("UPDATE master_building SET district = ? WHERE building_id = ?", [d, bid])
-            n += 1
+            found.append((bid, d))
+    n += write(found)
     # ties go to the alphabetically first name, so a rerun gives the same answer
     rows = con.execute("""
         SELECT m.building_id, (SELECT d.district FROM master_building d
                                WHERE d.estate_code = m.estate_code AND d.district IS NOT NULL
                                GROUP BY d.district ORDER BY count(*) DESC, d.district LIMIT 1)
         FROM master_building m WHERE m.district IS NULL AND m.estate_code IS NOT NULL""").fetchall()
-    for bid, d in rows:
-        if d:
-            con.execute("UPDATE master_building SET district = ? WHERE building_id = ?", [d, bid])
-            n += 1
+    n += write([(bid, d) for bid, d in rows if d])
     import numpy as np
 
     donors = con.execute("SELECT lat, lon, district FROM master_building "
@@ -374,6 +410,7 @@ def fill_districts(con) -> int:
         dlat = np.array([r[0] for r in donors])
         dlon = np.array([r[1] for r in donors])
         names = [r[2] for r in donors]
+        near = []
         for bid, lat, lon in todo:
             p1, p2 = np.radians(lat), np.radians(dlat)
             a = (np.sin((p2 - p1) / 2) ** 2
@@ -381,9 +418,8 @@ def fill_districts(con) -> int:
             dist = 2 * 6_371_000 * np.arcsin(np.sqrt(a))
             i = int(dist.argmin())
             if dist[i] <= NEAREST_DISTRICT_M:
-                con.execute("UPDATE master_building SET district = ? WHERE building_id = ?",
-                            [names[i], bid])
-                n += 1
+                near.append((bid, names[i]))
+        n += write(near)
     return n
 
 
@@ -440,13 +476,21 @@ def main(argv=None) -> int:
         with Fetcher() as f:
             load_stations(f, args.db, log)
             stats = {} if args.stations_only else geocode_buildings(f, args.db, log, args.limit)
+        # one short session per step, so other jobs waiting for the database file get a turn
+        def step(name, fn):
+            t = time.perf_counter()
+            with db.session(args.db) as con:
+                result = fn(con)
+            log(f"{name}: {time.perf_counter() - t:.1f}s")
+            return result
+
+        bad = step("mark_mismatches", mark_mismatches)
+        log(f"{bad} geocodes marked mismatch (ALS district differs from the building's)")
+        n = step("assign_mtr", assign_mtr)
+        step("set_building_ages", set_building_ages)
+        filled = step("fill_districts", fill_districts)
+        log(f"district filled for {filled} buildings")
         with db.session(args.db) as con:
-            bad = mark_mismatches(con)
-            log(f"{bad} geocodes marked mismatch (ALS district differs from the building's)")
-            n = assign_mtr(con)
-            set_building_ages(con)
-            filled = fill_districts(con)
-            log(f"district filled for {filled} buildings")
             total, ok = con.execute(
                 "SELECT count(*), count(lat) FROM master_building").fetchone()
         log(f"coordinates for {ok}/{total} buildings; MTR distance set for {n}")

@@ -85,6 +85,26 @@ def test_mtr_distance_needs_every_station(con):
     assert st == "旺角" and 0 < m < 300
 
 
+def test_assign_mtr_matches_per_building_nearest_station(con):
+    """The set-based write gives the same station and rounded metres as nearest_station."""
+    import random
+
+    rng = random.Random(3)
+    stations = [(f"S{i}", rng.uniform(22.2, 22.5), rng.uniform(113.85, 114.3)) for i in range(12)]
+    for i, (n, la, lo) in enumerate(stations):
+        con.execute("INSERT INTO mtr_station VALUES (?, ?, ?, ?, ?)", [f"c{i}", n, n, la, lo])
+    spots = {f"b{i}": (rng.uniform(22.2, 22.5), rng.uniform(113.85, 114.3)) for i in range(60)}
+    for bid, (la, lo) in spots.items():
+        con.execute("INSERT INTO master_building (building_id, lat, lon) VALUES (?, ?, ?)",
+                    [bid, la, lo])
+    assert geo.assign_mtr(con) == 60
+    got = dict((r[0], (r[1], r[2])) for r in con.execute(
+        "SELECT building_id, mtr_station, mtr_m FROM master_building").fetchall())
+    for bid, (la, lo) in spots.items():
+        name, m = geo.nearest_station(la, lo, stations)
+        assert got[bid] == (name, round(m))
+
+
 WIKI_LIST = """<table>
 <a href="https://en.wikipedia.org/wiki/Admiralty_station_(MTR)">Admiralty</a>
 <a href="https://en.wikipedia.org/wiki/Tsim_Sha_Tsui_station">Tsim Sha Tsui</a>

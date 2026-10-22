@@ -24,8 +24,10 @@ from collections import Counter
 from dataclasses import dataclass, replace
 
 import numpy as np
+import pandas as pd
 
 from hkestate import db
+from hkestate.geo import update_from_frame
 
 LOCATION_CSV = ("https://www.edb.gov.hk/attachment/en/student-parents/sch-info/sch-search/"
                 "sch-location-info/SCH_LOC_EDB.csv")
@@ -167,6 +169,7 @@ def assign_nets(con) -> int:
     buildings = con.execute(
         "SELECT building_id, lat, lon FROM master_building WHERE lat IS NOT NULL "
         "AND lon IS NOT NULL AND geo_status IS DISTINCT FROM 'mismatch'").fetchall()
+    chosen = []
     for bid, lat, lon in buildings:
         p1 = np.radians(lat)
         a = (np.sin((slat - p1) / 2) ** 2
@@ -175,7 +178,10 @@ def assign_nets(con) -> int:
         votes = Counter(nets[i] for i in order)
         top = max(votes.values())
         net = next(nets[i] for i in order if votes[nets[i]] == top)  # nearest first
-        con.execute("UPDATE master_building SET school_net = ? WHERE building_id = ?", [net, bid])
+        chosen.append((bid, net))
+    # one statement for all buildings: per-row UPDATEs would hold the database file for minutes
+    update_from_frame(con, pd.DataFrame(chosen, columns=["building_id", "school_net"]),
+                      ["school_net"])
     return len(buildings)
 
 
