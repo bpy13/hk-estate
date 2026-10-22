@@ -31,6 +31,7 @@ THIN_DEALS = 10
 # cell needs this many matched listings to show a premium at all
 PREMIUM_MIN_DEALS = 3
 PREMIUM_MIN_LISTINGS = 10
+SIMILAR_SIZE = 0.30  # "similar size" deals: area within +-30% of the listing's
 
 COLUMNS = [
     "district", "size_class", "median_psf_12m", "n_sales_12m",
@@ -47,21 +48,39 @@ def _clean_deals(raw: dict, deals: pd.DataFrame | None) -> pd.DataFrame:
                  psf_hkd=pd.to_numeric(d["psf_hkd"], errors="coerce"))
     if "building_id" not in d:
         d = d.assign(building_id=None)
+    if "area_sqft" not in d:
+        d = d.assign(area_sqft=np.nan)
+    d = d.assign(area_sqft=pd.to_numeric(d["area_sqft"], errors="coerce"))
     return d.dropna(subset=["agreement_date", "psf_hkd"])[
-        ["district", "rvd_class", "agreement_date", "psf_hkd", "building_id"]]
+        ["district", "rvd_class", "agreement_date", "psf_hkd", "building_id", "area_sqft"]]
 
 
-def _listing_ratios(li: pd.DataFrame, d: pd.DataFrame, end: pd.Timestamp) -> pd.Series:
-    """Asking psf / the building's median deal psf of the last 12 months, for each sale
-    listing in a building with at least PREMIUM_MIN_DEALS such deals (NaN otherwise). Same
-    building, so the same sort of flat. Not index-adjusted: it is 12 months of one building."""
+def _listing_ratios(li: pd.DataFrame, d: pd.DataFrame, end: pd.Timestamp) -> pd.DataFrame:
+    """Per sale listing: `ratio` = asking psf / the median deal psf of its building in the
+    last 12 months, using deals of similar size (area within +-SIMILAR_SIZE of the listing's);
+    when the building has fewer than PREMIUM_MIN_DEALS such deals, all its deals of any size
+    (`similar_size` False). NaN when the building has too few deals either way. Not
+    index-adjusted: it is 12 months of one building. Small and large flats of one building
+    sell at very different psf, hence the size match (review J4)."""
     ask = _asking_psf(li)
+    out = pd.DataFrame({"ratio": np.nan, "similar_size": False}, index=li.index)
     if "building_id" not in li:
-        return pd.Series(np.nan, index=li.index)
+        return out
     recent = d[(d["agreement_date"] > end - pd.DateOffset(months=12)) & d["building_id"].notna()]
-    g = recent.groupby("building_id")["psf_hkd"].agg(["median", "size"])
-    med = g.loc[g["size"] >= PREMIUM_MIN_DEALS, "median"]
-    return ask / li["building_id"].map(med)
+    allsize = recent.groupby("building_id")["psf_hkd"].agg(["median", "size"])
+    allsize = allsize[allsize["size"] >= PREMIUM_MIN_DEALS]["median"]
+    mine = pd.DataFrame({"building_id": li["building_id"], "ask": ask,
+                         "area": li["area_sqft"]}).dropna(subset=["building_id", "ask"])
+    pairs = mine.reset_index(names="_li").merge(
+        recent[["building_id", "area_sqft", "psf_hkd"]].dropna(), on="building_id")
+    pairs = pairs[(pairs["area_sqft"] - pairs["area"]).abs() <= SIMILAR_SIZE * pairs["area"]]
+    g = pairs.groupby("_li")["psf_hkd"].agg(["median", "size"])
+    g = g[g["size"] >= PREMIUM_MIN_DEALS]["median"]
+    similar = mine.index.to_series().map(g)  # NaN where fewer than 3 similar deals
+    base = similar.fillna(mine["building_id"].map(allsize))
+    out.loc[mine.index, "ratio"] = mine["ask"] / base
+    out.loc[mine.index, "similar_size"] = similar.notna().to_numpy()
+    return out
 
 
 def _active_listings(raw: dict, listings: pd.DataFrame | None) -> pd.DataFrame:
@@ -167,7 +186,7 @@ def summary(raw: dict, today: date | None = None, deals: pd.DataFrame | None = N
         d = d[d["agreement_date"] <= pd.Timestamp(today)]
     end = d["agreement_date"].max().normalize()
     li = _active_listings(raw, listings)
-    li = li.assign(ratio=_listing_ratios(li, d, end))
+    li = li.join(_listing_ratios(li, d, end))
     index_df = raw.get("index")
 
     rows = []
@@ -183,6 +202,10 @@ def summary(raw: dict, today: date | None = None, deals: pd.DataFrame | None = N
     out = pd.DataFrame(rows, columns=COLUMNS)
     out.attrs["data_to"] = end
     out.attrs["three_month_change_ends"] = end - pd.Timedelta(days=RECENT_GAP_DAYS)
+    # the idx_chg_* columns come from the RVD index, which exists per size class only: every
+    # district shows the same territory-wide figure (J4)
+    out.attrs["index_scope"] = ("idx_chg_3m / idx_chg_12m: RVD index by size class, "
+                                "territory-wide (the same in every district)")
     return out
 
 

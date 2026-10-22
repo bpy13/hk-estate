@@ -81,6 +81,29 @@ def test_ask_premium_is_building_matched(monkeypatch):
     assert r.n_premium == 2 and np.isnan(r.ask_premium)  # too few listings: blank
 
 
+def test_ask_premium_compares_with_deals_of_similar_size(monkeypatch):
+    monkeypatch.setattr(market, "PREMIUM_MIN_LISTINGS", 1)
+    # one building: small flats sell at 200 psf, a big one at 100 psf
+    rows = [("X", "C", "2026-06-01", p, None, "b1", a) for p, a in
+            [(20000, 500), (20000, 520), (20000, 480), (10000, 1500), (10000, 1500),
+             (10000, 1500)]]
+    deals = pd.DataFrame(rows, columns=["district", "rvd_class", "agreement_date", "psf_hkd",
+                                        "exclude_reason", "building_id", "area_sqft"])
+    li = pd.DataFrame([("sale", "X", 500, 11_000_000, "b1"),    # ask 22,000 vs similar 20,000
+                       ("sale", "X", 1500, 16_500_000, "b1"),   # ask 11,000 vs similar 10,000
+                       ("sale", "X", 900, 9_900_000, "b1")],    # ask 11,000: no 3 similar deals
+                      columns=["kind", "district", "area_sqft", "price_hkd", "building_id"])
+    li["rvd_class"] = "C"
+    ratios = market._listing_ratios(li, market._clean_deals({}, deals), pd.Timestamp("2026-06-30"))
+    # the last one falls back to all sizes: median 15,000
+    assert list(ratios["ratio"]) == pytest.approx([1.10, 1.10, 11_000 / 15_000])
+    assert list(ratios["similar_size"]) == [True, True, False]
+
+
+def test_index_columns_are_labelled_territory_wide(table):
+    assert "territory" in table.attrs["index_scope"].lower()
+
+
 def test_all_sizes_and_territory_rows(table):
     assert _row(table, "X", "ALL").n_sales_12m == 7
     t = _row(table, market.TERRITORY, "ALL")
