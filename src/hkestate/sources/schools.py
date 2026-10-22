@@ -179,7 +179,8 @@ def assign_nets(con) -> int:
 
 def load(fetcher, db_path=None, log=print) -> int:
     """Download both EDB files (through the polite fetcher), store the schools and assign
-    nets to geocoded buildings. Returns buildings assigned."""
+    nets to geocoded buildings. Returns buildings assigned. No DB session is open while
+    fetching; one short session then writes and assigns."""
     rows = parse_locations(fetcher.get_bytes(LOCATION_CSV, "static"))
     nets = parse_net_lists(pdf_pages(fetcher.get_bytes(NET_LISTS_PDF, "static")))
     rows = attach_nets(rows, nets)
@@ -187,13 +188,61 @@ def load(fetcher, db_path=None, log=print) -> int:
     if not netted:
         raise LayoutChanged("no school on the net lists matched the school location file")
     unmatched = len(nets) - netted
+    n = _write_and_assign(db_path, rows, log)
+    log(f"{len(rows)} primary schools, {netted} with a net ({len(set(nets.values()))} nets); "
+        f"{unmatched} listed schools not in the location file")
+    return n
+
+
+def _write_and_assign(db_path, rows: list[School] | None, log) -> int:
+    """One short session: store rows (None = keep the stored ones) and assign nets."""
     with db.session(db_path) as con:
         db.init_db(con)
         from hkestate.sources import cd_master
         cd_master.ensure_tables(con)
         ensure_tables(con)
-        store(con, rows)
+        if rows is not None:
+            store(con, rows)
         n = assign_nets(con)
-    log(f"{len(rows)} primary schools, {netted} with a net ({len(set(nets.values()))} nets); "
-        f"{unmatched} listed schools not in the location file; nets set for {n} buildings")
+        total = con.execute(
+            "SELECT count(*) FROM master_building WHERE lat IS NOT NULL "
+            "AND lon IS NOT NULL").fetchone()[0]
+    log(f"school net for {n} of {total} geocoded buildings")
     return n
+
+
+def main(argv=None) -> int:
+    import argparse
+
+    from hkestate.cli import _logger
+    from hkestate.fetch import Fetcher
+
+    p = argparse.ArgumentParser(prog="python -m hkestate.sources.schools")
+    p.add_argument("--db", default=None)
+    p.add_argument("--assign-only", action="store_true",
+                   help="skip fetching; reuse the stored school rows and re-assign nets")
+    args = p.parse_args(argv)
+    log = _logger("schools")
+    with db.session(args.db) as con:
+        db.init_db(con)
+        run_id = db.start_run(con, "schools")
+    status, message, n = "failed", "", 0
+    try:
+        if args.assign_only:
+            n = _write_and_assign(args.db, None, log)
+        else:
+            with Fetcher() as f:
+                n = load(f, args.db, log)
+        status = "ok"
+    except Exception as e:
+        message = f"{type(e).__name__}: {e}"
+        log(message)
+        raise
+    finally:
+        with db.session(args.db) as con:
+            db.finish_run(con, run_id, status, n, message)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

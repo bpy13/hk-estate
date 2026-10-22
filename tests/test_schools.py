@@ -126,6 +126,41 @@ def test_load_uses_fetcher_and_stores(tmp_path, pages, csv_bytes, monkeypatch):
     assert messages
 
 
+def test_main_loads_assigns_and_records_run(tmp_path, pages, csv_bytes, monkeypatch):
+    import hkestate.fetch as fetch_mod
+
+    class FakeFetcher:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def get_bytes(self, url, page_type):
+            return csv_bytes if url.endswith(".csv") else b"%PDF fake"
+
+    monkeypatch.setattr(fetch_mod, "Fetcher", FakeFetcher)
+    monkeypatch.setattr(schools, "pdf_pages", lambda content: pages)
+    path = tmp_path / "t.duckdb"
+    with db.session(path) as c:
+        db.init_db(c)
+        cm.ensure_tables(c)
+        c.execute("INSERT INTO master_building (building_id, lat, lon) VALUES "
+                  "('kt', 22.2845, 114.13), ('none', NULL, NULL)")
+    assert schools.main(["--db", str(path)]) == 0
+    with db.session(path) as c:
+        assert c.execute("SELECT school_net FROM master_building "
+                         "WHERE building_id = 'kt'").fetchone()[0] == "11"
+        assert c.execute("SELECT count(*) FROM primary_school").fetchone()[0] == 7
+        c.execute("UPDATE master_building SET school_net = NULL")
+    # assign-only: no fetcher needed, stored schools reused
+    monkeypatch.setattr(fetch_mod, "Fetcher", None)
+    assert schools.main(["--db", str(path), "--assign-only"]) == 0
+    with db.session(path) as c:
+        assert c.execute("SELECT school_net FROM master_building "
+                         "WHERE building_id = 'kt'").fetchone()[0] == "11"
+
+
 def test_load_refuses_a_list_with_too_few_schools(tmp_path, csv_bytes, monkeypatch):
     class FakeFetcher:
         def get_bytes(self, url, page_type):
