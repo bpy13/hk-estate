@@ -170,6 +170,45 @@ def test_fill_districts_from_nearest_building_within_1km(con):
     assert _district(con, "b") is None and _district(con, "c") is None
 
 
+def _status(con, bid, status):
+    con.execute("UPDATE master_building SET geo_status = ? WHERE building_id = ?", [status, bid])
+
+
+def test_mark_mismatches_only_ok_rows_with_both_districts_differing(con):
+    _bld(con, "bad", None, "東區", "灣仔區", lat=22.3, lon=114.2)
+    _bld(con, "same", None, "東區", "東區", lat=22.3, lon=114.2)
+    _bld(con, "nodist", None, None, "灣仔區", lat=22.3, lon=114.2)
+    _bld(con, "noals", None, "東區", None, lat=22.3, lon=114.2)
+    _bld(con, "nomatch", None, "東區", "灣仔區")
+    for b in ("bad", "same", "nodist", "noals"):
+        _status(con, b, "ok")
+    _status(con, "nomatch", "no_match")
+    assert geo.mark_mismatches(con) == 1
+    got = dict(con.execute("SELECT building_id, geo_status FROM master_building").fetchall())
+    assert got == {"bad": "mismatch", "same": "ok", "nodist": "ok", "noals": "ok",
+                   "nomatch": "no_match"}
+    assert geo.mark_mismatches(con) == 0
+
+
+def test_mismatch_gets_no_mtr_and_no_district_donation(con):
+    con.execute("INSERT INTO mtr_station VALUES ('MOK', '旺角', 'Mong Kok', 22.3193, 114.1693)")
+    _bld(con, "bad", None, "東區", "灣仔區", lat=22.32, lon=114.17)
+    _bld(con, "good", None, "油尖旺區", "油尖旺區", lat=22.3200, lon=114.1700)
+    _bld(con, "needs", None, None, lat=22.3205, lon=114.1702)
+    _status(con, "good", "ok")
+    _status(con, "needs", "ok")
+    _status(con, "bad", "ok")
+    con.execute("UPDATE master_building SET mtr_m = 5, mtr_station = 'x' WHERE building_id = 'bad'")
+    geo.mark_mismatches(con)
+    assert geo.assign_mtr(con) == 2
+    assert con.execute("SELECT mtr_m, mtr_station FROM master_building "
+                       "WHERE building_id = 'bad'").fetchone() == (None, None)
+    # the wrong-district building must not lend its district either
+    con.execute("DELETE FROM master_building WHERE building_id = 'good'")
+    geo.fill_districts(con)
+    assert _district(con, "needs") is None  # only 'bad' is near, and its coordinates are distrusted
+
+
 def test_fill_districts_order_and_never_overwrites(con):
     _bld(con, "e1", "E1", "東區")
     _bld(con, "keep", "E1", "南區", geo_district="沙田區")   # has one: untouched

@@ -89,6 +89,16 @@ def test_assign_nets_most_common_of_three_nearest(con, pages, csv_bytes):
     assert got == {"kt": "11", "wc": "12", "none": None}
 
 
+def test_assign_nets_skips_mismatched_geocodes_and_clears_their_net(con, pages, csv_bytes):
+    _stored(con, pages, csv_bytes)
+    con.execute("INSERT INTO master_building (building_id, lat, lon, geo_status, school_net) "
+                "VALUES ('bad', 22.2845, 114.1300, 'mismatch', '11'),"
+                "('ok', 22.2845, 114.1300, 'ok', NULL)")
+    assert schools.assign_nets(con) == 1
+    got = dict(con.execute("SELECT building_id, school_net FROM master_building").fetchall())
+    assert got == {"bad": None, "ok": "11"}
+
+
 def test_assign_nets_ignores_schools_without_a_net_and_breaks_ties_by_distance(con):
     con.execute("INSERT INTO primary_school (school_no, name_zh, lat, lon, net) VALUES "
                 "('1', 'a', 22.300, 114.170, '31'), ('2', 'b', 22.301, 114.170, '32'),"

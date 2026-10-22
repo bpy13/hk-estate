@@ -270,6 +270,21 @@ def load_stations(fetcher, db_path=None, log=print) -> int:
     return missing
 
 
+def mark_mismatches(con) -> int:
+    """Set geo_status = 'mismatch' on 'ok' geocodes whose ALS district differs from the
+    building's own district (same first-two-characters test as geocode_buildings). Buildings
+    with no district of their own are left alone. Returns rows newly marked."""
+    n = con.execute(
+        "SELECT count(*) FROM master_building WHERE geo_status = 'ok' AND district IS NOT NULL "
+        "AND geo_district IS NOT NULL AND left(district, 2) <> left(geo_district, 2)"
+    ).fetchone()[0]
+    con.execute(
+        "UPDATE master_building SET geo_status = 'mismatch' WHERE geo_status = 'ok' "
+        "AND district IS NOT NULL AND geo_district IS NOT NULL "
+        "AND left(district, 2) <> left(geo_district, 2)")
+    return n
+
+
 def assign_mtr(con) -> int:
     """Nearest-station distance for every geocoded building; 0 if any station lacks
     coordinates (see module docstring). Returns buildings updated."""
@@ -278,8 +293,12 @@ def assign_mtr(con) -> int:
     stations = con.execute("SELECT name_zh, lat, lon FROM mtr_station").fetchall()
     if not stations:
         return 0
+    # a mismatch row's coordinates are distrusted: no distance from them
+    con.execute("UPDATE master_building SET mtr_station = NULL, mtr_m = NULL "
+                "WHERE geo_status = 'mismatch'")
     rows = con.execute(
-        "SELECT building_id, lat, lon FROM master_building WHERE lat IS NOT NULL").fetchall()
+        "SELECT building_id, lat, lon FROM master_building WHERE lat IS NOT NULL "
+        "AND geo_status IS DISTINCT FROM 'mismatch'").fetchall()
     for bid, lat, lon in rows:
         name, m = nearest_station(lat, lon, stations)
         con.execute("UPDATE master_building SET mtr_station = ?, mtr_m = ? WHERE building_id = ?",
@@ -325,9 +344,11 @@ def fill_districts(con) -> int:
     import numpy as np
 
     donors = con.execute("SELECT lat, lon, district FROM master_building "
-                         "WHERE district IS NOT NULL AND lat IS NOT NULL").fetchall()
+                         "WHERE district IS NOT NULL AND lat IS NOT NULL "
+                         "AND geo_status IS DISTINCT FROM 'mismatch'").fetchall()
     todo = con.execute("SELECT building_id, lat, lon FROM master_building "
-                       "WHERE district IS NULL AND lat IS NOT NULL").fetchall()
+                       "WHERE district IS NULL AND lat IS NOT NULL "
+                       "AND geo_status IS DISTINCT FROM 'mismatch'").fetchall()
     if donors and todo:
         dlat = np.array([r[0] for r in donors])
         dlon = np.array([r[1] for r in donors])
@@ -399,6 +420,8 @@ def main(argv=None) -> int:
             load_stations(f, args.db, log)
             stats = {} if args.stations_only else geocode_buildings(f, args.db, log, args.limit)
         with db.session(args.db) as con:
+            bad = mark_mismatches(con)
+            log(f"{bad} geocodes marked mismatch (ALS district differs from the building's)")
             n = assign_mtr(con)
             set_building_ages(con)
             filled = fill_districts(con)

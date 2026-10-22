@@ -162,9 +162,11 @@ def assign_nets(con) -> int:
     slat = np.radians(np.array([s[0] for s in schools]))
     slon = np.radians(np.array([s[1] for s in schools]))
     nets = [s[2] for s in schools]
+    # a mismatch row's coordinates are distrusted (wrong district): no net from them
+    con.execute("UPDATE master_building SET school_net = NULL WHERE geo_status = 'mismatch'")
     buildings = con.execute(
         "SELECT building_id, lat, lon FROM master_building WHERE lat IS NOT NULL "
-        "AND lon IS NOT NULL").fetchall()
+        "AND lon IS NOT NULL AND geo_status IS DISTINCT FROM 'mismatch'").fetchall()
     for bid, lat, lon in buildings:
         p1 = np.radians(lat)
         a = (np.sin((slat - p1) / 2) ** 2
