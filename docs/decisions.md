@@ -415,6 +415,27 @@ exit 0xC000013A (a console Ctrl+C/close); the day before, all three long jobs di
   crash-loop guard. The scheduled daily job's Python runs in its own console so a Ctrl+C
   elsewhere can't reach it.
 
+## Shortlist and decision helper (2026-10-23)
+- **Keep the retrained price model of 2026-10-21** (user). The 2026-10-18 model stays as a
+  backup in `data\model\backup_20261018\`.
+- **Decision helper** (user): help a person decide to buy, rent, sell or let by their goals
+  (investment, near a place, primary school, space and budget), with recommended listings.
+  Defaults accepted with the plan (user, "ok"):
+  - designed as if for the public, running privately in the Streamlit dashboard; no public
+    app; monetisation on hold
+  - all four decisions, buy in most detail
+  - primary school nets only, from Education Bureau open data
+  - a free commute estimate (walk + MTR stops), no paid routing
+  - HKMA loan-to-value caps and stress test, monthly payment at a user-set rate
+  - rents from the rent listings already collected
+  - a "market today" view
+- **Report wording** (user): "pairs" becomes "flats sold twice", "model-valued flats" and
+  "Ricacorp reported gains" in text people read; the report says model-valued flats
+  understate differences. Code names stay.
+- **Licence: MIT; README notice** that the repo holds code only and each source's terms
+  apply (user, 2026-10-22). Fixtures, history and commit email stay as they are (user).
+- **Redirect robots check and the scheduled-task registration wait** (user, 2026-10-22).
+
 ## Repository
 - **Public GitHub repo `hk-estate` on account `bpy13`** (2026-10-16). Because it is public:
   scraped data, the database and raw-page cache are never committed (`data/` ignored), and no
