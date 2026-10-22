@@ -17,12 +17,15 @@ from collections import defaultdict
 from hkestate.geo import haversine_m
 
 MIN_PER_STOP = 2.0       # fallback when a station has no coordinates
-DWELL_MIN = 0.5          # time standing at a station
-# One average speed for every line, in metres a minute (1000 = 60 km/h) over straight-line
-# distance between stations, on top of the dwell. Chosen so that Tuen Mun to Admiralty is
-# about 44 min and Kowloon Tong to Admiralty about 10; the lines are long and fast in the
-# New Territories, so a slower figure fits the urban stretches better but misses Tuen Mun.
-SPEED_M_PER_MIN = 1000.0
+# Minutes per stop = DWELL_MIN + straight-line distance / SPEED_M_PER_MIN, the same two
+# numbers for every line. They are not physical (1700 m/min is 100 km/h): the dwell stands
+# in for slow-downs, doors and acceleration, and the pair was fitted together to rough
+# target journeys: Kowloon Tong-Admiralty 9-11, Sham Shui Po-Admiralty 12-15,
+# Tsim Sha Tsui-Central 5-7, Tuen Mun-Admiralty 42-50, Tseung Kwan O-Central 22-28. At
+# 1.6 / 1700 they come out 10.9, 13.2, 5.0 (4.97, the one miss, by 0.03), 42.0, 27.9; no
+# pair on a fine grid meets all five.
+DWELL_MIN = 1.6
+SPEED_M_PER_MIN = 1700.0
 MIN_PER_CHANGE = 5.0
 # Footpaths between stations that the open data treats as separate: (a, b, walk minutes).
 # Hong Kong and Central are linked by a long walkway; TST and East TST by a subway.
