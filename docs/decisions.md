@@ -504,12 +504,23 @@ weighted average by the profile's goal weights.
   `mortgage.affordable` must pass; rent: asking rent at or under the limit); minimum size;
   minimum rooms; longest commute; school net. A limit on a value the data lacks (no
   coordinates, no net, no room count) counts the row out, unless `Profile.allow_unknown`.
+- **Candidates, same flat twice** (Task 18b): rank.py merges the same flat listed twice only
+  when the prices are within 2%; the helper also merges two listings of one flat (same
+  building, floor and flat, area within 2%) at prices further apart, keeping the cheaper and
+  naming the other in `also_listed` (809 of 13,091 investor candidates on the 10-22
+  snapshot). A blank floor or flat never matches. Space score unchanged.
 - **Investment (buy)** = mean of four parts: district growth from the growth study's
   `districts.csv` (setting `all`, flats sold twice): 0 at 0%/yr, 100 at 8%/yr; attribute
   effects from `effects.csv`, robust verdicts only, summed for the attributes the flat has:
   50 + 25 points per percentage point a year; rent yield (rent.py estimate x 12 / asking):
   100 at 6%; listing discount: 50 + 500 x discount (10% below fair price = 100), only for
   normal-confidence rows. **Investment (rent)** = 50 + 500 x (1 - asking / rent estimate).
+- **Rent-yield trust** (Task 18b): the yield part counts in full only when the rent estimate
+  rests on the building's or estate's own rent listings. A district-level estimate is pulled
+  halfway to the district's median yield (the study's `rental_yield`; counts half when the
+  study has none). An RVD-average estimate (no listings near the flat) scores the yield part
+  as unknown (0). The reason names the basis: "rent yield 3.4% (estate rents)". On the
+  10-22 snapshot 5,996 of 13,091 investor candidates had district-level rents.
 - **Near a place** = 100 at 15 minutes or less, 0 at 60 or more, linear; minutes are the
   average over the chosen stations of `commute.minutes`.
 - **School** = 100 when the building's net is the profile's, else 0.
@@ -523,6 +534,44 @@ weighted average by the profile's goal weights.
 - Why these numbers: linear scales with round anchors so a reader can check a score by hand
   (a reason line names every input). Robust effects only, because the study calls the others
   hints. Rent intent reuses the investment slot for value-for-money.
+- **Data** (Task 18b): the snapshot carries `master_building.school_net` in
+  `buildings.parquet` (NULL on a database without the column) and the `mtr_station` table
+  as `stations.parquet`; `advisor.load_data` reads both, with a CSV / Series override.
+
+## Buy vs rent, sell vs let (2026-10-23, Claude's call)
+`advisor.buy_vs_rent` and `advisor.sell_vs_let` (Task 19), each returning three cases.
+- **Growth**: mid = the district's long-run median from the growth study (`districts.csv`,
+  setting `all`, flats sold twice); low / high = mid shifted by the 25th and 75th percentile
+  spread of N-year outcomes in the district's repeat-sales index (`index.csv`; the territory
+  index when the district has none), N = the horizon. The quartiles are measured on the
+  index, not on individual pairs, because the saved study has no per-pair percentiles; the
+  shift keeps low <= mid <= high. Without the study: 3%/yr +/- 3 pp, marked a guess. On the
+  10-22 study, 10 years: 灣仔區 4.8% (-0.6 to 9.1), 沙田區 3.9% (-1.2 to 8.6).
+- **Rent growth** = price growth unless given (rents and prices move together long run).
+- **Buying** counts: stamp duty (costs.py, the profile's buyer type, agreement date = today);
+  agent 1% on the purchase and 1% on the sale; legal 0.3% once (costs.py's convention);
+  mortgage interest at the profile's rate on the largest loan HKMA rules allow
+  (mortgage.max_loan; an `ltv` argument caps it lower), equal instalments over
+  `mortgage_years`, closed form; rates 5% of the annual rent (taken as the rateable value;
+  RVD; the progressive 8% / 12% steps above HK$550,000 rateable value from 2024-25 are not
+  modelled); government rent 3% of the annual rent (Lands Department, Cap. 515; nominal-rent
+  leases not modelled); management fee 10% of rent (a guess: HK$3-5 a sq ft a month is
+  usual); the sale at the end at the assumed growth. Net cost = all of these less the gain.
+- **Renting** counts the rent, less what the buyer's day-one cash (deposit, duty, fees) would
+  earn at 3% a year (a guess: HKD time deposits and bonds paid 2-3.5% in 2025-26).
+- **Selling now**: value less agent 1%, grown at the same 3% to the end of the horizon so the
+  two sums are at one date. **Letting**: rent less a month empty and half a month's rent to
+  the agent at each new tenancy (tenancies of 2 years; common practice, a guess), rates and
+  government rent as above, management 10%, property tax 15% of rent received less rates
+  after the 20% statutory allowance (IRD), plus the sale at the end less agent 1%. No
+  mortgage on the flat, no special stamp duty (a resale within 2 years) and no legal fee on
+  the sale are assumed.
+- **Value for an owner** (`advise_owner`): the fair-price model's value for the building,
+  area and floor (rooms, facing and sea view unknown), moved to today's RVD index level as
+  rank.py does; rent from rent.py. The dashboard (Task 21) collects the inputs.
+- Why: every line is a named constant with its source or "a guess" in advisor.py and in the
+  `assumptions` dict the page can print, so a reader can change one number and see the
+  effect. Tests work each function by hand (tests/test_advisor.py).
 
 ## Repository
 - **Public GitHub repo `hk-estate` on account `bpy13`** (2026-10-16). Because it is public:

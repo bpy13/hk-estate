@@ -315,7 +315,8 @@ _BUILDINGS_SQL = """
     SELECT b.building_id, b.estate_id, b.name_zh AS building_name, b.completion_date,
         b.floors, b.flats, e.name_zh AS estate_name, e.group_name,
         e.district AS estate_district, mb.district AS mb_district, mb.lat, mb.lon, mb.mtr_m,
-        mb.mtr_station, mb.built_year, mb.built_basis, me.code AS me_code, me.parent_code,
+        mb.mtr_station, mb.built_year, mb.built_basis, {school_net} AS school_net,
+        me.code AS me_code, me.parent_code,
         me.district AS me_district, me.units AS me_units, me.excluded AS me_excluded,
         me.exclude_reason, uu.max_floor, uu.n_units
     FROM building b
@@ -366,9 +367,20 @@ def extract(con) -> dict:
         WHERE source = 'centadata' AND instrument_date >= DATE '2018-01-01'
           AND date_diff('day', instrument_date, registration_date) BETWEEN 0 AND 120
     """).fetchone()[0]
+    # master_building.school_net arrives with the school-net load (schools.ensure_tables);
+    # an older database has no such column, so the extract asks first
+    has_net = con.execute(
+        "SELECT count(*) FROM information_schema.columns WHERE table_name = 'master_building' "
+        "AND column_name = 'school_net'").fetchone()[0] > 0
     raw = {
         "deals": con.execute(_deals_sql()).df(),
-        "buildings": con.execute(_BUILDINGS_SQL).df(),
+        "buildings": con.execute(_BUILDINGS_SQL.format(
+            school_net="mb.school_net" if has_net else "CAST(NULL AS VARCHAR)")).df(),
+        # MTR stations with coordinates (the decision helper's commute estimate)
+        "stations": con.execute(
+            "SELECT code, name_zh, name_en, lat, lon FROM mtr_station ORDER BY code").df()
+        if _has_table(con, "mtr_station") else pd.DataFrame(
+            columns=["code", "name_zh", "name_en", "lat", "lon"]),
         "estates": con.execute(
             "SELECT code, parent_code, units, excluded FROM master_estate").df(),
         "listings": con.execute(_LISTINGS_SQL).df(),
@@ -401,7 +413,8 @@ def extract(con) -> dict:
 
 
 _FRAMES = ["deals", "buildings", "estates", "listings", "index", "run_log"]
-_OPTIONAL_FRAMES = ["deal_pairs", "rvd"]  # added in Phase 5; older snapshots lack them
+# added later (Phase 5 growth study; the 2026-10-23 decision helper); older snapshots lack them
+_OPTIONAL_FRAMES = ["deal_pairs", "rvd", "stations"]
 
 
 def _has_table(con, name: str) -> bool:

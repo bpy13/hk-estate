@@ -1,13 +1,18 @@
-"""Decision helper (Task 18): two contrasting profiles on a small fixture, hard limits,
-unknown data, rent intent, and the loaders for the saved files."""
+"""Decision helper (Tasks 18, 18b, 19): two contrasting profiles on a small fixture, hard
+limits, unknown data, rent intent, rent-yield trust, the same flat listed twice, the loaders
+for the saved files, and the buy-vs-rent / sell-vs-let arithmetic worked by hand."""
+from dataclasses import replace
 from datetime import date
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
 import pytest
+from phase4_data import make_db
 
-from hkestate import advisor, commute, rent
+from hkestate import advisor, commute, db, features, model, mortgage, rent
+from hkestate.sources import schools
 
 FIX = Path(__file__).parent / "fixtures" / "advisor"
 TODAY = date(2026, 10, 23)
@@ -112,7 +117,8 @@ def data():
     return advisor.AdvisorData(sale=SALE, rent_listings=_rent_listings(), buildings=BUILDINGS,
                                district_growth=districts, effects=effects, stations=stations,
                                station_names=names, graph=graph, rent_model=_rent_model(),
-                               today=TODAY, growth_setting="all")
+                               today=TODAY, growth_setting="all",
+                               district_index=advisor.growth_index(FIX / "growth", "all"))
 
 
 INVESTOR = advisor.Profile(intent="buy", weights={"investment": 1}, budget_hkd=10_000_000)
@@ -145,7 +151,7 @@ def test_investor_scores_are_explainable(data):
     assert l1["overall"] == pytest.approx(l1["score_investment"])
     assert "district grew 5.0%/yr" in l1["reason"]
     assert "mtr near +1.0" in l1["reason"]
-    assert "rent yield 2.7%" in l1["reason"]
+    assert "rent yield 2.7% (building rents)" in l1["reason"]
     assert "20% below fair price" in l1["reason"]
     # the low-confidence flat's discount is unknown and counts as 0, never as good
     assert "discount unknown (low confidence)" in r.loc["L3", "reason"]
@@ -249,6 +255,215 @@ def test_sell_and_let_have_no_listing_search(data):
     assert r.listings.empty and "sell-vs-let" in r.notes[0]
 
 
+# ---- Task 18b: rent-yield trust and the same flat listed twice ------------------------------
+
+
+def test_yield_counts_by_how_near_the_rent_evidence_is(data):
+    """Building or estate rents: the yield counts in full. District rents: the yield is
+    pulled halfway to the district's median yield (growth study). RVD average only: the
+    yield part is unknown (0)."""
+    r = advisor.recommend(INVESTOR, data).listings.set_index("key")
+    # L3 (b-mid, no rent listings in its building or estate) falls to 灣仔區's 5 listings at
+    # HK$40/sq ft: 40 x 600 x 12 / 6.5m = 4.4%, pulled halfway to the district median 3.0%
+    # -> 3.7%, scored 3.715 / 6 x 100 = 61.9
+    l3 = r.loc["L3"]
+    assert "rent yield 4.4% (district rents; scored as 3.7%, halfway to the district median " \
+           "3.0%)" in l3["reason"]
+    y3 = (0.5 * (40 * 600 * 12 / 6_500_000) + 0.5 * 0.03) * 100 / 6 * 100
+    # district 5%/yr -> 62.5; no robust attribute -> 50; yield 61.9; discount unknown -> 0
+    assert l3["score_investment"] == pytest.approx((62.5 + 50 + y3 + 0) / 4, abs=0.1)
+    # with rent listings only in Harbour Court, Sunny Garden's flat (屯門區, no listings)
+    # gets an RVD-average estimate: no yield credit
+    raw = pd.DataFrame(_rent_rows("b-harbour", 40.0, 5))
+    li = rent.clean_rent_listings(raw).assign(month=pd.Timestamp("2026-08-01"))
+    only_harbour = rent.RentModel.from_frames(li, BUILDINGS[["estate_key", "district"]], _rvd())
+    r2 = advisor.recommend(INVESTOR, replace(data, rent_model=only_harbour)).listings
+    l2 = r2.set_index("key").loc["L2"]
+    assert l2["rent_basis"] == "rvd"
+    assert "rent yield unknown (no rent listings near this flat)" in l2["reason"]
+    # district 2%/yr -> 25; big estate / size flags: no robust effect -> 50; yield 0;
+    # discount 1 - 0.95 = 5% -> 75
+    assert l2["score_investment"] == pytest.approx((25 + 50 + 0 + 75) / 4, abs=0.1)
+
+
+def test_same_flat_listed_twice_keeps_the_cheaper(data):
+    """rank.py merges the same flat only when the two prices are within 2%; a second listing
+    of L1's flat (10/F A, 452 sq ft) at 8.5m is merged into L1 (8.0m) here, named in
+    `also_listed`. A listing with no floor or flat given is never merged."""
+    twice = pd.DataFrame([_sale("L5", "b-harbour", 452, 2, 8_500_000, 9_500_000),
+                          {**_sale("L6", "b-harbour", 450, 2, 8_600_000, 9_500_000),
+                           "floor": "not given"}])
+    r = advisor.recommend(INVESTOR, replace(data, sale=pd.concat([SALE, twice])))
+    keys = list(r.listings["key"])
+    assert "L5" not in keys and "L6" in keys and "L1" in keys
+    assert r.listings.set_index("key").loc["L1", "also_listed"] == "L5"
+    assert "1 listings of a flat already listed cheaper merged into it" in r.notes
+    # the same flat at a different size is another flat (L1 450 vs L4's 5,500 sq ft)
+    assert r.listings.set_index("key").loc["L1", "score_space"] == \
+        advisor.recommend(INVESTOR, data).listings.set_index("key").loc["L1", "score_space"]
+
+
+# ---- Task 19: buy vs rent, sell vs let -------------------------------------------------------
+
+
+def test_mortgage_interest_matches_a_month_by_month_loop():
+    loan, rate, years = 5_600_000, 0.035, 10
+    pmt = mortgage.monthly_payment(loan, rate, 30)
+    bal, interest = loan, 0.0
+    for _ in range(years * 12):
+        i = bal * rate / 12
+        interest += i
+        bal -= pmt - i
+    got = advisor.mortgage_interest(loan, rate, 30, years)
+    assert got["payment"] == pytest.approx(pmt)
+    assert got["interest"] == pytest.approx(interest, abs=1)
+    assert got["balance"] == pytest.approx(bal, abs=1)
+    # a 10-year loan over a 10-year horizon is repaid in full
+    assert advisor.mortgage_interest(loan, rate, 10, 10)["balance"] == pytest.approx(0, abs=1)
+    assert advisor.mortgage_interest(1_200_000, 0.0, 10, 5)["interest"] == 0
+
+
+def test_buy_vs_rent_worked_by_hand():
+    """Buy an 8m flat (first home, 2026-10-23) or rent it at HK$20,000 a month, 10 years,
+    mortgage at 3.5%, prices growing 3%/yr, rent flat, the deposit earning 3%.
+    Buying:  stamp duty 3% (2026 scale, 6-9m band) = 240,000; agent 1% = 80,000; legal 0.3%
+             = 24,000; loan 70% = 5.6m at 3.5% over 30 years: HK$25,146.5 a month; interest
+             in the first 120 months = 1,753,485 (payments 3,017,580 less principal repaid
+             1,264,095; balance left 4,335,905); rates + government rent 8% of rent 2.4m =
+             192,000; management 10% = 240,000; sale 8m x 1.03^10 = 10,751,331, agent 1% =
+             107,513; gain 2,751,331.
+             Cost = 240,000 + 80,000 + 24,000 + 1,753,485 + 192,000 + 240,000 + 107,513
+                    - 2,751,331 = -114,332 (buying makes money net).
+    Renting: rent 20,000 x 12 x 10 = 2,400,000, less what the day-one cash (deposit 2.4m +
+             344,000 costs = 2,744,000) earns at 3%: 2,744,000 x (1.03^10 - 1) = 943,707.
+             Cost = 1,456,293. Buying is 1,570,626 ahead."""
+    r = advisor.buy_vs_rent(8_000_000, 20_000, 10, 0.035, 0.03, buyer="first",
+                            on=date(2026, 10, 23), rent_growth=0.0)
+    assert r["stamp_duty"] == 240_000 and r["agent_buy"] == 80_000 and r["legal"] == 24_000
+    assert r["loan"] == 5_600_000 and r["deposit"] == 2_400_000
+    assert r["monthly_payment"] == pytest.approx(25_146.5, abs=0.1)
+    assert r["interest"] == pytest.approx(1_753_485, abs=1)
+    mid = r["cases"]["mid"]
+    assert mid["rates_gov_rent"] == pytest.approx(192_000)
+    assert mid["management"] == pytest.approx(240_000)
+    assert mid["sale_price"] == pytest.approx(10_751_331, abs=1)
+    assert mid["buy_cost"] == pytest.approx(-114_332, abs=2)
+    assert mid["deposit_earns"] == pytest.approx(943_707, abs=1)
+    assert mid["rent_cost"] == pytest.approx(1_456_293, abs=2)
+    assert mid["difference"] == pytest.approx(1_570_626, abs=3)
+    # a plain number gives one growth in all three cases; a range gives three
+    assert r["cases"]["low"]["difference"] == r["cases"]["high"]["difference"]
+    assert r["verdict"].startswith("buying comes out HK$1.6m ahead over 10 years")
+    three = advisor.buy_vs_rent(8_000_000, 20_000, 10, 0.035,
+                                advisor.GrowthRange(0.0, 0.03, 0.06), on=date(2026, 10, 23))
+    d = {k: v["difference"] for k, v in three["cases"].items()}
+    assert d["low"] < d["mid"] < d["high"]
+    # by default rent grows with prices, so the mid case pays more rent than the flat case
+    assert three["cases"]["mid"]["rent_paid"] > 2_400_000
+    assert "rates" in r["assumptions"] and "5%" in r["assumptions"]["rates"]
+
+
+def test_sell_vs_let_worked_by_hand():
+    """A flat worth 8m, rent HK$20,000, 4 years, prices 3%/yr, rent flat, cash earning 3%.
+    Sell now: 8m less agent 1% = 7,920,000; grown 4 years at 3% = 8,914,030.
+    Let: rent 960,000 gross over 2 tenancies; agent half a month each = 20,000; one month
+         empty at the change = 20,000, so 940,000 received; rates 5% of 960,000 = 48,000;
+         government rent 3% = 28,800; management 10% = 96,000; property tax 15% x 80% x
+         (940,000 - 48,000) = 107,040. Net rent 640,160. Sale 8m x 1.03^4 = 9,004,071 less
+         agent 1% = 8,914,030. Letting gives 9,554,190: 640,160 ahead."""
+    r = advisor.sell_vs_let(8_000_000, 20_000, 4, 0.03, rent_growth=0.0)
+    assert r["sell_now"] == 7_920_000 and r["tenancies"] == 2
+    mid = r["cases"]["mid"]
+    assert mid["sell_now_grown"] == pytest.approx(8_914_030, abs=1)
+    assert mid["rent_received"] == 940_000 and mid["letting_fee"] == 20_000
+    assert mid["rates_gov_rent"] == pytest.approx(76_800)
+    assert mid["property_tax"] == pytest.approx(107_040)
+    assert mid["net_rent"] == pytest.approx(640_160)
+    assert mid["sale_net"] == pytest.approx(8_914_030, abs=1)
+    assert mid["difference"] == pytest.approx(640_160, abs=2)
+    assert r["verdict"].startswith("letting comes out HK$0.6m ahead over 4 years")
+
+
+def test_growth_range_from_the_study(data):
+    """灣仔區's index rises 4%/yr for six years then stays flat: its 3-year windows have
+    quartiles 0%, 2.0% and 4.0%. The mid case is the study's district median (5%); low and
+    high shift it by the quartile spread: 5 - 2 = 3.0% and 5 + 2 = 7.0%."""
+    g = advisor.growth_range("灣仔區", 3, data)
+    assert g.mid == pytest.approx(0.05)
+    assert g.low == pytest.approx(0.05 - 0.0198, abs=0.001)
+    assert g.high == pytest.approx(0.05 + 0.04 - 0.0198, abs=0.001)
+    assert "灣仔區 median" in g.basis and "3-year windows of the 灣仔區 index" in g.basis
+    # 屯門區 has a median (2%) but no index of its own: the territory index (2%/yr flat)
+    # gives a spread of zero
+    t = advisor.growth_range("屯門區", 3, data)
+    assert (t.low, t.mid, t.high) == pytest.approx((0.02, 0.02, 0.02))
+    assert "the all index" in t.basis
+    # a district the study has not seen: the territory index's own quartiles
+    u = advisor.growth_range("離島區", 3, data)
+    assert u.mid == pytest.approx(0.02, abs=0.001) and "windows of the all index" in u.basis
+    # no study at all: a stated guess
+    bare = replace(data, district_growth=pd.DataFrame(), district_index=pd.DataFrame())
+    n = advisor.growth_range("灣仔區", 10, bare)
+    assert (n.low, n.mid, n.high) == pytest.approx((0.0, 0.03, 0.06)) and "guess" in n.basis
+
+
+def test_buy_listings_carry_a_vs_renting_line(data):
+    r = advisor.recommend(INVESTOR, data).listings.set_index("key")
+    l1 = r.loc["L1"]
+    # L1: rent estimate 40 x 450 = 18,000 a month; 10 years at the profile's 3.5%
+    assert l1["vs_rent"].startswith("vs renting a similar flat (HK$18,000/month): buying comes")
+    assert "growth 5.0%/yr" in l1["vs_rent"]
+    assert np.isfinite(l1["vs_rent_hkd"])
+    assert l1["vs_rent_low_hkd"] <= l1["vs_rent_hkd"] <= l1["vs_rent_high_hkd"]
+    own = advisor.buy_vs_rent(8_000_000, 18_000, 10, 0.035,
+                              advisor.growth_range("灣仔區", 10, data), on=TODAY)
+    assert l1["vs_rent_hkd"] == pytest.approx(own["cases"]["mid"]["difference"])
+    none = advisor.recommend(INVESTOR, _data_without_rent()).listings.iloc[0]
+    assert none["vs_rent"] == "vs renting: unknown (no rent estimate)"
+    assert np.isnan(none["vs_rent_hkd"])
+
+
+def _price_index():
+    rows = []
+    for i, m in enumerate(pd.date_range("2026-01-01", "2026-10-01", freq="MS")):
+        for cls in ("B", "ALL"):
+            rows.append((cls, m, 100 * 1.01 ** i))
+    return pd.DataFrame(rows, columns=["class", "period", "value"])
+
+
+def test_fair_value_uses_the_model_like_rank_does(data):
+    """A stand-in model that says HK$15,000/sq ft at its reference month (2026-08); the
+    index has risen 1% a month since, so today's value is 15,000 x 1.01^2 x 500 sq ft."""
+    fake = model.FairPrice(
+        booster=SimpleNamespace(predict=lambda X: np.full(len(X), np.log(15_000))),
+        meta={"categories": {c: ["b-harbour"] for c in model.CAT_FEATURES},
+              "valuation_month_idx": 320, "index_reference_month": "2026-08-01"})
+    d = replace(data, fair_model=fake, price_index=_price_index())
+    value, basis = advisor.fair_value("b-harbour", 500, d, floor_text="18樓")
+    assert value == pytest.approx(15_000 * 1.01 ** 2 * 500)
+    assert basis == "fair-price model, floor exact"
+    assert np.isnan(advisor.fair_value("nowhere", 500, d)[0])
+    assert np.isnan(advisor.fair_value("b-harbour", 500, data)[0])  # no model loaded
+
+
+def test_advise_owner_gives_both_paths(data):
+    """An owner of a 500 sq ft flat in Harbour Court worth 8m (given): the rent estimate is
+    the building's HK$40/sq ft = 20,000, growth is 灣仔區's range over 4 years, and the
+    sell-vs-let figures follow."""
+    out = advisor.advise_owner("b-harbour", 500, data, advisor.Profile(intent="sell", years=4),
+                               value_hkd=8_000_000)
+    assert out["rent_hkd"] == pytest.approx(20_000) and out["rent_basis"] == "building"
+    assert out["value_basis"] == "given" and out["district"] == "灣仔區"
+    assert out["growth"]["mid"] == pytest.approx(0.05)
+    s = out["sell_vs_let"]
+    assert s["sell_now"] == 7_920_000 and set(s["cases"]) == {"low", "mid", "high"}
+    assert s["cases"]["mid"]["rent_growth"] == pytest.approx(0.05)  # rent grows with prices
+    # no model and no value given: no figures, a note says why
+    none = advisor.advise_owner("b-harbour", 500, data)
+    assert none["sell_vs_let"] is None and none["notes"] == ["no value: no fair-price model "
+                                                              "loaded"]
+
+
 def test_profile_checks():
     with pytest.raises(ValueError):
         advisor.Profile(intent="swap")
@@ -289,3 +504,39 @@ def test_read_stations_skips_rows_without_coordinates():
     rows, names = advisor.read_stations(STATIONS_CSV + "NOP,無,Nowhere,,\n")
     assert [r[0] for r in rows] == ["ADM", "WAC", "TUM"]
     assert names["ADM"] == "Admiralty"
+
+
+def test_growth_index_reads_district_and_territory_series():
+    idx = advisor.growth_index(FIX / "growth", "all")
+    assert set(idx["district"]) == {"灣仔區", "all"}
+    assert len(idx) == 290  # the estimated-pairs row is left out
+    assert advisor.growth_index(FIX / "nowhere", "all").empty
+
+
+def test_load_data_reads_stations_and_school_nets_from_the_snapshot(tmp_path):
+    """Task 18b: the snapshot carries `stations.parquet` and `buildings.school_net`, so the
+    helper needs no extra files (the CSV and Series arguments stay as overrides)."""
+    path = make_db(tmp_path / "t.duckdb", n_deals=60)
+    con = db.connect(path)
+    con.execute("INSERT INTO mtr_station VALUES ('ADM', '金鐘', 'Admiralty', 22.2793, 114.1646)")
+    con.execute("INSERT INTO mtr_station VALUES ('XXX', '無', 'No Coords', NULL, NULL)")
+    schools.ensure_tables(con)
+    con.execute("UPDATE master_building SET school_net = '72' WHERE building_id = 'cd-1-AAA'")
+    raw = features.extract(con)
+    con.close()
+    snap = features.save_snapshot(raw, tmp_path / "snap")
+    d = advisor.load_data(snapshot_dir=snap, ranked_path=tmp_path / "none.parquet",
+                          growth_dir=tmp_path / "no-growth", model_dir=tmp_path / "no-model",
+                          today=TODAY)
+    assert d.stations == [("ADM", 22.2793, 114.1646)] and d.station_names == {"ADM": "Admiralty"}
+    assert d.buildings.loc["cd-1-AAA", "school_net"] == "72"
+    assert d.sale.empty and d.fair_model is None and d.district_index.empty
+    assert "school_net" in d.rent_listings.columns
+    # the overrides still win
+    nets = pd.Series({"cd-1-BBB": "95"})
+    d2 = advisor.load_data(snapshot_dir=snap, ranked_path=tmp_path / "none.parquet",
+                           growth_dir=tmp_path / "no-growth", model_dir=tmp_path / "no-model",
+                           stations_csv=FIX / "mtr_stations.csv", school_nets=nets, today=TODAY)
+    assert [c for c, _, _ in d2.stations] == ["ADM", "WAC", "TUM"]
+    assert d2.buildings.loc["cd-1-BBB", "school_net"] == "95"
+    assert pd.isna(d2.buildings.loc["cd-1-AAA", "school_net"])

@@ -356,3 +356,35 @@ def test_one_row_per_active_sale_listing(snap):
     assert l2["floor_num"] == 18 and l2["floor_basis"] == "exact" and l2["facing"] == "NW"
     s1 = lst.set_index("listing_id").loc["S1"]
     assert s1["value_note"] == "no building match"
+
+
+# ---- the snapshot carries school nets and MTR stations (Task 18b) ---------------------------
+
+
+def test_snapshot_carries_school_nets_and_stations(tmp_path):
+    """The decision helper reads a building's primary school net and the MTR stations from
+    the snapshot, never from the live database. `school_net` is a column the school-net load
+    adds later, so an older database without it still extracts (all None)."""
+    from hkestate.sources import schools
+
+    path = make_db(tmp_path / "t.duckdb", n_deals=120)
+    con = db.connect(path)
+    con.execute("INSERT INTO mtr_station VALUES ('ADM', '金鐘', 'Admiralty', 22.2793, 114.1646)")
+    raw = features.extract(con)  # no school_net column yet
+    assert raw["buildings"]["school_net"].isna().all()
+    schools.ensure_tables(con)
+    con.execute("UPDATE master_building SET school_net = '72' WHERE building_id = 'cd-1-AAA'")
+    raw = features.extract(con)
+    con.close()
+    b = features.building_table(raw)
+    assert b.loc["cd-1-AAA", "school_net"] == "72" and pd.isna(b.loc["cd-1-BBB", "school_net"])
+    assert list(raw["stations"].columns) == ["code", "name_zh", "name_en", "lat", "lon"]
+    assert raw["stations"].iloc[0]["code"] == "ADM"
+    out = features.save_snapshot(raw, tmp_path / "snap")
+    assert (out / "stations.parquet").exists()
+    back = features.load_snapshot(out)
+    assert back["stations"].iloc[0]["name_en"] == "Admiralty"
+    assert back["buildings"].set_index("building_id").loc["cd-1-AAA", "school_net"] == "72"
+    # an older snapshot without the file loads an empty frame
+    (out / "stations.parquet").unlink()
+    assert features.load_snapshot(out)["stations"].empty

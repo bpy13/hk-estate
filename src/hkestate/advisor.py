@@ -1,10 +1,12 @@
-"""Decision helper (plan 2026-10-23, Task 18): from a person's profile to ranked estates and
-listings, each with a 0-100 score per goal, an overall weighted score and a one-line reason
-per goal. Task 19 adds buy-vs-rent and sell-vs-let figures in this module.
+"""Decision helper (plan 2026-10-23, Tasks 18-19): from a person's profile to ranked estates
+and listings, each with a 0-100 score per goal, an overall weighted score and a one-line
+reason per goal; plus the money questions, buy-vs-rent (`buy_vs_rent`) and sell-vs-let
+(`sell_vs_let`, `advise_owner`).
 
 Steps, in order:
 1. Candidates: for `buy`, the ranked sale listings (rank.py) with no `exclude_reason` (a data
-   check failed); for `rent`, the active rent listings with their rent estimate (rent.py).
+   check failed), the same flat listed twice at different prices kept once at the cheaper
+   price; for `rent`, the active rent listings with their rent estimate (rent.py).
 2. Hard limits (each row is kept or counted out, never scored around): budget, size, rooms,
    commute, school net. A limit on a value the data does not have (no coordinates, so no
    commute; no net) counts the row out unless `Profile.allow_unknown`.
@@ -13,10 +15,12 @@ Steps, in order:
    data never reads as good.
 4. Overall = weighted average of the goal scores by the profile's weights. Estates are ranked
    by the mean overall score of their listings; listings follow in estate order.
+5. Buy: each listing gets a "vs renting a similar flat" line over the profile's horizon, at
+   the district's growth (low / mid / high from the growth study).
 
 Data comes in through `AdvisorData` (`load_data` reads the snapshot, the ranked parquet, the
-growth study's CSVs and the MTR files; tests build it from small frames). The live database
-is never opened here.
+growth study's CSVs, the fair-price model and the MTR files; tests build it from small
+frames). The live database is never opened here.
 """
 
 from __future__ import annotations
@@ -30,7 +34,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from hkestate import commute, features, growth, mortgage, rent
+from hkestate import commute, costs, features, growth, model, mortgage, rent
 from hkestate.config import get_data_dir
 
 GOALS = ("investment", "near_place", "school", "space")
@@ -50,6 +54,32 @@ SIZE_FULL_MULTIPLE = 2.0       # twice the minimum size scores 100 (the minimum 
 AGE_POINTS_PER_YEAR = 2.0      # building age: 100 - 2 a year (50 years old = 0)
 SPACE_SIZE_SHARE = 0.75        # space = 0.75 size + 0.25 age
 ROBUST_ONLY = True             # attribute effects: only the study's robust verdicts count
+DISTRICT_YIELD_PULL = 0.5      # a district-level rent estimate: yield pulled halfway to the
+#                                district's median yield (growth study); building and estate
+#                                estimates count in full, an RVD-average estimate not at all
+SAME_FLAT_TOLERANCE = 0.02     # same building, floor and flat, area within 2%: one flat
+
+# ---- buy-vs-rent and sell-vs-let assumptions (Task 19; docs/decisions.md) -------------------
+# Rates: 5% of the rateable value, taken here as the flat's annual rent (Rating and
+# Valuation Department, "Rates", rvd.gov.hk; the progressive 8% / 12% steps above a rateable
+# value of HK$550,000 from 2024-25 are not modelled). Government rent: 3% of the rateable
+# value (Lands Department, Government Rent (Assessment and Collection) Ordinance, Cap. 515;
+# older Hong Kong Island and Kowloon leases pay a nominal rent instead, not modelled).
+RATES_PCT = 0.05
+GOV_RENT_PCT = 0.03
+MGMT_FEE_SHARE = 0.10          # management fee as a share of rent: a guess (HK$3-5 a sq ft a
+#                                month is usual, about a tenth of the rent)
+DEPOSIT_RETURN = 0.03          # what the deposit earns elsewhere a year: a guess (HKD time
+#                                deposits and bonds paid about 2-3.5% in 2025-26)
+PROPERTY_TAX = 0.15            # IRD property tax: 15% of the net assessable value = rent
+PROPERTY_TAX_ALLOWANCE = 0.20  # received less rates paid, less a 20% statutory allowance
+TENANCY_YEARS = 2              # a tenancy runs two years (common practice; a guess)
+LETTING_FEE_MONTHS = 0.5       # the landlord pays half a month's rent per new tenancy (usual)
+VACANCY_MONTHS = 1.0           # empty for a month at each change of tenant (a guess)
+GROWTH_SPREAD_GUESS = 0.03     # low/high = mid -/+ 3 pp when the study has no index to use
+GROWTH_MID_GUESS = 0.03        # mid when the study has nothing for the district (long-run
+#                                Hong Kong flat prices grew about 3%/yr; a guess)
+GROWTH_CASES = ("low", "mid", "high")
 
 
 @dataclass
@@ -101,6 +131,9 @@ class AdvisorData:
     rent_model: rent.RentModel | None = None
     today: date = field(default_factory=date.today)
     growth_setting: str = ""
+    district_index: pd.DataFrame = field(default_factory=pd.DataFrame)  # district, month, level
+    price_index: pd.DataFrame = field(default_factory=pd.DataFrame)     # snapshot's RVD index
+    fair_model: model.FairPrice | None = None                            # for `fair_value`
 
 
 @dataclass
@@ -117,14 +150,27 @@ class Result:
 
 def read_stations(csv_text: str) -> tuple[list[tuple[str, float, float]], dict[str, str]]:
     """Stations with coordinates from CSV text with columns code, name_en, lat, lon (the
-    `mtr_station` table's columns; the dashboard dumps it, tests write a few lines)."""
+    `mtr_station` table's columns; an override for the snapshot's stations frame)."""
+    return station_rows(pd.DataFrame(list(csv.DictReader(io.StringIO(csv_text.lstrip("﻿"))))))
+
+
+def station_rows(stations: pd.DataFrame) -> tuple[list[tuple[str, float, float]],
+                                                  dict[str, str]]:
+    """(code, lat, lon) for every station with coordinates, and code -> English name, from
+    the snapshot's `stations` frame (code, name_zh, name_en, lat, lon)."""
     rows, names = [], {}
-    for r in csv.DictReader(io.StringIO(csv_text.lstrip("﻿"))):
+    if stations.empty or "code" not in stations:
+        return rows, names
+    for r in stations.to_dict("records"):
         try:
-            rows.append((r["code"], float(r["lat"]), float(r["lon"])))
+            lat, lon = float(r["lat"]), float(r["lon"])
         except (KeyError, ValueError, TypeError):
             continue
-        names[r["code"]] = r.get("name_en") or r["code"]
+        if not (np.isfinite(lat) and np.isfinite(lon)):
+            continue
+        rows.append((r["code"], lat, lon))
+        name = r.get("name_en")
+        names[r["code"]] = name if isinstance(name, str) and name else r["code"]
     return rows, names
 
 
@@ -137,6 +183,23 @@ def growth_tables(growth_dir: Path, setting: str = "all",
     effects = pd.read_csv(d / "effects.csv", encoding="utf-8")
     effects = effects[effects["pairs_type"] == pairs_type].set_index("attribute")
     return districts, effects
+
+
+def growth_index(growth_dir: Path, setting: str = "all",
+                 pairs_type: str = "recorded") -> pd.DataFrame:
+    """The growth study's monthly repeat-sales index per district (plus `all`), long form:
+    district, month, level. Empty when the setting has no index file."""
+    path = growth_dir / setting / "index.csv"
+    if not path.exists():
+        return pd.DataFrame(columns=["district", "month", "level"])
+    idx = pd.read_csv(path, encoding="utf-8")
+    if idx.empty:
+        return pd.DataFrame(columns=["district", "month", "level"])
+    idx = idx[(idx["pairs_type"] == pairs_type)
+              & (idx["group"].str.startswith("district:") | (idx["group"] == "all"))].copy()
+    idx["district"] = idx["group"].str.replace("district:", "", regex=False)
+    idx["month"] = pd.to_datetime(idx["month"])
+    return idx[["district", "month", "level"]].reset_index(drop=True)
 
 
 def rent_candidates(raw: dict, buildings: pd.DataFrame) -> pd.DataFrame:
@@ -157,18 +220,23 @@ def rent_candidates(raw: dict, buildings: pd.DataFrame) -> pd.DataFrame:
 def load_data(snapshot_dir: Path | None = None, ranked_path: Path | None = None,
               growth_dir: Path | None = None, setting: str = "all",
               stations_csv: Path | None = None, mtr_csv: Path | None = None,
-              school_nets: pd.Series | None = None, today: date | None = None) -> AdvisorData:
-    """Read the saved files (never the live database). `stations_csv` has code, name_en,
-    lat, lon; `mtr_csv` is the MTR open-data lines file (commute graph); `school_nets` maps
-    building_id to net (the snapshot does not carry it yet)."""
+              school_nets: pd.Series | None = None, today: date | None = None,
+              model_dir: Path | None = None) -> AdvisorData:
+    """Read the saved files (never the live database). School nets and MTR stations come
+    from the snapshot (`buildings.school_net`, `stations.parquet`); `school_nets` (a
+    building_id -> net Series) and `stations_csv` (code, name_en, lat, lon) override them.
+    `mtr_csv` is the MTR open-data lines file (commute graph); without it there is no
+    commute. The fair-price model is loaded from `model_dir` when its files are there."""
     data_dir = get_data_dir()
     raw = features.load_snapshot(snapshot_dir)
     buildings = features.building_table(raw)
+    if "school_net" not in buildings:
+        buildings["school_net"] = None
     if school_nets is not None:
         buildings["school_net"] = buildings.index.map(school_nets)
     ranked_path = ranked_path or features.model_dir() / "ranked_latest.parquet"
     sale = pd.read_parquet(ranked_path) if Path(ranked_path).exists() else pd.DataFrame()
-    if "school_net" in buildings and not sale.empty:
+    if not sale.empty:
         sale["school_net"] = sale["building_id"].map(buildings["school_net"])
     if growth_dir is None:
         root = data_dir / "reports" / "growth"
@@ -176,20 +244,26 @@ def load_data(snapshot_dir: Path | None = None, ranked_path: Path | None = None,
         growth_dir = dated[-1] if dated else None
     if growth_dir is not None and (Path(growth_dir) / setting).is_dir():
         districts, effects = growth_tables(Path(growth_dir), setting)
+        index = growth_index(Path(growth_dir), setting)
     else:
-        districts, effects = pd.DataFrame(), pd.DataFrame()
-    stations, names, graph = [], {}, {}
+        districts, effects, index = pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
     if stations_csv is not None and Path(stations_csv).exists():
         stations, names = read_stations(Path(stations_csv).read_text("utf-8"))
+    else:
+        stations, names = station_rows(raw.get("stations", pd.DataFrame()))
+    graph = {}
     if mtr_csv is not None and Path(mtr_csv).exists():
         graph = commute.build_graph(Path(mtr_csv).read_text("utf-8"),
                                     {c: (la, lo) for c, la, lo in stations})
     rent_model = rent.RentModel.from_snapshot(raw) if not raw["rvd"].empty else None
+    model_dir = model_dir or features.model_dir()
+    fair = model.load(model_dir) if (Path(model_dir) / "fair_price.txt").exists() else None
     return AdvisorData(sale=sale, rent_listings=rent_candidates(raw, buildings),
                        buildings=buildings, district_growth=districts, effects=effects,
                        stations=stations, station_names=names, graph=graph,
                        rent_model=rent_model, today=today or date.today(),
-                       growth_setting=setting if not districts.empty else "")
+                       growth_setting=setting if not districts.empty else "",
+                       district_index=index, price_index=raw["index"], fair_model=fair)
 
 
 # ---- candidates ------------------------------------------------------------------------------
@@ -211,6 +285,9 @@ def _candidates(profile: Profile, data: AdvisorData) -> tuple[pd.DataFrame, list
         c = c[~bad].copy()
         c["price_hkd"] = c["asking_hkd"].astype(float)
         c["fair_hkd"] = c["fair_price_hkd"].astype(float)
+        c, merged = _keep_cheaper_of_same_flat(c)
+        if merged:
+            notes.append(f"{merged} listings of a flat already listed cheaper merged into it")
     else:
         c = data.rent_listings.copy()
         if c.empty:
@@ -227,6 +304,39 @@ def _candidates(profile: Profile, data: AdvisorData) -> tuple[pd.DataFrame, list
     c["rent_est"], c["rent_basis"] = _rent_estimates(c, data)
     c["commute_min"], c["commute_text"] = _commutes(c, profile, data)
     return c, notes
+
+
+def _keep_cheaper_of_same_flat(c: pd.DataFrame) -> tuple[pd.DataFrame, int]:
+    """rank.py merges the same flat listed twice only when the prices are within 2%; two
+    listings of one flat (same building, floor and flat, area within 2%) at prices further
+    apart both reach here. Keep the cheaper, name the others in `also_listed`, and return how
+    many were merged. A blank floor or flat never matches (it could be another flat)."""
+    if c.empty or "floor" not in c or "flat" not in c:
+        return c, 0
+    if "also_listed" not in c:
+        c["also_listed"] = None
+    c = c.sort_values("price_hkd", kind="stable").reset_index(drop=True)  # unique labels
+    floor = c["floor"].astype(object)
+    flat = c["flat"].astype(object)
+    known = (floor.notna() & ~floor.isin(["", "not given", "unknown"])
+             & flat.notna() & ~flat.isin(["", "unknown"]) & c["building_id"].notna())
+    drop, extra = [], {}
+    for _, rows in c[known].groupby(["building_id", "floor", "flat"], sort=False):
+        if len(rows) < 2:
+            continue
+        kept = rows.index[0]
+        area = float(rows["area_sqft"].iloc[0])
+        same = rows.iloc[1:]
+        same = same[(same["area_sqft"] - area).abs() <= SAME_FLAT_TOLERANCE * area]
+        if same.empty:
+            continue
+        drop += list(same.index)
+        extra[kept] = list(same["key"])
+    for kept, keys in extra.items():
+        old = c.at[kept, "also_listed"]
+        c.at[kept, "also_listed"] = ", ".join(([old] if isinstance(old, str) and old else [])
+                                              + keys)
+    return c.drop(index=drop), len(drop)
 
 
 def _rent_estimates(c: pd.DataFrame, data: AdvisorData) -> tuple[pd.Series, pd.Series]:
@@ -370,6 +480,31 @@ def _attribute_pp(row, effects: pd.DataFrame) -> tuple[float, list[str]]:
     return total, named
 
 
+def _yield_part(row, district, data: AdvisorData) -> tuple[float, str]:
+    """The rent-yield part of the investment score, by how much the rent estimate can be
+    trusted: a building or estate estimate counts in full; a district estimate is pulled
+    halfway to the district's median yield (the growth study's `rental_yield`), or counts
+    half when the study has none; an RVD-average estimate (no listings near the flat at all)
+    scores unknown. The reason names the basis: 'rent yield 3.4% (estate rents)'."""
+    est, basis = row["rent_est"], row["rent_basis"]
+    if not (pd.notna(est) and est > 0 and row["price_hkd"] > 0):
+        return 0.0, "rent yield unknown"
+    if basis == "rvd":
+        return 0.0, "rent yield unknown (no rent listings near this flat)"
+    y = est * 12 / row["price_hkd"]
+    if basis in ("building", "estate"):
+        return _clip(y * 100 / YIELD_FULL_PCT * 100), f"rent yield {y * 100:.1f}% ({basis} rents)"
+    med = data.district_growth["rental_yield"].get(district) if isinstance(district, str) \
+        and "rental_yield" in data.district_growth else None
+    if med is not None and pd.notna(med):
+        pulled = (1 - DISTRICT_YIELD_PULL) * y + DISTRICT_YIELD_PULL * float(med)
+        return (_clip(pulled * 100 / YIELD_FULL_PCT * 100),
+                f"rent yield {y * 100:.1f}% (district rents; scored as {pulled * 100:.1f}%, "
+                f"halfway to the district median {float(med) * 100:.1f}%)")
+    return (_clip(y * 100 / YIELD_FULL_PCT * 100) * DISTRICT_YIELD_PULL,
+            f"rent yield {y * 100:.1f}% (district rents; counts half)")
+
+
 def _score_investment(c: pd.DataFrame, profile: Profile, data: AdvisorData
                       ) -> tuple[pd.Series, pd.Series]:
     scores, whys = [], []
@@ -400,14 +535,9 @@ def _score_investment(c: pd.DataFrame, profile: Profile, data: AdvisorData
         subs.append(_clip(50 + ATTR_PP_TO_POINTS * pp))
         parts.append(f"attributes {pp:+.1f} pp/yr" + (f" ({', '.join(named)})" if named
                                                       else ""))
-        est = row["rent_est"]
-        if pd.notna(est) and est > 0 and row["price_hkd"] > 0:
-            y = est * 12 / row["price_hkd"]
-            subs.append(_clip(y * 100 / YIELD_FULL_PCT * 100))
-            parts.append(f"rent yield {y * 100:.1f}%")
-        else:
-            subs.append(0.0)
-            parts.append("rent yield unknown")
+        y_score, y_text = _yield_part(row, d, data)
+        subs.append(y_score)
+        parts.append(y_text)
         disc = row["discount_pct"]
         if pd.notna(disc) and row.get("confidence") == "normal":
             subs.append(_clip(50 + DISCOUNT_TO_POINTS * disc))
@@ -478,6 +608,341 @@ def score(c: pd.DataFrame, profile: Profile, data: AdvisorData) -> pd.DataFrame:
     return c
 
 
+# ---- buy vs rent, sell vs let (Task 19) ------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class GrowthRange:
+    """Price growth a year, three cases. `basis` says where the numbers come from."""
+    low: float
+    mid: float
+    high: float
+    basis: str = "given"
+
+    def as_dict(self) -> dict[str, float]:
+        return {"low": self.low, "mid": self.mid, "high": self.high}
+
+
+def _as_range(growth) -> GrowthRange:
+    if isinstance(growth, GrowthRange):
+        return growth
+    if isinstance(growth, (tuple, list)) and len(growth) == 3:
+        return GrowthRange(float(growth[0]), float(growth[1]), float(growth[2]))
+    g = float(growth)
+    return GrowthRange(g, g, g)
+
+
+def window_growth(index: pd.Series, years: int) -> pd.Series:
+    """Annualised growth over every `years`-long window of a monthly index (level by month),
+    one value per start month that has an end month `years` later."""
+    s = index.dropna().sort_index()
+    if s.empty or years <= 0:
+        return pd.Series(dtype=float)
+    end = s.index + pd.DateOffset(years=years)
+    later = s.reindex(end).to_numpy(dtype=float)
+    out = (later / s.to_numpy(dtype=float)) ** (1 / years) - 1
+    return pd.Series(out, index=s.index).dropna()
+
+
+def growth_range(district, years: int, data: AdvisorData) -> GrowthRange:
+    """The district's long-run growth from the growth study (median of flats sold twice,
+    `districts.csv`), with low and high cases: the median shifted by the 25th and 75th
+    percentile spread of `years`-long outcomes in the district's repeat-sales index
+    (`index.csv`; the territory index when the district has none). Without the study, a
+    stated guess."""
+    g = data.district_growth["growth"].get(district) if isinstance(district, str) \
+        and "growth" in data.district_growth else None
+    mid = float(g) if g is not None and pd.notna(g) else None
+    basis = f"{district} median, growth study" if mid is not None else None
+    idx = data.district_index
+    spread = None
+    if not idx.empty and "district" in idx:
+        for name in ((district, "all") if isinstance(district, str) else ("all",)):
+            s = idx[idx["district"] == name].set_index("month")["level"]
+            w = window_growth(s, years)
+            if len(w) >= 12:
+                q25, q50, q75 = (float(w.quantile(p)) for p in (0.25, 0.5, 0.75))
+                if mid is None:
+                    mid, basis = q50, f"{years}-year windows of the {name} index"
+                spread = (q25 - q50, q75 - q50)
+                basis += f"; range from {years}-year windows of the {name} index"
+                break
+    if mid is None:
+        mid, basis = GROWTH_MID_GUESS, "a guess (no growth study for this district)"
+    if spread is None:
+        spread = (-GROWTH_SPREAD_GUESS, GROWTH_SPREAD_GUESS)
+        basis += "; range a guess of +/-3 pp"
+    return GrowthRange(mid + spread[0], mid, mid + spread[1], basis)
+
+
+def mortgage_interest(loan: float, annual_rate: float, mortgage_years: float,
+                      years: float) -> dict:
+    """Interest paid in the first `years` of an annuity mortgage, closed form: what was paid
+    less the principal repaid (loan less the balance left). Returns payment, interest,
+    balance."""
+    n_all = round(mortgage_years * 12)
+    n = min(round(years * 12), n_all)
+    pmt = mortgage.monthly_payment(loan, annual_rate, mortgage_years)
+    r = annual_rate / 12
+    if r == 0:
+        balance = loan - pmt * n
+    else:
+        f = (1 + r) ** n
+        balance = loan * f - pmt * (f - 1) / r
+    balance = max(balance, 0.0)
+    return {"payment": pmt, "interest": pmt * n - (loan - balance), "balance": balance,
+            "months": n}
+
+
+def _rent_stream(rent: float, years: int, rent_growth: float) -> list[float]:
+    """Rent a year for each year of the horizon, growing once a year."""
+    return [rent * 12 * (1 + rent_growth) ** t for t in range(int(years))]
+
+
+def buy_vs_rent(price: float, rent: float, years: int, rate: float, growth,
+                *, buyer: str = "first", mortgage_years: int = 30, ltv: float | None = None,
+                on: date | None = None, deposit_return: float = DEPOSIT_RETURN,
+                rent_growth: float | None = None) -> dict:
+    """Total cost of buying this flat against renting the same flat for `years`, one case
+    per growth rate in `growth` (a number, or a GrowthRange / (low, mid, high)).
+
+    Buying counts: stamp duty (costs.py, the buyer type's scale on `on`), agent 1% and legal
+    0.3% on the purchase, mortgage interest at `rate` on the largest loan HKMA rules allow
+    (mortgage.py; `ltv` caps it lower), rates and government rent, management fees, agent 1%
+    on the sale, less the gain from selling at the end at the assumed growth. Renting counts
+    the rent (growing at `rent_growth`, the price growth by default) less what the cash a
+    buyer would need on day one (deposit, duty, fees) earns at `deposit_return`.
+    Positive `difference` = buying comes out cheaper over the horizon."""
+    on = on or date.today()
+    rng = _as_range(growth)
+    duty = costs.stamp_duty(price, on, buyer)
+    agent_buy, legal = costs.AGENT_PCT * price, costs.LEGAL_PCT * price
+    loan = mortgage.max_loan(price, buyer=buyer, on=on)
+    if ltv is not None:
+        loan = min(loan, price * ltv)
+    deposit = price - loan
+    upfront = deposit + duty + agent_buy + legal
+    m = mortgage_interest(loan, rate, mortgage_years, years)
+    cases = {}
+    for name in GROWTH_CASES:
+        g = getattr(rng, name)
+        rg = g if rent_growth is None else rent_growth
+        rents = _rent_stream(rent, years, rg)
+        rent_total = sum(rents)
+        rates_gov = (RATES_PCT + GOV_RENT_PCT) * rent_total
+        mgmt = MGMT_FEE_SHARE * rent_total
+        sale = price * (1 + g) ** years
+        agent_sell = costs.AGENT_PCT * sale
+        gain = sale - price
+        buy_cost = duty + agent_buy + legal + m["interest"] + rates_gov + mgmt + agent_sell - gain
+        earned = upfront * ((1 + deposit_return) ** years - 1)
+        rent_cost = rent_total - earned
+        cases[name] = {
+            "growth": g, "rent_growth": rg, "buy_cost": buy_cost, "rent_cost": rent_cost,
+            "difference": rent_cost - buy_cost, "sale_price": sale, "gain": gain,
+            "agent_sell": agent_sell, "rates_gov_rent": rates_gov, "management": mgmt,
+            "rent_paid": rent_total, "deposit_earns": earned,
+        }
+    return {
+        "price": price, "rent": rent, "years": years, "rate": rate, "buyer": buyer,
+        "growth": rng.as_dict(), "growth_basis": rng.basis,
+        "stamp_duty": duty, "agent_buy": agent_buy, "legal": legal, "loan": loan,
+        "deposit": deposit, "upfront_cash": upfront, "monthly_payment": m["payment"],
+        "interest": m["interest"], "loan_balance_at_end": m["balance"],
+        "cases": cases, "verdict": verdict_text(cases, years),
+        "assumptions": assumptions(deposit_return),
+    }
+
+
+def sell_vs_let(value: float, rent: float, years: int, growth, *,
+                deposit_return: float = DEPOSIT_RETURN, rent_growth: float | None = None
+                ) -> dict:
+    """Cash from selling now against letting for `years` and selling then, one case per
+    growth rate. Selling now: value less agent 1%, grown at `deposit_return` to the end of
+    the horizon so the two sums are at the same date. Letting: rent (growing at
+    `rent_growth`, the price growth by default) less a month empty and half a month's agent
+    fee at each new tenancy, rates and government rent, management fees and property tax,
+    plus the sale at the end less agent 1%. No mortgage on the flat is assumed. Positive
+    `difference` = letting comes out ahead."""
+    rng = _as_range(growth)
+    sell_now = value * (1 - costs.AGENT_PCT)
+    sell_now_grown = sell_now * (1 + deposit_return) ** years
+    tenancies = int(np.ceil(years / TENANCY_YEARS))
+    cases = {}
+    for name in GROWTH_CASES:
+        g = getattr(rng, name)
+        rg = g if rent_growth is None else rent_growth
+        rents = _rent_stream(rent, years, rg)
+        gross = sum(rents)
+        # a new tenancy every TENANCY_YEARS: the agent's fee each time, a month empty at
+        # each change (not before the first tenancy); both at that year's rent
+        letting_fee = sum(LETTING_FEE_MONTHS * rents[t * TENANCY_YEARS] / 12
+                          for t in range(tenancies))
+        vacancy = sum(VACANCY_MONTHS * rents[t * TENANCY_YEARS] / 12
+                      for t in range(1, tenancies))
+        received = gross - vacancy
+        rates = RATES_PCT * gross
+        gov_rent = GOV_RENT_PCT * gross
+        mgmt = MGMT_FEE_SHARE * gross
+        tax = PROPERTY_TAX * (1 - PROPERTY_TAX_ALLOWANCE) * max(received - rates, 0.0)
+        net_rent = received - letting_fee - rates - gov_rent - mgmt - tax
+        sale = value * (1 + g) ** years
+        sale_net = sale * (1 - costs.AGENT_PCT)
+        cases[name] = {
+            "growth": g, "rent_growth": rg, "rent_received": received, "vacancy": vacancy,
+            "letting_fee": letting_fee, "rates_gov_rent": rates + gov_rent,
+            "management": mgmt, "property_tax": tax, "net_rent": net_rent,
+            "sale_price": sale, "sale_net": sale_net, "let_cash": net_rent + sale_net,
+            "sell_now_grown": sell_now_grown,
+            "difference": net_rent + sale_net - sell_now_grown,
+        }
+    return {
+        "value": value, "rent": rent, "years": years, "growth": rng.as_dict(),
+        "growth_basis": rng.basis, "sell_now": sell_now, "tenancies": tenancies,
+        "cases": cases, "verdict": verdict_text(cases, years, let=True),
+        "assumptions": assumptions(deposit_return),
+    }
+
+
+def assumptions(deposit_return: float = DEPOSIT_RETURN) -> dict[str, str]:
+    """The stated assumptions, for the page (values and where they come from)."""
+    return {
+        "stamp duty": "IRD scale for the buyer type on the purchase date (costs.py)",
+        "agent fee": f"{costs.AGENT_PCT:.0%} of the price on each sale (costs.py)",
+        "legal fee": f"{costs.LEGAL_PCT:.1%} of the price, once, on the purchase (costs.py)",
+        "mortgage": "largest loan HKMA rules allow (mortgage.py), equal monthly instalments",
+        "rates": f"{RATES_PCT:.0%} of the annual rent (rateable value; RVD)",
+        "government rent": f"{GOV_RENT_PCT:.0%} of the annual rent (Lands Department, Cap. 515)",
+        "management fee": f"{MGMT_FEE_SHARE:.0%} of the rent (a guess)",
+        "deposit's return": f"{deposit_return:.1%} a year (a guess)",
+        "property tax": f"{PROPERTY_TAX:.0%} of rent received less rates, after a "
+                        f"{PROPERTY_TAX_ALLOWANCE:.0%} allowance (IRD)",
+        "tenancies": f"{TENANCY_YEARS} years each; {LETTING_FEE_MONTHS:g} month's rent to the "
+                     f"agent per tenancy, {VACANCY_MONTHS:g} month empty per change (a guess)",
+        "rent growth": "same as price growth unless given",
+    }
+
+
+def verdict_text(cases: dict, years: int, let: bool = False) -> str:
+    """One line a reader can act on, e.g. 'buying comes out HK$1.2m ahead over 10 years
+    (HK$0.3m behind to HK$2.0m ahead across the growth cases)'."""
+    def hk(x: float) -> str:
+        return f"HK${abs(x) / 1e6:,.1f}m"
+
+    def side(x: float) -> str:
+        return "ahead" if x >= 0 else "behind"
+
+    mid, lo, hi = (cases[k]["difference"] for k in ("mid", "low", "high"))
+    what = "letting" if let else "buying"
+    return (f"{what} comes out {hk(mid)} {side(mid)} over {years} years "
+            f"({hk(lo)} {side(lo)} to {hk(hi)} {side(hi)} across the growth cases)")
+
+
+def fair_value(building_id: str, area_sqft: float, data: AdvisorData,
+               floor_text: str | None = None, rooms: float | None = None) -> tuple[float, str]:
+    """The fair-price model's value of a flat (HK$, at today's index level), the way rank.py
+    values a listing, and the basis text; (nan, reason) when it cannot be valued."""
+    m = data.fair_model
+    if m is None:
+        return np.nan, "no fair-price model loaded"
+    if building_id not in data.buildings.index:
+        return np.nan, "building not in the snapshot"
+    if not area_sqft > 0:
+        return np.nan, "no area"
+    b = data.buildings.loc[building_id]
+    top = b.get("top_floor")
+    floor_num, rel, basis = features.listing_floor(floor_text, None, top)
+    built = b.get("built_year")
+    row = {
+        "area_sqft": float(area_sqft), "rooms": rooms if rooms is not None else np.nan,
+        "floor_num": floor_num, "rel_floor": rel, "top_floor": top,
+        "age_years": data.today.year - built if pd.notna(built) else np.nan,
+        "mtr_m": b.get("mtr_m"), "lat": b.get("lat"), "lon": b.get("lon"),
+        "estate_units": b.get("estate_units"),
+        "month_idx": m.meta.get("valuation_month_idx", features.month_index(data.today)),
+        "sea_view": False, "special_unit": False, "facing": "unknown",
+        "district": b.get("district"), "estate_key": b.get("estate_key"),
+        "building_id": building_id,
+    }
+    df = pd.DataFrame([row])
+    adj = float(model.predict_adj(m, df)[0])
+    logd = 0.0
+    if not data.price_index.empty and "index_reference_month" in m.meta:
+        cls = pd.Series([features.rvd_class(area_sqft)])
+        now = features.deflator(data.price_index, cls, pd.Series([pd.Timestamp(data.today)]))
+        ref = features.deflator(data.price_index, cls,
+                                pd.Series([pd.Timestamp(m.meta["index_reference_month"])]))
+        logd = float(np.log(now[0]) - np.log(ref[0]))
+    psf = float(np.exp(adj + logd))
+    return psf * float(area_sqft), f"fair-price model, floor {basis}"
+
+
+def advise_owner(building_id: str, area_sqft: float, data: AdvisorData,
+                 profile: Profile | None = None, floor_text: str | None = None,
+                 rooms: float | None = None, value_hkd: float | None = None,
+                 rent_hkd: float | None = None) -> dict:
+    """For an owner asking sell or let: the flat's value (the fair-price model, or
+    `value_hkd`), its rent estimate (rent.py, or `rent_hkd`), the district's growth range
+    and the sell-vs-let figures over the profile's horizon."""
+    profile = profile or Profile(intent="sell")
+    notes = []
+    value_basis, rent_basis = "given", "given"
+    if value_hkd is None:
+        value_hkd, value_basis = fair_value(building_id, area_sqft, data, floor_text, rooms)
+    if rent_hkd is None:
+        if data.rent_model is None:
+            rent_hkd, rent_basis = np.nan, "none"
+        else:
+            district = data.buildings["district"].get(building_id)
+            rent_hkd, rent_basis = data.rent_model.estimate(
+                building_id, float(area_sqft),
+                district if isinstance(district, str) else None, on=data.today)
+    district = data.buildings["district"].get(building_id) if building_id in \
+        data.buildings.index else None
+    rng = growth_range(district if isinstance(district, str) else None, profile.years, data)
+    out = {"building_id": building_id, "area_sqft": area_sqft, "district": district,
+           "value_hkd": value_hkd, "value_basis": value_basis, "rent_hkd": rent_hkd,
+           "rent_basis": rent_basis, "growth": rng.as_dict(), "growth_basis": rng.basis,
+           "years": profile.years, "sell_vs_let": None, "notes": notes}
+    if not (pd.notna(value_hkd) and value_hkd > 0):
+        notes.append(f"no value: {value_basis}")
+        return out
+    if not (pd.notna(rent_hkd) and rent_hkd > 0):
+        notes.append("no rent estimate: letting cannot be judged")
+        return out
+    out["sell_vs_let"] = sell_vs_let(float(value_hkd), float(rent_hkd), profile.years, rng)
+    return out
+
+
+def _vs_renting(c: pd.DataFrame, profile: Profile, data: AdvisorData) -> pd.DataFrame:
+    """Per buy listing: the buy-vs-rent difference (mid, low, high; HK$, positive = buying
+    cheaper) and a one-line text, at the district's growth range. NaN and 'unknown' without
+    a rent estimate."""
+    c = c.copy()
+    for col in ("vs_rent_hkd", "vs_rent_low_hkd", "vs_rent_high_hkd"):
+        c[col] = np.nan
+    c["vs_rent"] = "vs renting: unknown (no rent estimate)"
+    ranges: dict = {}
+    for i, row in c.iterrows():
+        est = row["rent_est"]
+        if not (pd.notna(est) and est > 0 and row["price_hkd"] > 0):
+            continue
+        d = row["district"] if isinstance(row["district"], str) else None
+        if d not in ranges:
+            ranges[d] = growth_range(d, profile.years, data)
+        r = buy_vs_rent(float(row["price_hkd"]), float(est), profile.years, profile.rate,
+                        ranges[d], buyer=profile.buyer, mortgage_years=profile.mortgage_years,
+                        on=data.today)
+        cs = r["cases"]
+        c.at[i, "vs_rent_hkd"] = cs["mid"]["difference"]
+        c.at[i, "vs_rent_low_hkd"] = cs["low"]["difference"]
+        c.at[i, "vs_rent_high_hkd"] = cs["high"]["difference"]
+        c.at[i, "vs_rent"] = (f"vs renting a similar flat (HK${est:,.0f}/month): "
+                              f"{r['verdict']}; growth {ranges[d].mid * 100:.1f}%/yr "
+                              f"({ranges[d].low * 100:.1f} to {ranges[d].high * 100:.1f})")
+    return c
+
+
 # ---- the answer ------------------------------------------------------------------------------
 
 LISTING_COLUMNS = ["estate_rank", "estate_name", "building_name", "district", "floor", "flat",
@@ -485,7 +950,8 @@ LISTING_COLUMNS = ["estate_rank", "estate_name", "building_name", "district", "f
                    "confidence", "rent_est", "rent_basis", "commute_min", "school_net",
                    "overall", "score_investment", "score_near_place", "score_school",
                    "score_space", "reason", "why_investment", "why_near_place", "why_school",
-                   "why_space", "url", "key", "source", "listing_id", "building_id",
+                   "why_space", "vs_rent", "vs_rent_hkd", "vs_rent_low_hkd", "vs_rent_high_hkd",
+                   "also_listed", "url", "key", "source", "listing_id", "building_id",
                    "estate_key"]
 
 
@@ -500,7 +966,7 @@ def recommend(profile: Profile, data: AdvisorData) -> Result:
     their figures are Task 19's."""
     if profile.intent in ("sell", "let"):
         return _empty_result(profile, [f"'{profile.intent}' has no listing search; use the "
-                                       "sell-vs-let figures"])
+                                       "sell-vs-let figures (advise_owner)"])
     c, notes = _candidates(profile, data)
     if c.empty:
         return _empty_result(profile, notes)
@@ -512,6 +978,11 @@ def recommend(profile: Profile, data: AdvisorData) -> Result:
     if kept.empty:
         return _empty_result(profile, notes + ["no listing passes the hard limits"], left_out)
     s = score(kept, profile, data)
+    for col in ("vs_rent", "vs_rent_hkd", "vs_rent_low_hkd", "vs_rent_high_hkd", "also_listed"):
+        if col not in s:
+            s[col] = np.nan
+    if profile.intent == "buy":
+        s = _vs_renting(s, profile, data)
     cols = [f"score_{g}" for g in GOALS]
     estates = s.groupby("estate_key").agg(
         estate_name=("estate_name", "first"), district=("district", "first"),
