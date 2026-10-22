@@ -89,7 +89,12 @@ cache pruning.)*
   cached register PDFs (no web requests) and delete the old glued rows; their `source_id`
   (`3085:3 3:2 5:A A:...`) differs from the new per-flat ids, so they would otherwise stay
   beside the corrected ones.)*
-- **2,134 clean rows under HK$1,000 per sq ft (pre-release review 2026-10-21).** The data
+- *(Mostly settled 2026-10-23, Task 8, fd6b00f: on the model's clean data the count is
+  1,558; a sample of 50 found 47 real 1950s-60s tenement prices and 3 suspected part shares.
+  New `low_psf` rule removes 485 clean sales in all. Left: part shares in buildings with few
+  deals and no repeat sale of the flat, e.g. 嘉湖山莊 8座 30/H 2002. A building-year check at
+  0.6× with 3+ deals would catch them, if wanted.)*
+  **2,134 clean rows under HK$1,000 per sq ft (pre-release review 2026-10-21).** The data
   check's "price per sq ft under 1,000" rule hits 8,181 stored rows (centadata 6,100,
   ricacorp 1,866, hse28 215) and 2,134 of them are still clean: sales a tenth of today's
   level or less (1990s village or Tier-3 prices, part-share transfers the price check misses

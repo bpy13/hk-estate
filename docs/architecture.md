@@ -152,7 +152,10 @@ Exclusion flags in `txn_all` (decisions.md "Schema"):
 
 The first-hand rule (developer sales SRPE doesn't flag) and the house/subsidised-estate filter
 need building-level logic and the master tables, so they live in `features.deal_features`
-(`exclude_reason`), which both the fair-price model and the growth study use.
+(`exclude_reason`), which both the fair-price model and the growth study use. So does
+`low_psf` (2026-10-23, `features.low_psf_check`): index-adjusted price per sq ft under 0.15×
+the district's clean median, or under 0.5× the same flat's other clean sales within 5 years
+(part shares the price check missed).
 
 The fair-price model adds its own exclusions on top (`features.py` `exclude_reason`,
 decisions.md "Phase 4 build"); the stored views are unchanged. `db.txn_all_sql(latest)`

@@ -221,7 +221,10 @@ building, so it finds no subsidised estate. Tasks 2-3 below follow
       lack a district
 
     Green.
-- [ ] **Task 8: cheap-sale rule (fable)** `[parallel-ok]`
+- [x] **Task 8: cheap-sale rule (fable)** `[parallel-ok]` *(fd6b00f. Accepted by the main
+  session with one deviation: the sample held only 3 suspected part shares, and the rule
+  catches 1 of them. 47 of 50 were real 1950s-60s tenement prices, so the stricter 0.25
+  floor would have dropped 14 real sales. The rule removes 485 clean sales in all.)*
   - Files: modify `src/hkestate/db.py` (`txn_all_sql`) or `src/hkestate/features.py`
     (`exclude_reason`, whichever the price check lives in). Tests in `tests/test_db.py` /
     `tests/test_features.py`. Update `docs/decisions.md` (proposal marked Claude's call).
