@@ -584,8 +584,25 @@ weighted average by the profile's goal weights.
   usual); the sale at the end at the assumed growth. Net cost = all of these less the gain.
 - **Renting** counts the rent, less what the buyer's day-one cash (deposit, duty, fees) would
   earn at 3% a year (a guess: HKD time deposits and bonds paid 2-3.5% in 2025-26).
+- **Same spending each month** (changed 2026-10-23 after the pre-release review; the renter
+  used to invest only the day-one cash, so the owner's higher monthly outgoings were set
+  against nothing): both sides are compared as wealth at the end of the horizon. Each month
+  the renter invests the owner's outgoings (instalment + rates + government rent +
+  management) less the rent, at 3% (the owner invests the gap when renting costs more),
+  paid at the start of the month. Owner: sale less agent 1% less the loan left, plus what
+  the owner invested. Renter: the day-one cash grown at 3%, plus what the renter invested.
+  Worked example (tests): 8m flat, HK$20,000 rent, 10 years, 3% growth: buying 1.40m ahead
+  (1.57m under the old count). On the 10-22 snapshot, investor profile (budget 8m, 12,914
+  listings): median mid case +HK$3.2m (was +3.3m), buying ahead in 100% of listings in the
+  mid case (was 100%) but only 3.9% in the low case. The mid case is driven by growth, not
+  by this accounting: district medians are 2.9-5.8%/yr over 10 years (rent grows with
+  them), and the median listing breaks even at about 0.7%/yr.
 - **Selling now**: value less agent 1%, grown at the same 3% to the end of the horizon so the
-  two sums are at one date. **Letting**: rent less a month empty and half a month's rent to
+  two sums are at one date. (changed 2026-10-23 after the pre-release review; the rents
+  were summed as paid, at different dates) Each year's net rent counts as cash in
+  mid-year, grown at 3% to the end: x (1.03)^(years - t - 0.5). Worked example (tests):
+  8m flat, HK$20,000 rent, 4 years: letting 679,487 ahead (640,160 before).
+  **Letting**: rent less a month empty and half a month's rent to
   the agent at each new tenancy (tenancies of 2 years; common practice, a guess), rates and
   government rent as above, management 10%, property tax 15% of rent received less rates
   after the 20% statutory allowance (IRD), plus the sale at the end less agent 1%. No

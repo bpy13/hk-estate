@@ -383,35 +383,48 @@ def test_mortgage_interest_matches_a_month_by_month_loop():
 
 def test_buy_vs_rent_worked_by_hand():
     """Buy an 8m flat (first home, 2026-10-23) or rent it at HK$20,000 a month, 10 years,
-    mortgage at 3.5%, prices growing 3%/yr, rent flat, the deposit earning 3%.
+    mortgage at 3.5%, prices growing 3%/yr, rent flat, spare cash earning 3%. Both sides are
+    counted as wealth at the end of the 10 years (changed 2026-10-23 after the pre-release
+    review: the renter now also invests what renting saves each month).
     Buying:  stamp duty 3% (2026 scale, 6-9m band) = 240,000; agent 1% = 80,000; legal 0.3%
-             = 24,000; loan 70% = 5.6m at 3.5% over 30 years: HK$25,146.5 a month; interest
-             in the first 120 months = 1,753,485 (payments 3,017,580 less principal repaid
-             1,264,095; balance left 4,335,905); rates + government rent 8% of rent 2.4m =
-             192,000; management 10% = 240,000; sale 8m x 1.03^10 = 10,751,331, agent 1% =
-             107,513; gain 2,751,331.
-             Cost = 240,000 + 80,000 + 24,000 + 1,753,485 + 192,000 + 240,000 + 107,513
-                    - 2,751,331 = -114,332 (buying makes money net).
-    Renting: rent 20,000 x 12 x 10 = 2,400,000, less what the day-one cash (deposit 2.4m +
-             344,000 costs = 2,744,000) earns at 3%: 2,744,000 x (1.03^10 - 1) = 943,707.
-             Cost = 1,456,293. Buying is 1,570,626 ahead."""
+             = 24,000; day-one cash = deposit 2.4m + 344,000 = 2,744,000. Loan 70% = 5.6m at
+             3.5% over 30 years: HK$25,146.5 a month (interest in 120 months 1,753,485;
+             balance left 4,335,905). Each month: the instalment plus rates, government rent
+             and management, 18% of the rent = 3,600: 28,746.5. Sale 8m x 1.03^10 =
+             10,751,331 less agent 1% 107,513, less the loan left: owner ends with 6,307,913.
+    Renting: rent 20,000 a month; the renter invests the day-one cash, 2,744,000 x 1.03^10 =
+             3,687,707, and each month the 8,746.5 that renting costs less than owning, at
+             3% from the start of that month to the end: 1,222,690. Renter ends with
+             4,910,397. Buying is 1,397,516 ahead (1,570,626 under the old count, which
+             ignored the monthly saving)."""
     r = advisor.buy_vs_rent(8_000_000, 20_000, 10, 0.035, 0.03, buyer="first",
                             on=date(2026, 10, 23), rent_growth=0.0)
     assert r["stamp_duty"] == 240_000 and r["agent_buy"] == 80_000 and r["legal"] == 24_000
     assert r["loan"] == 5_600_000 and r["deposit"] == 2_400_000
+    assert r["upfront_cash"] == 2_744_000
     assert r["monthly_payment"] == pytest.approx(25_146.5, abs=0.1)
     assert r["interest"] == pytest.approx(1_753_485, abs=1)
+    assert r["loan_balance_at_end"] == pytest.approx(4_335_905, abs=1)
     mid = r["cases"]["mid"]
     assert mid["rates_gov_rent"] == pytest.approx(192_000)
     assert mid["management"] == pytest.approx(240_000)
     assert mid["sale_price"] == pytest.approx(10_751_331, abs=1)
-    assert mid["buy_cost"] == pytest.approx(-114_332, abs=2)
-    assert mid["deposit_earns"] == pytest.approx(943_707, abs=1)
-    assert mid["rent_cost"] == pytest.approx(1_456_293, abs=2)
-    assert mid["difference"] == pytest.approx(1_570_626, abs=3)
+    assert mid["owner_wealth"] == pytest.approx(6_307_913, abs=1)
+    assert mid["upfront_grown"] == pytest.approx(3_687_707, abs=1)
+    assert mid["renter_invests"] == pytest.approx(1_222_690, abs=1)
+    assert mid["owner_invests"] == 0
+    assert mid["renter_wealth"] == pytest.approx(4_910_397, abs=1)
+    assert mid["difference"] == pytest.approx(1_397_516, abs=2)
+    # the same in cost terms at the horizon: owning 1,398,322, renting 2,795,838
+    assert mid["rent_cost"] - mid["buy_cost"] == pytest.approx(mid["difference"], abs=1e-3)
+    assert mid["rent_cost"] == pytest.approx(2_795_838, abs=1)
     # a plain number gives one growth in all three cases; a range gives three
     assert r["cases"]["low"]["difference"] == r["cases"]["high"]["difference"]
-    assert r["verdict"].startswith("buying comes out HK$1.6m ahead over 10 years")
+    assert r["verdict"].startswith("buying comes out HK$1.4m ahead over 10 years")
+    # when renting costs more than owning each month, the owner invests the difference
+    dear = advisor.buy_vs_rent(8_000_000, 40_000, 10, 0.035, 0.03, on=date(2026, 10, 23),
+                               rent_growth=0.0)["cases"]["mid"]
+    assert dear["renter_invests"] == 0 and dear["owner_invests"] > 0
     three = advisor.buy_vs_rent(8_000_000, 20_000, 10, 0.035,
                                 advisor.GrowthRange(0.0, 0.03, 0.06), on=date(2026, 10, 23))
     d = {k: v["difference"] for k, v in three["cases"].items()}
@@ -427,8 +440,13 @@ def test_sell_vs_let_worked_by_hand():
     Let: rent 960,000 gross over 2 tenancies; agent half a month each = 20,000; one month
          empty at the change = 20,000, so 940,000 received; rates 5% of 960,000 = 48,000;
          government rent 3% = 28,800; management 10% = 96,000; property tax 15% x 80% x
-         (940,000 - 48,000) = 107,040. Net rent 640,160. Sale 8m x 1.03^4 = 9,004,071 less
-         agent 1% = 8,914,030. Letting gives 9,554,190: 640,160 ahead."""
+         (940,000 - 48,000) = 107,040. Net rent 640,160: by year 159,440, 169,440, 141,840
+         (fee and empty month) and 169,440. Each year's net rent is cash in mid-year, grown
+         at 3% to the end of year 4 so both paths are cash at the same date (changed
+         2026-10-23 after the pre-release review): x 1.03^3.5, ^2.5, ^1.5, ^0.5 = 176,818 +
+         182,435 + 148,270 + 171,963 = 679,487. Sale 8m x 1.03^4 = 9,004,071 less agent 1% =
+         8,914,030. Letting is 679,487 ahead (640,160 under the old sum of unequal-date
+         cash)."""
     r = advisor.sell_vs_let(8_000_000, 20_000, 4, 0.03, rent_growth=0.0)
     assert r["sell_now"] == 7_920_000 and r["tenancies"] == 2
     mid = r["cases"]["mid"]
@@ -437,9 +455,11 @@ def test_sell_vs_let_worked_by_hand():
     assert mid["rates_gov_rent"] == pytest.approx(76_800)
     assert mid["property_tax"] == pytest.approx(107_040)
     assert mid["net_rent"] == pytest.approx(640_160)
+    assert mid["net_rent_grown"] == pytest.approx(679_487, abs=1)
     assert mid["sale_net"] == pytest.approx(8_914_030, abs=1)
-    assert mid["difference"] == pytest.approx(640_160, abs=2)
-    assert r["verdict"].startswith("letting comes out HK$0.6m ahead over 4 years")
+    assert mid["let_cash"] == pytest.approx(679_487 + 8_914_030, abs=2)
+    assert mid["difference"] == pytest.approx(679_487, abs=2)
+    assert r["verdict"].startswith("letting comes out HK$0.7m ahead over 4 years")
 
 
 def test_growth_range_from_the_study(data):

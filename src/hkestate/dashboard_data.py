@@ -407,7 +407,7 @@ LEFT_OUT_WORDS = {"budget": "over the budget (or failing the mortgage test)",
                   "school_net": "in another school net, or net unknown"}
 NO_RELIABLE_RENT_TEXT = (f"{advisor.NO_RELIABLE_RENT} (only government average rents), so "
                          "no buy-or-rent figures")
-NO_STATIONS_NOTE ="No commute times yet: commute times appear once station data is loaded."
+NO_STATIONS_NOTE = "No commute times yet: commute times appear once station data is loaded."
 
 
 @dataclass

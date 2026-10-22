@@ -776,16 +776,23 @@ def buy_vs_rent(price: float, rent: float, years: int, rate: float, growth,
                 *, buyer: str = "first", mortgage_years: int = 30, ltv: float | None = None,
                 on: date | None = None, deposit_return: float = DEPOSIT_RETURN,
                 rent_growth: float | None = None) -> dict:
-    """Total cost of buying this flat against renting the same flat for `years`, one case
-    per growth rate in `growth` (a number, or a GrowthRange / (low, mid, high)).
+    """Buying this flat against renting the same flat for `years`, as wealth at the end of
+    the horizon (one date for both), one case per growth rate in `growth` (a number, or a
+    GrowthRange / (low, mid, high)).
 
-    Buying counts: stamp duty (costs.py, the buyer type's scale on `on`), agent 1% and legal
-    0.3% on the purchase, mortgage interest at `rate` on the largest loan HKMA rules allow
-    (mortgage.py; `ltv` caps it lower), rates and government rent, management fees, agent 1%
-    on the sale, less the gain from selling at the end at the assumed growth. Renting counts
-    the rent (growing at `rent_growth`, the price growth by default) less what the cash a
-    buyer would need on day one (deposit, duty, fees) earns at `deposit_return`.
-    Positive `difference` = buying comes out cheaper over the horizon."""
+    Changed 2026-10-23 after the pre-release review: the renter used to invest only the
+    day-one cash, so the owner's higher monthly outgoings were never set against anything.
+    Now both sides spend the same each month: the owner pays the mortgage instalment
+    (`rate`, the largest loan HKMA rules allow, mortgage.py; `ltv` caps it lower), rates,
+    government rent and management fees; the renter pays the rent (growing at
+    `rent_growth`, the price growth by default) and invests the difference at
+    `deposit_return`, or the owner invests it when renting costs more. Monthly sums are
+    paid at the start of each month and grown to the end of the horizon.
+    Owner's wealth: the sale at the assumed growth less agent 1%, less the loan left, plus
+    what the owner invested. Renter's wealth: the day-one cash a buyer needs (deposit,
+    stamp duty on `on` for the buyer type, agent 1%, legal 0.3%) grown at `deposit_return`,
+    plus what the renter invested. Positive `difference` = buying comes out ahead.
+    `buy_cost` / `rent_cost` give the same comparison as costs at the horizon."""
     on = on or date.today()
     rng = _as_range(growth)
     duty = costs.stamp_duty(price, on, buyer)
@@ -796,6 +803,10 @@ def buy_vs_rent(price: float, rent: float, years: int, rate: float, growth,
     deposit = price - loan
     upfront = deposit + duty + agent_buy + legal
     m = mortgage_interest(loan, rate, mortgage_years, years)
+    n = int(round(years * 12))
+    paying = np.arange(n) < round(mortgage_years * 12)  # no instalment once the loan is repaid
+    grow = (1 + deposit_return) ** ((n - np.arange(n)) / 12)  # start of month -> horizon end
+    upfront_grown = upfront * (1 + deposit_return) ** years
     cases = {}
     for name in GROWTH_CASES:
         g = getattr(rng, name)
@@ -804,17 +815,27 @@ def buy_vs_rent(price: float, rent: float, years: int, rate: float, growth,
         rent_total = sum(rents)
         rates_gov = (RATES_PCT + GOV_RENT_PCT) * rent_total
         mgmt = MGMT_FEE_SHARE * rent_total
+        monthly_rent = np.repeat(np.array(rents, dtype=float) / 12, 12)[:n]
+        owner_out = (np.where(paying, m["payment"], 0.0)
+                     + (RATES_PCT + GOV_RENT_PCT + MGMT_FEE_SHARE) * monthly_rent)
+        gap = owner_out - monthly_rent  # > 0: renting is cheaper that month
+        renter_invests = float(np.sum(np.clip(gap, 0, None) * grow))
+        owner_invests = float(np.sum(np.clip(-gap, 0, None) * grow))
         sale = price * (1 + g) ** years
         agent_sell = costs.AGENT_PCT * sale
-        gain = sale - price
-        buy_cost = duty + agent_buy + legal + m["interest"] + rates_gov + mgmt + agent_sell - gain
-        earned = upfront * ((1 + deposit_return) ** years - 1)
-        rent_cost = rent_total - earned
+        owner_wealth = sale - agent_sell - m["balance"] + owner_invests
+        renter_wealth = upfront_grown + renter_invests
+        buy_cost = upfront_grown + float(np.sum(owner_out * grow)) - (sale - agent_sell
+                                                                       - m["balance"])
+        rent_cost = float(np.sum(monthly_rent * grow))
         cases[name] = {
             "growth": g, "rent_growth": rg, "buy_cost": buy_cost, "rent_cost": rent_cost,
-            "difference": rent_cost - buy_cost, "sale_price": sale, "gain": gain,
-            "agent_sell": agent_sell, "rates_gov_rent": rates_gov, "management": mgmt,
-            "rent_paid": rent_total, "deposit_earns": earned,
+            "difference": owner_wealth - renter_wealth, "owner_wealth": owner_wealth,
+            "renter_wealth": renter_wealth, "owner_invests": owner_invests,
+            "renter_invests": renter_invests, "upfront_grown": upfront_grown,
+            "sale_price": sale, "gain": sale - price, "agent_sell": agent_sell,
+            "rates_gov_rent": rates_gov, "management": mgmt, "rent_paid": rent_total,
+            "deposit_earns": upfront_grown - upfront,
         }
     return {
         "price": price, "rent": rent, "years": years, "rate": rate, "buyer": buyer,
@@ -832,11 +853,13 @@ def sell_vs_let(value: float, rent: float, years: int, growth, *,
                 ) -> dict:
     """Cash from selling now against letting for `years` and selling then, one case per
     growth rate. Selling now: value less agent 1%, grown at `deposit_return` to the end of
-    the horizon so the two sums are at the same date. Letting: rent (growing at
-    `rent_growth`, the price growth by default) less a month empty and half a month's agent
-    fee at each new tenancy, rates and government rent, management fees and property tax,
-    plus the sale at the end less agent 1%. No mortgage on the flat is assumed. Positive
-    `difference` = letting comes out ahead."""
+    the horizon. Letting: rent (growing at `rent_growth`, the price growth by default) less
+    a month empty and half a month's agent fee at each new tenancy, rates and government
+    rent, management fees and property tax, plus the sale at the end less agent 1%. Each
+    year's net rent counts as cash in mid-year, grown at `deposit_return` to the end of the
+    horizon ((1 + d)^(years - t - 0.5)), so both paths are cash at the same date (changed
+    2026-10-23 after the pre-release review: the rents were summed as paid). No mortgage on
+    the flat is assumed. Positive `difference` = letting comes out ahead."""
     rng = _as_range(growth)
     sell_now = value * (1 - costs.AGENT_PCT)
     sell_now_grown = sell_now * (1 + deposit_return) ** years
@@ -846,28 +869,31 @@ def sell_vs_let(value: float, rent: float, years: int, growth, *,
         g = getattr(rng, name)
         rg = g if rent_growth is None else rent_growth
         rents = _rent_stream(rent, years, rg)
+        # a new tenancy every TENANCY_YEARS: the agent's fee in its first year, a month empty
+        # at each change (not before the first tenancy); both at that year's rent
+        fee_y = [LETTING_FEE_MONTHS * r / 12 if t % TENANCY_YEARS == 0 else 0.0
+                 for t, r in enumerate(rents)]
+        vac_y = [VACANCY_MONTHS * r / 12 if t % TENANCY_YEARS == 0 and t > 0 else 0.0
+                 for t, r in enumerate(rents)]
+        rec_y = [r - v for r, v in zip(rents, vac_y, strict=True)]
+        tax_y = [PROPERTY_TAX * (1 - PROPERTY_TAX_ALLOWANCE) * max(rc - RATES_PCT * r, 0.0)
+                 for r, rc in zip(rents, rec_y, strict=True)]
+        net_y = [rc - f - (RATES_PCT + GOV_RENT_PCT + MGMT_FEE_SHARE) * r - tx
+                 for r, rc, f, tx in zip(rents, rec_y, fee_y, tax_y, strict=True)]
+        net_rent_grown = sum(x * (1 + deposit_return) ** (years - t - 0.5)
+                             for t, x in enumerate(net_y))
         gross = sum(rents)
-        # a new tenancy every TENANCY_YEARS: the agent's fee each time, a month empty at
-        # each change (not before the first tenancy); both at that year's rent
-        letting_fee = sum(LETTING_FEE_MONTHS * rents[t * TENANCY_YEARS] / 12
-                          for t in range(tenancies))
-        vacancy = sum(VACANCY_MONTHS * rents[t * TENANCY_YEARS] / 12
-                      for t in range(1, tenancies))
-        received = gross - vacancy
-        rates = RATES_PCT * gross
-        gov_rent = GOV_RENT_PCT * gross
-        mgmt = MGMT_FEE_SHARE * gross
-        tax = PROPERTY_TAX * (1 - PROPERTY_TAX_ALLOWANCE) * max(received - rates, 0.0)
-        net_rent = received - letting_fee - rates - gov_rent - mgmt - tax
+        rates, gov_rent = RATES_PCT * gross, GOV_RENT_PCT * gross
         sale = value * (1 + g) ** years
         sale_net = sale * (1 - costs.AGENT_PCT)
         cases[name] = {
-            "growth": g, "rent_growth": rg, "rent_received": received, "vacancy": vacancy,
-            "letting_fee": letting_fee, "rates_gov_rent": rates + gov_rent,
-            "management": mgmt, "property_tax": tax, "net_rent": net_rent,
-            "sale_price": sale, "sale_net": sale_net, "let_cash": net_rent + sale_net,
-            "sell_now_grown": sell_now_grown,
-            "difference": net_rent + sale_net - sell_now_grown,
+            "growth": g, "rent_growth": rg, "rent_received": sum(rec_y),
+            "vacancy": sum(vac_y), "letting_fee": sum(fee_y),
+            "rates_gov_rent": rates + gov_rent, "management": MGMT_FEE_SHARE * gross,
+            "property_tax": sum(tax_y), "net_rent": sum(net_y),
+            "net_rent_grown": net_rent_grown, "sale_price": sale, "sale_net": sale_net,
+            "let_cash": net_rent_grown + sale_net, "sell_now_grown": sell_now_grown,
+            "difference": net_rent_grown + sale_net - sell_now_grown,
         }
     return {
         "value": value, "rent": rent, "years": years, "growth": rng.as_dict(),
@@ -887,7 +913,13 @@ def assumptions(deposit_return: float = DEPOSIT_RETURN) -> dict[str, str]:
         "rates": f"{RATES_PCT:.0%} of the annual rent (rateable value; RVD)",
         "government rent": f"{GOV_RENT_PCT:.0%} of the annual rent (Lands Department, Cap. 515)",
         "management fee": f"{MGMT_FEE_SHARE:.0%} of the rent (a guess)",
-        "deposit's return": f"{deposit_return:.1%} a year (a guess)",
+        "deposit's return": f"{deposit_return:.1%} a year on spare cash (a guess)",
+        "buying vs renting": "both spend the same each month: the renter invests what "
+                             "renting saves against the owner's instalment, rates, "
+                             "government rent and management (the owner invests it when "
+                             "renting costs more); both compared as wealth at the end",
+        "selling vs letting": "each year's net rent is grown to the end of the horizon, "
+                              "like the cash from selling now",
         "property tax": f"{PROPERTY_TAX:.0%} of rent received less rates, after a "
                         f"{PROPERTY_TAX_ALLOWANCE:.0%} allowance (IRD)",
         "tenancies": f"{TENANCY_YEARS} years each; {LETTING_FEE_MONTHS:g} month's rent to the "
