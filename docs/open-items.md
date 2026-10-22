@@ -1,6 +1,6 @@
 # Open items
 
-As of 2026-10-22. Tick off, or move to `decisions.md` when settled. A bug that will be fixed goes
+As of 2026-10-23. Tick off, or move to `decisions.md` when settled. A bug that will be fixed goes
 here; a limit or trap we live with goes in `known-issues.md`. Each item in one place only.
 
 ## Blockers
@@ -48,6 +48,20 @@ cache pruning.)*
   that flat out (slower). Your call whether that is worth it.
 
 ## Pending work
+- **Live steps of the 2026-10-23 run, after geocoding ends (~17:00 on 10-23).**
+  - `python -m hkestate.geo --stations-only`: district fill and MTR distances.
+  - `python -m hkestate.sources.schools`.
+  - `hkestate train`, then `rank --from-snapshot`, then `report --settings standard
+    --from-snapshot`.
+  - The manual check of 20 shortlist URLs, and the phone-width browser check of the new
+    pages.
+
+  The plan file's Tasks 5, 6, 7, 11 and 17 track them.
+- **The step after geocoding is untimed on live data (pre-release review 2026-10-23).**
+  `geo.main`'s tail (`mark_mismatches`, `assign_mtr`, `set_building_ages`,
+  `fill_districts`) runs in one database session with per-row updates over ~40k buildings.
+  The running process (PID 16964) uses the older tail: `assign_mtr` and
+  `set_building_ages` only. Time it from its log when it ends.
 - **Your call: keep the retrained price model (2026-10-21)?** Retrained on all 1.5M clean
   sales since 1995. On recent sales it is a touch worse than the 2026-10-18 model on the same
   deals (6.25% vs 6.10% typical error) but it knows 99% of listings' buildings (old: 91%, the

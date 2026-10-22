@@ -130,6 +130,31 @@ on 2026-10-19 all three long jobs died after 30 minutes of another process holdi
 file. Only the 'file in use' error is retried; any other error stops the job. `train`, `rank` and `report` read their data
 into memory in one session (a few minutes), close the file, then fit or score without it.
 
+## Location data: geocoding and school nets (from 2026-10-23)
+
+Two commands, started by hand. They are not scheduled and the watchdog doesn't watch them.
+Run them in this order:
+
+1. `conda run -n hk-estate python -m hkestate.geo`
+   - It looks up each master building's coordinates on the government's Address Lookup
+     Service (www.als.gov.hk).
+   - It runs at the fetcher's polite pace, about 40-50 buildings a minute. The first
+     territory run (40,406 buildings) takes about 15 hours.
+   - It is resumable: if it dies, start it again and it skips buildings already done.
+   - At the end it marks geocodes whose district disagrees with ours (`mismatch`), then sets
+     MTR distances, building ages and missing districts.
+2. `conda run -n hk-estate python -m hkestate.geo --stations-only` reruns only that last
+   part.
+3. `conda run -n hk-estate python -m hkestate.sources.schools` reads the Education Bureau's
+   two school files and gives each geocoded building a primary school net. Add
+   `--assign-only` to reuse the stored schools. Rerun it each August, when the net lists
+   change.
+
+Neither command takes a lock. ALS and the Education Bureau are hosts no other job uses, and
+the database writes are short. Don't start two copies of `hkestate.geo`, though: that
+doubles the request rate on ALS. After both have run, run `train`, `rank` and `report` so the
+model and the findings use the new distances.
+
 ## Centadata sale history (`hkestate cd-history`)
 
 Loads every recorded sale of each flat (back to 1995) from Centadata, for the growth study.

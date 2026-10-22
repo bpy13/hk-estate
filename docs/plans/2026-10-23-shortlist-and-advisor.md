@@ -176,7 +176,7 @@ could later serve others. Going public is on hold (user, 2026-10-23: monetisatio
 
 ## Phase 1 – Usable bargain list (sonnet; Task 1 fable)
 
-- [ ] **Task 1: diagnose the top of the ranking (fable)** `[parallel-ok]`
+- [x] **Task 1: diagnose the top of the ranking (fable)** `[parallel-ok]` *(b39f27f)*
   - Files: create `docs/ranking-diagnosis.md`. Read only `data\model\snapshot\` and
     `data\reports\ranked_listings_20261022.csv`.
   - Done when: the top 200 rows are each put in one cause class, with counts per class:
