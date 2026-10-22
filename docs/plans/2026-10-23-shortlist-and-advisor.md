@@ -1,5 +1,66 @@
 # Plan: a usable bargain list, better location data, and a decision helper (2026-10-23)
 
+## Hand-over for the next session (written 2026-10-23 ~04:30; update when helpers finish)
+
+**Model rule (user, 2026-10-23):** wherever a skill or this plan says Fable, use Opus
+(`model: "opus"`), including the end-of-run pre-release reviewer. Sonnet stays Sonnet.
+Reason: the Fable usage limit.
+
+**The user's go-ahead covers every phase of this plan.** The user paused the run on
+2026-10-23 at ~04:30 to move to a fresh session. Carry on from here without asking again.
+
+**First, check what landed:** run `git log --oneline -15` and `git status -s`, then re-read
+this plan and `docs/open-items.md`.
+
+**Still to do, in order:**
+1. **Task 18b + 19 (advisor fixes; buy vs rent, sell vs let).**
+   - A helper was running at the hand-over.
+   - If its ticks below are missing, start a fresh Opus helper for what's left.
+   - Find what's left from `git log` and `git diff`, and keep any committed work.
+2. **Task 22 ("Market today" page).**
+   - A Sonnet helper was running at the hand-over.
+   - If it's unticked, start a fresh Sonnet helper for what's left.
+   - Then do a real-browser check at 390 px width.
+3. **Task 21 ("Plan a move" page).** Sonnet. Starts after 19 and 22, because they share
+   `app/dashboard.py`.
+4. **Geocoding (Task 6), main session.**
+   - Process 16964 (`python -m hkestate.geo`) was started 01:19 on 10-23.
+   - Log: `data\logs\geo_20261023_011933.log`. Expected end: ~16:30 on 10-23.
+   - Check it with `Get-Content data\logs\geo_20261023_011933.log -Tail 2` and
+     `Get-Process -Id 16964`.
+   - If it died, rerun `python -m hkestate.geo` in its own process. It resumes where it
+     stopped.
+   - When it ends:
+     - (a) Spot-check 30 geocoded buildings: ALS `geo_district` against the estate's
+       district. Every lookup so far says "ok", and ALS always returns its closest guess.
+     - (b) Run `python -m hkestate.geo --stations-only`. This sets MTR distances and runs
+       `fill_districts` (Task 7's live part).
+     - (c) Report coverage against acceptance A2.
+5. **Task 17: load school nets.**
+   - `sources/schools.load(fetcher, db_path)` is not wired into the CLI yet. Add a
+     `python -m hkestate.sources.schools` entry or a CLI subcommand.
+   - Run it after geocoding, in short database sessions.
+6. **Task 11: retrain, rank and report.**
+   - Run `hkestate train` (fresh snapshot), then `rank --from-snapshot`, then
+     `report --settings standard --from-snapshot`.
+   - This applies the `low_psf` rule (Task 8), the 72-month first-hand window (8b) and the
+     geocoded MTR distances.
+7. **Task 5: manual check.**
+   - Open 20 URLs from the new `data\reports\shortlist_<date>.md`.
+   - Check that 御海灣 and Grand Yoho no longer top it.
+8. **Task 23: docs.** README, architecture, CLAUDE.md commands. `docs/sources.md` already has
+   the EDB and HKMA entries.
+9. **End of run:**
+   - The pre-release reviewer (Opus) on this run's commits: `7170056..HEAD`.
+   - Fix plain bugs, then wrap-up and ship.
+
+**Rules that still apply:**
+- Never hold the live database for more than a few seconds.
+- Dashboard checks use port 8531.
+- Don't start or stop the scheduled jobs.
+- Waiting on the user (don't act alone): delete the stored SRPE glued rows (open-items);
+  register the scheduled tasks.
+
 **Goal.** Two things.
 1. **Part A:** fix what limits today's results.
    - The ranked listings start with data errors, not bargains.
@@ -419,7 +480,20 @@ building, so it finds no subsidised estate. Tasks 2-3 below follow
     Green.
   - Notes: the scores are simple and readable (0-100 per goal, a weighted average). Write
     the weighting in decisions.md as Claude's call.
-- [ ] **Task 19: buy vs rent, sell vs let**
+- [x] **Task 18b: advisor fixes** *(done with Task 19: the snapshot now carries
+  `buildings.school_net` (guarded column check) and `stations.parquet`, read by `load_data`
+  with the CSV / Series arguments kept as overrides; the rent-yield part of the investment
+  score counts in full only for building or estate rents, a district estimate is pulled
+  halfway to the district's median yield, an RVD-average estimate scores unknown, and the
+  reason names the basis; two listings of one flat at prices more than 2% apart keep the
+  cheaper (809 merged on the 10-22 snapshot). The investor's top 5 kept the same five
+  listings, ranks 4 and 5 swapped: all five rest on district rents at 6-10% yields, which
+  the pull halves but still scores near 100. Decisions in decisions.md.)*
+- [x] **Task 19: buy vs rent, sell vs let** *(done: `buy_vs_rent`, `sell_vs_let`,
+  `growth_range` (mid from `districts.csv`, low/high from N-year windows of the district's
+  `index.csv`), `fair_value` and `advise_owner`; buy listings carry a `vs_rent` line and
+  `vs_rent_hkd` (recommend takes 14 s instead of 7 s for 12,708 listings). Assumptions and
+  sources in decisions.md "Buy vs rent, sell vs let".)*
   - Files: modify `src/hkestate/advisor.py`. Test `tests/test_advisor.py`.
   - Done when: two functions exist, and a test checks each by hand on one example.
     - `buy_vs_rent(price, rent, years, rate, growth)` gives the total cost of each path.
