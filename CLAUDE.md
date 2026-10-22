@@ -27,7 +27,14 @@ Read these before substantial changes:
   `data/model/snapshot`), `report` (growth study, `data/reports/findings_<date>.md`;
   `--start/--end`; `--settings standard` runs all windows, 5-15 min, up to ~9 GB, saved in
   `data/reports/growth/<date>/<setting>/`). Notebook: `notebooks/explore.ipynb`.
-  Dashboard: `conda run -n hk-estate streamlit run app/dashboard.py` (page "Growth study"). Scheduled jobs and
+  `rank` also writes `data/reports/shortlist_<date>.md` (top 50, no exclusion).
+  Location data, run in this order after geocoding (own processes, not `hkestate` subcommands):
+  `conda run -n hk-estate python -m hkestate.geo` (ALS coordinates, resumable, ~19 h; add
+  `--stations-only` for MTR stations, distances, mismatch marking and district fill), then
+  `conda run -n hk-estate python -m hkestate.sources.schools` (school nets; `--assign-only`),
+  then `train`, `rank`, `report`.
+  Dashboard: `conda run -n hk-estate streamlit run app/dashboard.py` (pages "Ranked listings",
+  "Market today" `?page=market`, "Plan a move" `?page=plan`, "Growth study"). Scheduled jobs and
   locks: `docs/operations.md`. Spot-check:
   `conda run -n hk-estate python scripts/spot_check.py`. Logs in `data/logs/`, reports in
   `data/reports/`.

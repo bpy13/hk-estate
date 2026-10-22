@@ -4,8 +4,10 @@ A personal research tool for Hong Kong private residential flats. It collects tr
 history, current listings and flat attributes from free public sources, stores them in a local
 DuckDB database, and analyses them to:
 
-1. rank current listings by their discount to a modelled fair price, with risk flags, and
-2. measure which flat attributes are linked to better long-run price growth and total return.
+1. rank current listings by their discount to a modelled fair price, with risk flags,
+2. measure which flat attributes are linked to better long-run price growth and total return, and
+3. help one person think through a move (buy, rent, sell or let) with a questionnaire and a
+   "market today" page.
 
 Single user, non-commercial. Scraping is slow and polite (robots.txt obeyed, at most one request
 per second per site, every page cached). No personal data is stored.
@@ -42,6 +44,10 @@ conda run -n hk-estate hkestate rank      # data/reports/ranked_listings_<date>.
 conda run -n hk-estate hkestate report    # growth study, all data: data/reports/findings_<date>.md
 conda run -n hk-estate hkestate report --settings standard   # all settings below (5-15 min, up to ~9 GB)
 conda run -n hk-estate streamlit run app/dashboard.py   # dashboard at http://localhost:8501
+
+conda run -n hk-estate python -m hkestate.geo                 # coordinates for every building (ALS; ~19 h, resumable)
+conda run -n hk-estate python -m hkestate.geo --stations-only # MTR stations, distances, district fill (minutes)
+conda run -n hk-estate python -m hkestate.sources.schools     # primary school nets (EDB files), then assigns buildings
 ```
 
 `datacheck` reads the saved snapshot and does not open the database (`--read-db` takes a fresh
@@ -90,6 +96,58 @@ The dashboard's **Growth study** page (sidebar, or `?page=growth&setting=<name>`
 newest saved results: a setting selector, which attributes hold in which phases, the effect
 per attribute, and the districts with their price index.
 
+## Shortlist, location data and the move-planning pages
+
+**Shortlist.** `rank` also writes `data/reports/shortlist_<date>.md`: the 50 best-discount
+listings that pass every check and have normal (not low) confidence, one block each with estate, flat, asking price, fair-price
+range, discount, the top 3 reasons, flags and the listing URL. Open a few URLs before
+believing any of them. A check never changes a price. A listing that fails one gets an
+`exclude_reason`, goes to the end of the ranked list (the dashboard hides it unless you tick
+the box) and stays in the CSV:
+
+| `exclude_reason` | Meaning |
+|---|---|
+| `subsidised` | the estate is on the subsidised-estate list (`src/hkestate/subsidised_estates.csv`); outside this project's scope |
+| `check_subsidised` | name ends 苑 or 邨 and prices run far below its district: probably subsidised |
+| `check_match` | the listing text names a block the estate does not have: probably the wrong building |
+| `check_area` | area under 150 or over 5,000 sq ft, or far above the building's recorded areas: probably a typo |
+| `check_area_basis` | area 12-45% above the flat's recorded saleable area: probably gross area |
+| `check_combined` | the text says two adjacent flats are sold as one |
+| `check_price` | asking per sq ft under 0.6x or over 2.5x the building's usual level |
+| `check_model` | the model's fair price is over 1.25x what 5+ recent deals show |
+
+`below_all_recent` is only a note: asking per sq ft is under every recent deal in the
+building. The same flat listed twice (any site) is shown once, at the lowest price, with the
+other in `also_listed`.
+
+**Dashboard pages** (sidebar, or `?page=...`). Both are research aids, not investment or
+mortgage advice.
+
+- **Plan a move** (`?page=plan`). Say whether you want to buy, rent, sell or let; what matters
+  (investment, being near some MTR stations, a primary school net, space for the money);
+  your budget, smallest size, rooms, longest trip, and how many years ahead. You get cards for
+  the best estates and then listings, each with a score and a plain reason per goal. For
+  buyers there is a line comparing buying with renting a similar flat over your years. For
+  owners, type your building, size and floor to see sell now against let and sell later.
+  Commute and school choices appear only once station and school data are loaded.
+- **Market today** (`?page=market`). Pick a district and flat size: median price per sq ft,
+  change over 3 and 12 months (official index and our own sales), number of sales, listings
+  for sale and rent, and how far asking prices sit above recent deals. A district table and a
+  36-month trend chart. Rows with few sales are greyed.
+- **Ranked listings** and **Growth study** are as before.
+
+**Order after geocoding.** Coordinates feed MTR distance, school nets and the commute estimate,
+so rerun in this order (each step in its own process, one after another):
+
+1. `python -m hkestate.geo` until every building has been tried (resumable), then
+   `python -m hkestate.geo --stations-only`: loads MTR stations, marks geocodes in the wrong
+   district as `mismatch` (their coordinates are then ignored), sets MTR distances and fills
+   missing districts
+2. `python -m hkestate.sources.schools` (add `--assign-only` to re-assign nets without
+   fetching)
+3. `hkestate train`, then `hkestate rank --from-snapshot`, then
+   `hkestate report --settings standard --from-snapshot`
+
 A stopped backfill carries on where it left off when run again. Logs go to `data/logs/`,
 reports to `data/reports/`.
 
@@ -111,4 +169,5 @@ never committed. To keep it elsewhere, set `HKESTATE_DATA_DIR` to another folder
 - `docs/decisions.md` – what was decided and why
 - `docs/sources.md` – each data source: what it allows, what it holds, keep or drop
 - `docs/known-issues.md` – limits of the data and traps
+- `docs/operations.md` – scheduled jobs and locks
 - `docs/plans/` – build plan

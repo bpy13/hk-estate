@@ -49,8 +49,27 @@ hkestate rank
   └─ snapshot -> features.listing_features -> model (+ TreeSHAP) -> gap.py (district gaps)
        -> data/reports/ranked_listings_<date>.csv, asking_gap_<date>.csv
        -> data/model/ranked_latest.parquet
+  rank.listing_checks -> exclude_reason (excluded rows go last), below_all_recent; same-flat
+       duplicates merged (also_listed); rank.shortlist -> data/reports/shortlist_<date>.md
 streamlit run app/dashboard.py -> dashboard_data.py reads data/model/ (+ run_log read-only)
        and data/reports/growth/<newest date>/ (page "Growth study")
+       pages: Ranked listings, Market today (?page=market), Plan a move (?page=plan), Growth study
+
+python -m hkestate.geo                       (geo.py; resumable; run after the daily jobs are quiet)
+  └─ ALS lookup per building -> master_building lat/lon/geo_district/geo_status
+  └─ --stations-only (also runs at the end of a full run): load_stations -> mark_mismatches
+       (geo_status 'mismatch' when ALS district differs; coordinates then ignored)
+       -> assign_mtr (distance) -> set_building_ages -> fill_districts
+python -m hkestate.sources.schools           (EDB school list + net PDF -> school rows -> master_building.school_net)
+hkestate train snapshot also saves buildings.school_net and stations.parquet, which
+  advisor.load_data reads (never the live database)
+
+Decision helper (no database access; reads data/model/ and data/reports/growth/):
+  advisor.recommend(profile) -> hard limits, goal scores, ranked estates and listings
+       ├─ commute.py (building -> MTR station minutes), rent.py (rent estimate)
+       ├─ mortgage.py (HKMA caps, monthly payment), costs.py (stamp duty, round-trip costs)
+       └─ buy_vs_rent / sell_vs_let / advise_owner over the profile's years
+  market.summary(snapshot) -> district x size-class table and monthly trend
 hkestate datacheck
   └─ snapshot (+ Land Registry yearly counts, cached) -> datacheck.py
        -> data/reports/datacheck_<date>.md (verdict per check; nothing deleted)
@@ -93,8 +112,16 @@ hkestate report                              (growth study, Phase 5)
 | `features.py` | Phase 4 feature table: database extract/snapshot, one row per deal and per listing, model exclusions (parking, first-hand rule, houses, price check), 28Hse agreement dates, RVD deflator |
 | `model.py` | fair-price LightGBM: time split, index-adjusted target, conformal intervals, comparables check, TreeSHAP reasons, `model_eval.md` |
 | `gap.py` | asking-vs-deal pairs and per-district gap (5% `assumed` under 30 pairs) |
-| `rank.py` | values active sale listings, discount, confidence, cross-site dedupe, ranked CSV |
-| `dashboard_data.py` | data and filters for `app/dashboard.py` (Streamlit: ranked list, detail, model page, growth-study page, run banner) |
+| `rank.py` | values active sale listings, discount, confidence, listing checks (`exclude_reason`), same-flat dedupe (`also_listed`), ranked CSV, shortlist file |
+| `subsidised_estates.csv` | tracked list of subsidised estates for the `subsidised` check |
+| `geo.py` | ALS coordinates per building, MTR stations and distance, `mark_mismatches`, `fill_districts`, building age (`python -m hkestate.geo`) |
+| `sources/schools.py` | EDB primary school list and net lists; each building's net = most common among its 3 nearest netted schools (`python -m hkestate.sources.schools`) |
+| `commute.py` | estimated minutes from a building to an MTR station: walk + train over the line graph (no timetable) |
+| `rent.py` | monthly rent estimate: building, estate, district listings, then RVD average rent |
+| `mortgage.py` | HKMA loan-to-value and debt-servicing rules as a dated table; `max_loan`, `monthly_payment`, `affordable` |
+| `market.py` | "market today": per district and size class, price per sq ft, 3 and 12 month change, sales, listings, asking premium |
+| `advisor.py` | decision helper: `Profile`, hard limits, goal scores, `recommend`, `buy_vs_rent`, `sell_vs_let`, `advise_owner` |
+| `dashboard_data.py` | data and filters for `app/dashboard.py` (Streamlit: ranked list, detail, model page, growth-study page, Market today, Plan a move, run banner) |
 | `datacheck.py` | checks on the snapshot: sales per year vs the Land Registry, duplicates, odd values, coverage (`hkestate datacheck`) |
 | `pairs.py` | repeat-sales pairs: real, Ricacorp, % change (check), estimated (Phase 5) |
 | `costs.py` | stamp duty by date (IRD tables, cited), round-trip costs, RVD yields, listing anchor |
@@ -155,6 +182,20 @@ need building-level logic and the master tables, so they live in `features.deal_
 `low_psf` (2026-10-23, `features.low_psf_check`): index-adjusted price per sq ft under 0.15×
 the district's clean median, or under 0.5× the same flat's other clean sales within 5 years
 (part shares the price check missed).
+
+The first-hand window is 24 months after completion, or 72 months for buildings completed in
+2010 or later (decisions.md "Cheap-sale rule").
+
+**Listings** get their own `exclude_reason` in `rank.listing_checks` (decisions.md "Listing
+checks"). One value per row, first that applies: `subsidised`, `check_match`, `check_area`,
+`check_combined`, `check_area_basis`, `check_price`, `check_model`, `check_subsidised`. Rows
+with a value are ranked last and hidden by default on the dashboard; none are deleted.
+`below_all_recent` is a separate information flag.
+
+**Snapshot** (`data/model/snapshot/`, written by `features.snapshot`): `deals`, `buildings`
+(with `school_net` once the school load has run), `estates`, `listings`, `index`, `run_log`,
+and the optional `deal_pairs`, `rvd`, `stations` (MTR stations with coordinates), plus
+`meta.json`. Also in `data/model/`: `ranked_latest.parquet`, the fair-price model files.
 
 The fair-price model adds its own exclusions on top (`features.py` `exclude_reason`,
 decisions.md "Phase 4 build"); the stored views are unchanged. `db.txn_all_sql(latest)`

@@ -542,7 +542,7 @@ building, so it finds no subsidised estate. Tasks 2-3 below follow
   - Done when: a district table and a trend chart show from `market.summary`, checked in a
     browser at 390 px.
   - Notes: shares files with Task 21. Run after it, not in parallel.
-- [ ] **Task 23: docs** `[parallel-ok]`
+- [x] **Task 23: docs** `[parallel-ok]`
   - Files: `README.md`, `docs/architecture.md`, `docs/sources.md` and the repo `CLAUDE.md`
     (commands).
   - Done when: the new commands, modules, sources (ALS, school nets, HKMA) and pages are

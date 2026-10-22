@@ -146,6 +146,9 @@ time), one host at a time. Different hosts can run in parallel. All counts are r
 ### Address Lookup Service (ALS)
 - `https://www.als.gov.hk/lookup?q=<address>&n=1` returns XML with building name,
   district, HK1980 grid and WGS84 coordinates. One request per building.
+- **Pace and host (2026-10-23):** host `www.als.gov.hk`, through the project fetcher (1 s
+  minimum gap plus jitter); the territory run did about 35 buildings a minute (40,406 buildings,
+  roughly 19 hours), resumable.
 - **Estimated pages:** ~25,000 buildings ≈ **10 hours** one-off.
 - **Verdict: keep.**
 
@@ -160,6 +163,8 @@ time), one host at a time. Different hosts can run in parallel. All counts are r
 ### MTR open data (added)
 - `opendata.mtr.com.hk/data/mtr_lines_and_stations.csv`: line, station code, Chinese and
   English names (no coordinates). **Keep.**
+- Commute: estimate, no MTR timetable published. `commute.py` works out train time from
+  station distances and line changes instead (see its docstring).
 
 ### EDB primary school nets (added 2026-10-23)
 - The EDB publishes no net boundary polygons. Its GeoInfo layer is a web map only, and the
