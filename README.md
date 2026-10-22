@@ -10,6 +10,13 @@ DuckDB database, and analyses them to:
 Single user, non-commercial. Scraping is slow and polite (robots.txt obeyed, at most one request
 per second per site, every page cached). No personal data is stored.
 
+**Notice.** This repository holds code only: no scraped data, database or model is included.
+It is a personal research project, not investment advice and not an estate agency service.
+Each data source (Centadata, Centanet, 28Hse, Spacious, Ricacorp, the RVD, SRPE and others)
+has its own terms of use; anyone running this code is responsible for following them. The
+saved pages in `tests/fixtures/` are kept only to test the parsers. Licence: MIT
+(see `LICENSE`).
+
 ## Setup (Windows PowerShell, conda)
 
 ```powershell
