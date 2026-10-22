@@ -317,7 +317,7 @@ building, so it finds no subsidised estate. Tasks 2-3 below follow
 
 ## Phase 4 – Decision helper data (sonnet)
 
-- [ ] **Task 13: primary school nets** `[parallel-ok]`
+- [x] **Task 13: primary school nets** `[parallel-ok]`
   - Files: create `src/hkestate/sources/schools.py` and `tests/test_schools.py`, with a
     fixture.
   - Done when:
