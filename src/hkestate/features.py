@@ -381,6 +381,12 @@ def extract(con) -> dict:
             "SELECT code, name_zh, name_en, lat, lon FROM mtr_station ORDER BY code").df()
         if _has_table(con, "mtr_station") else pd.DataFrame(
             columns=["code", "name_zh", "name_en", "lat", "lon"]),
+        # MTR line order (the commute graph); the table appears when geo loads stations
+        "mtr_lines": con.execute(
+            "SELECT line_code, direction, station_code, sequence FROM mtr_line_station "
+            "ORDER BY line_code, direction, sequence").df()
+        if _has_table(con, "mtr_line_station") else pd.DataFrame(
+            columns=["line_code", "direction", "station_code", "sequence"]),
         "estates": con.execute(
             "SELECT code, parent_code, units, excluded FROM master_estate").df(),
         "listings": con.execute(_LISTINGS_SQL).df(),
@@ -414,7 +420,7 @@ def extract(con) -> dict:
 
 _FRAMES = ["deals", "buildings", "estates", "listings", "index", "run_log"]
 # added later (Phase 5 growth study; the 2026-10-23 decision helper); older snapshots lack them
-_OPTIONAL_FRAMES = ["deal_pairs", "rvd", "stations"]
+_OPTIONAL_FRAMES = ["deal_pairs", "rvd", "stations", "mtr_lines"]
 
 
 def _has_table(con, name: str) -> bool:

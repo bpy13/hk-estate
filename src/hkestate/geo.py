@@ -41,6 +41,14 @@ GEO_DDL = [
         lat     DOUBLE,
         lon     DOUBLE
     )""",
+    # which stations follow each other on each line: the commute graph's input
+    """
+    CREATE TABLE IF NOT EXISTS mtr_line_station (
+        line_code    VARCHAR,
+        direction    VARCHAR,
+        station_code VARCHAR,
+        sequence     DOUBLE
+    )""",
 ]
 
 
@@ -227,6 +235,18 @@ def wikipedia_coords(fetcher, wanted: set[str], log=print) -> dict[str, tuple[fl
     return out
 
 
+def store_lines(con, text: str) -> int:
+    """Replace the `mtr_line_station` rows with those of the open-data CSV text; returns the
+    number of rows kept (rows without a station code are skipped)."""
+    rows = [(r["Line Code"], r["Direction"], r["Station Code"], float(r["Sequence"]))
+            for r in csv.DictReader(io.StringIO(text.lstrip("﻿"))) if r.get("Station Code")]
+    ensure_tables(con)
+    con.execute("DELETE FROM mtr_line_station")
+    if rows:
+        con.executemany("INSERT INTO mtr_line_station VALUES (?, ?, ?, ?)", rows)
+    return len(rows)
+
+
 def load_stations(fetcher, db_path=None, log=print) -> int:
     """MTR station list (open data) with coordinates from ALS where it names the station
     exactly, then from data/manual/mtr_stations.csv. Returns stations still without coordinates."""
@@ -242,6 +262,7 @@ def load_stations(fetcher, db_path=None, log=print) -> int:
             manual = {r["code"]: (float(r["lat"]), float(r["lon"])) for r in csv.DictReader(fh)}
     with db.session(db_path) as con:
         ensure_tables(con)
+        store_lines(con, text)
         have = {r[0] for r in con.execute(
             "SELECT code FROM mtr_station WHERE lat IS NOT NULL").fetchall()}
     wiki = None

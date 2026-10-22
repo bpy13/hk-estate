@@ -251,10 +251,11 @@ def load_data(snapshot_dir: Path | None = None, ranked_path: Path | None = None,
         stations, names = read_stations(Path(stations_csv).read_text("utf-8"))
     else:
         stations, names = station_rows(raw.get("stations", pd.DataFrame()))
-    graph = {}
-    if mtr_csv is not None and Path(mtr_csv).exists():
-        graph = commute.build_graph(Path(mtr_csv).read_text("utf-8"),
-                                    {c: (la, lo) for c, la, lo in stations})
+    coords = {c: (la, lo) for c, la, lo in stations}
+    if mtr_csv is not None and Path(mtr_csv).exists():  # an explicit file wins
+        graph = commute.build_graph(Path(mtr_csv).read_text("utf-8"), coords)
+    else:  # the snapshot's line rows (empty in an older snapshot: no commute)
+        graph = commute.build_graph_from_frame(raw.get("mtr_lines"), coords)
     rent_model = rent.RentModel.from_snapshot(raw) if not raw["rvd"].empty else None
     model_dir = model_dir or features.model_dir()
     fair = model.load(model_dir) if (Path(model_dir) / "fair_price.txt").exists() else None

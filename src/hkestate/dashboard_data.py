@@ -418,8 +418,9 @@ class PlanData:
 
 def plan_data() -> PlanData | None:
     """advisor.load_data on data/model (snapshot, ranked list, fair-price model, growth
-    study CSVs; never the live database), or None when there is no snapshot yet. The MTR lines
-    file (commute graph) is used when it sits in data/model or data/manual."""
+    study CSVs; never the live database), or None when there is no snapshot yet. The commute
+    graph comes from the snapshot's `mtr_lines.parquet`; an MTR lines CSV in data/model or
+    data/manual still wins when present."""
     folder = model.model_dir() / "snapshot"
     if not (folder / "meta.json").exists():
         return None

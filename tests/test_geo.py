@@ -98,6 +98,19 @@ def wiki_page(lat, lon):
             f'<span class="geo">{lat}; {lon}</span>')
 
 
+def test_store_lines_keeps_line_rows_and_replaces_them(con):
+    head = ('"Line Code","Direction","Station Code","Station ID","Chinese Name",'
+            '"English Name","Sequence"\n')
+    text = "﻿" + head + '"TWL","UT","ADM","1","金鐘","Admiralty",1.00\n' \
+        '"TWL","UT","TST","2","尖沙咀","Tsim Sha Tsui",2.00\n' \
+        '"TWL","UT","","3","x","x",3.00\n'
+    assert geo.store_lines(con, text) == 2
+    assert geo.store_lines(con, text) == 2  # a reload replaces, never duplicates
+    rows = con.execute("SELECT line_code, direction, station_code, sequence "
+                       "FROM mtr_line_station ORDER BY sequence").fetchall()
+    assert rows == [("TWL", "UT", "ADM", 1.0), ("TWL", "UT", "TST", 2.0)]
+
+
 def test_wiki_station_links_skip_files_and_use_comparable_names():
     links = geo.wiki_station_links(WIKI_LIST)
     assert sorted(links) == ["admiralty", "hunghom", "tsimshatsui"]

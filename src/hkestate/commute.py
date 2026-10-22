@@ -46,12 +46,27 @@ def build_graph(csv_text: str, coords: dict[str, tuple[float, float]] | None = N
     (lat, lon)}) has both stations, else MIN_PER_STOP. Changing line at a station is handled
     in the search, because it costs minutes rather than stops. Walking links join stations
     the file does not connect (no line-change cost)."""
+    return _graph_from_rows(
+        ((r["Line Code"], r["Direction"], r["Station Code"], float(r["Sequence"]))
+         for r in csv.DictReader(io.StringIO(csv_text.lstrip("﻿")))), coords)
+
+
+def build_graph_from_frame(lines, coords: dict[str, tuple[float, float]] | None = None) -> Graph:
+    """The same graph from the snapshot's `mtr_lines` frame (line_code, direction,
+    station_code, sequence). An empty frame gives an empty graph."""
+    if lines is None or len(lines) == 0:
+        return {}
+    return _graph_from_rows(
+        zip(lines["line_code"], lines["direction"], lines["station_code"],
+            lines["sequence"].astype(float), strict=True), coords)
+
+
+def _graph_from_rows(table_rows, coords) -> Graph:
     rows: dict[tuple[str, str], list[tuple[float, str]]] = defaultdict(list)
-    for r in csv.DictReader(io.StringIO(csv_text.lstrip("﻿"))):
-        line, code = r["Line Code"], r["Station Code"]
+    for line, direction, code, seq in table_rows:
         if line in EXCLUDED_LINES or not code:
             continue
-        rows[(line, r["Direction"])].append((float(r["Sequence"]), code))
+        rows[(line, direction)].append((seq, code))
     coords = coords or {}
     graph: Graph = defaultdict(dict)
     for (line, _direction), stops in rows.items():

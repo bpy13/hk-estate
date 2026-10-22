@@ -23,6 +23,16 @@ CSV = HEADER + (
 G = commute.build_graph(CSV)
 
 
+def test_graph_from_frame_equals_graph_from_csv():
+    import pandas as pd
+    frame = pd.DataFrame(
+        [(r["Line Code"], r["Direction"], r["Station Code"], float(r["Sequence"]))
+         for r in __import__("csv").DictReader(__import__("io").StringIO(CSV))],
+        columns=["line_code", "direction", "station_code", "sequence"])
+    assert commute.build_graph_from_frame(frame) == G
+    assert commute.build_graph_from_frame(pd.DataFrame()) == {}
+
+
 def test_kowloon_tong_to_admiralty_direct():
     # East Rail KOT -> MKK -> HUH -> EXC -> ADM = 4 stops x 2 min, no change
     assert commute.train_minutes(G, "KOT", "ADM") == 8

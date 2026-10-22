@@ -544,3 +544,17 @@ def test_load_data_reads_stations_and_school_nets_from_the_snapshot(tmp_path):
     assert [c for c, _, _ in d2.stations] == ["ADM", "WAC", "TUM"]
     assert d2.buildings.loc["cd-1-BBB", "school_net"] == "95"
     assert pd.isna(d2.buildings.loc["cd-1-AAA", "school_net"])
+
+
+def test_load_data_builds_the_commute_graph_from_the_snapshot_lines(tmp_path):
+    path = make_db(tmp_path / "t.duckdb", n_deals=60)
+    con = db.connect(path)
+    con.execute("INSERT INTO mtr_line_station VALUES ('TWL', 'UT', 'ADM', 1.0), "
+                "('TWL', 'UT', 'TST', 2.0)")
+    raw = features.extract(con)
+    con.close()
+    snap = features.save_snapshot(raw, tmp_path / "snap")
+    d = advisor.load_data(snapshot_dir=snap, ranked_path=tmp_path / "none.parquet",
+                          growth_dir=tmp_path / "no-growth", model_dir=tmp_path / "no-model",
+                          today=TODAY)
+    assert ("ADM", "TWL") in d.graph and ("TST", "TWL") in d.graph

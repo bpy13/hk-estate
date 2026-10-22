@@ -388,3 +388,19 @@ def test_snapshot_carries_school_nets_and_stations(tmp_path):
     # an older snapshot without the file loads an empty frame
     (out / "stations.parquet").unlink()
     assert features.load_snapshot(out)["stations"].empty
+
+
+def test_snapshot_carries_mtr_lines_when_the_table_exists(tmp_path):
+    path = make_db(tmp_path / "t.duckdb", n_deals=120)
+    con = db.connect(path)
+    assert features.extract(con)["mtr_lines"].empty  # table present but not loaded yet
+    con.execute("INSERT INTO mtr_line_station VALUES ('TWL', 'UT', 'ADM', 1.0)")
+    raw = features.extract(con)
+    con.close()
+    assert list(raw["mtr_lines"].columns) == [
+        "line_code", "direction", "station_code", "sequence"]
+    out = features.save_snapshot(raw, tmp_path / "snap")
+    assert (out / "mtr_lines.parquet").exists()
+    assert features.load_snapshot(out)["mtr_lines"].iloc[0]["station_code"] == "ADM"
+    (out / "mtr_lines.parquet").unlink()
+    assert features.load_snapshot(out)["mtr_lines"].empty
