@@ -275,6 +275,14 @@ building, so it finds no subsidised estate. Tasks 2-3 below follow
   - Notes: ALS is a government service, so record its host and pace in `docs/sources.md`.
     Use a new lock `geo`. Never hold the database while waiting on ALS (short sessions per
     batch, as the master pass does).
+- [x] **Task 6b: distrust geocodes in the wrong district** *(added 2026-10-23 04:35 after a
+  spot-check: of 10,013 geocoded buildings with both districts, 96.7% agree. Some of the
+  rest are clearly wrong, e.g. 永華台 D座 matched to a substation in North District.)*
+  - Files: modify `src/hkestate/geo.py`. Test `tests/test_geo.py`.
+  - Done when: tests written first show three things. A building whose ALS district differs
+    from its own district gets no MTR distance and no school net from those coordinates. It
+    is still counted, as `geo_status = 'mismatch'`, set by a function the main session runs
+    after geocoding. Buildings with no district of their own keep their coordinates. Green.
 - [ ] **Task 7: fill missing districts** `[parallel-ok]` *(code and tests done 570bd54,
   `geo.fill_districts`; live run pending: after the geocoding job, run
   `python -m hkestate.geo --stations-only`, which now calls it.)*
