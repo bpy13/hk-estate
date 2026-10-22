@@ -525,7 +525,9 @@ building, so it finds no subsidised estate. Tasks 2-3 below follow
 
 ## Phase 6 – Dashboard pages (sonnet)
 
-- [ ] **Task 21: "Plan a move" page**
+- [x] **Task 21: "Plan a move" page** *(done: `?page=plan`; data in `dashboard_data.plan_*`.
+  Checked with AppTest on the real model files and a headless server on 8531; no real
+  browser check at 390 px yet, no station or school data in the snapshot yet.)*
   - Files: modify `app/dashboard.py` and `src/hkestate/dashboard_data.py`. Test
     `tests/test_dashboard.py`.
   - Done when:

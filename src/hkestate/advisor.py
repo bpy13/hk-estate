@@ -484,8 +484,9 @@ def _yield_part(row, district, data: AdvisorData) -> tuple[float, str]:
     """The rent-yield part of the investment score, by how much the rent estimate can be
     trusted: a building or estate estimate counts in full; a district estimate is pulled
     halfway to the district's median yield (the growth study's `rental_yield`), or counts
-    half when the study has none, and never above that median; an RVD-average estimate (no listings near the flat at all)
-    scores unknown. The reason names the basis: 'rent yield 3.4% (estate rents)'."""
+    half when the study has none, and never above that median; an RVD-average estimate (no
+    listings near the flat at all) scores unknown. The reason names the basis:
+    'rent yield 3.4% (estate rents)'."""
     est, basis = row["rent_est"], row["rent_basis"]
     if not (pd.notna(est) and est > 0 and row["price_hkd"] > 0):
         return 0.0, "rent yield unknown"

@@ -10,13 +10,13 @@ from __future__ import annotations
 
 import json
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import duckdb
 import pandas as pd
 
-from hkestate import db, features, market, model
+from hkestate import advisor, db, features, market, model
 from hkestate.config import get_data_dir
 from hkestate.report import plain_words  # the study's labels and notes still say "pairs"
 from hkestate.study import district_label  # noqa: F401  (one label, shared with the report)
@@ -393,6 +393,271 @@ def market_header(data_to, three_month_ends) -> str:
     weeks = max(1, round((d - pd.Timestamp(three_month_ends)).days / 7))
     return (f"Sales up to {d.day} {d.strftime('%b %Y')}; the last {weeks} weeks are "
             "incomplete (deals reach the register late).")
+
+
+# ---- Plan a move (Task 21) -------------------------------------------------------------------
+
+GOAL_CHOICES = {"Not important": 0, "A little": 1, "Important": 2, "Very important": 3}
+BASIS_WORDS = {"building": "this building's rents", "estate": "this estate's rents",
+               "district": "rents in the district", "rvd": "government average rents",
+               "none": "no rent data"}
+LEFT_OUT_WORDS = {"budget": "over the budget (or failing the mortgage test)",
+                  "size": "too small", "rooms": "too few rooms",
+                  "commute": "too far, or commute unknown",
+                  "school_net": "in another school net, or net unknown"}
+NO_STATIONS_NOTE = "No commute times yet: commute times appear once station data is loaded."
+
+
+@dataclass
+class PlanData:
+    """What the 'Plan a move' page needs: the advisor's data plus the lists for its pickers."""
+    advisor: advisor.AdvisorData
+    stations: dict  # MTR station code -> "Admiralty 金鐘"
+    nets: list      # primary school nets present in the data, '1'...'100'
+
+
+def plan_data() -> PlanData | None:
+    """advisor.load_data on data/model (snapshot, ranked list, fair-price model, growth
+    study CSVs; never the live database), or None when there is no snapshot yet. The MTR lines
+    file (commute graph) is used when it sits in data/model or data/manual."""
+    folder = model.model_dir() / "snapshot"
+    if not (folder / "meta.json").exists():
+        return None
+    mtr = next((p for p in (model.model_dir() / "mtr_lines_and_stations.csv",
+                            get_data_dir() / "manual" / "mtr_lines_and_stations.csv")
+                if p.exists()), None)
+    data = advisor.load_data(mtr_csv=mtr)
+    st_path = folder / "stations.parquet"
+    labels = {}
+    if st_path.exists():
+        for r in pd.read_parquet(st_path).to_dict("records"):
+            en, zh = r.get("name_en"), r.get("name_zh")
+            labels[r["code"]] = " ".join(x for x in (en, zh) if isinstance(x, str) and x)
+    labels = {c: labels[c] for c, _, _ in data.stations if c in labels}  # coordinates known
+    nets = data.buildings["school_net"].dropna().astype(str).unique().tolist()
+    nets.sort(key=lambda n: (not n.isdigit(), int(n) if n.isdigit() else 0, n))
+    return PlanData(data, dict(sorted(labels.items(), key=lambda kv: kv[1])), nets)
+
+
+def plan_stamp() -> tuple[float, float]:
+    """Cache key for plan_data: modified times of the snapshot and of the ranked list."""
+    ranked_path = model.model_dir() / "ranked_latest.parquet"
+    return snapshot_stamp(), ranked_path.stat().st_mtime if ranked_path.exists() else 0.0
+
+
+def plan_profile(a: dict, data: advisor.AdvisorData) -> advisor.Profile:
+    """The questionnaire's answers as an advisor.Profile. `goals` maps goal -> 0..3
+    (GOAL_CHOICES). A goal that cannot be scored is dropped, not scored as 0: near a place
+    needs a station, school needs a net. A commute limit is kept only when the data can
+    measure commutes (otherwise every flat would be counted out as unknown)."""
+    goals = a.get("goals") or {}
+    known = {c for c, _, _ in data.stations}
+    stations = tuple(s for s in (a.get("stations") or ()) if s in known or not known)
+    net = str(a["school_net"]) if a.get("school_net") else None
+    usable = {"investment": True, "near_place": bool(stations), "school": net is not None,
+              "space": True}
+    weights = {g: float(goals.get(g, 0)) if usable[g] else 0.0 for g in advisor.GOALS}
+    if not any(weights.values()):
+        weights = {g: 1.0 for g in advisor.GOALS if usable[g]}
+    can_commute = bool(data.stations and data.graph)
+    return advisor.Profile(
+        intent=a.get("intent", "buy"), weights=weights,
+        budget_hkd=float(a["budget"]) if a.get("budget") else None,
+        min_sqft=float(a["min_sqft"]) if a.get("min_sqft") else None,
+        min_rooms=int(a["min_rooms"]) if a.get("min_rooms") else None,
+        stations=stations,
+        max_commute_min=float(a["max_commute"]) if a.get("max_commute") and can_commute
+        else None,
+        school_net=net, years=int(a.get("years") or 10), buyer=a.get("buyer", "first"),
+        income_hkd=float(a["income"]) if a.get("income") else None,
+        rate=float(a["rate"]) if a.get("rate") else 0.035)
+
+
+def find_buildings(data: advisor.AdvisorData, text: str, limit: int = 15) -> pd.DataFrame:
+    """Buildings whose estate name, building name or id contains `text` (case-insensitive):
+    building_id, label ('Estate, Building (district)')."""
+    out = pd.DataFrame(columns=["building_id", "label"])
+    t = (text or "").strip().lower()
+    if not t:
+        return out
+    b = data.buildings
+    est = b["estate_name"].fillna("").astype(str)
+    bld = b["building_name"].fillna("").astype(str)
+    hay = (est + " " + bld + " " + b.index.to_series().astype(str)).str.lower()
+    hits = b[hay.str.contains(t, regex=False).to_numpy()]
+    hits = hits.assign(_e=est[hits.index], _b=bld[hits.index]).sort_values(["_e", "_b"])
+    hits = hits.head(limit)
+    label = [(e if e == bl or not bl else f"{e}, {bl}") + f" ({district_label(d)})"
+             if isinstance(d, str) else (e if e == bl or not bl else f"{e}, {bl}")
+             for e, bl, d in zip(hits["_e"], hits["_b"], hits["district"], strict=True)]
+    return pd.DataFrame({"building_id": hits.index, "label": label}).reset_index(drop=True)
+
+
+@dataclass
+class Card:
+    """One result on the page. `goals`: one dict per goal the person weighted (label, score
+    0-100 or None when unknown, reason). `money`: the three growth cases in plain words."""
+    kind: str                 # "estate", "listing" or "owner"
+    title: str
+    subtitle: str = ""
+    score: float | None = None
+    goals: list = field(default_factory=list)
+    facts: list = field(default_factory=list)
+    money: list = field(default_factory=list)
+    link: str | None = None
+
+
+@dataclass
+class PlanCards:
+    estates: list
+    listings: list
+    owner: Card | None
+    notes: list
+    left_out: dict
+
+
+def _num(x) -> float | None:
+    return None if x is None or pd.isna(x) else float(x)
+
+
+def _hk(x: float, digits: int = 1) -> str:
+    x = abs(x)
+    return f"HK${x / 1e6:,.{digits}f}m" if x >= 1e6 else f"HK${x:,.0f}"
+
+
+def _name(estate, building) -> str:
+    estate = estate if isinstance(estate, str) else ""
+    building = building if isinstance(building, str) else ""
+    return estate if not building or building == estate else f"{estate} {building}".strip()
+
+
+def _case_lines(cases: dict, years: int, what: str, versus: str) -> list[str]:
+    """Low / middle / high growth in plain words, e.g. 'Middle growth: over 10 years, buying
+    comes out about HK$1.6m ahead of renting if prices grow 3.0% a year.'"""
+    lines = []
+    for key, label in (("low", "Low"), ("mid", "Middle"), ("high", "High")):
+        c = cases[key]
+        side = "ahead of" if c["difference"] >= 0 else "behind"
+        lines.append(f"{label} growth: over {years} years, {what} comes out about "
+                     f"{_hk(c['difference'])} {side} {versus} if prices grow "
+                     f"{c['growth'] * 100:.1f}% a year.")
+    return lines
+
+
+def _goal_lines(row, estate_scores, used: list[str]) -> list[dict]:
+    return [{"label": advisor.GOAL_LABELS[g], "score": _num(estate_scores[f"score_{g}"]),
+             "reason": str(row[f"why_{g}"])} for g in used]
+
+
+def _listing_card(row, profile: advisor.Profile, data: advisor.AdvisorData,
+                  used: list[str], ranges: dict) -> Card:
+    buy = profile.intent == "buy"
+    area, rooms, age = _num(row["area_sqft"]), _num(row["rooms"]), _num(row["age_years"])
+    size = [f"{area:,.0f} sq ft" if area else "size unknown"]
+    if rooms is not None:
+        size.append(f"{int(rooms)} rooms")
+    if age is not None:
+        size.append(f"{age:.0f} years old")
+    facts = [", ".join(size)]
+    if isinstance(row["floor"], str) and row["floor"] not in ("", "not given", "unknown"):
+        facts.append(f"Floor {row['floor']}" + (f", flat {row['flat']}"
+                                                if isinstance(row["flat"], str) else ""))
+    facts.append(f"Asking {_hk(row['price_hkd'], 2)}" + ("" if buy else " a month"))
+    disc = _num(row["discount_pct"])
+    if buy and disc is not None and row["confidence"] == "normal":
+        facts.append(f"{abs(disc) * 100:.0f}% {'below' if disc >= 0 else 'above'} our "
+                     f"fair-price estimate ({_hk(row['fair_hkd'], 2)})")
+    est = _num(row["rent_est"])
+    money: list[str] = []
+    if buy:
+        if est and est > 0:
+            facts.append(f"Renting a similar flat: about HK${est:,.0f} a month "
+                         f"({BASIS_WORDS.get(row['rent_basis'], row['rent_basis'])})")
+            d = row["district"] if isinstance(row["district"], str) else None
+            if d not in ranges:
+                ranges[d] = advisor.growth_range(d, profile.years, data)
+            r = advisor.buy_vs_rent(float(row["price_hkd"]), est, profile.years, profile.rate,
+                                    ranges[d], buyer=profile.buyer,
+                                    mortgage_years=profile.mortgage_years, on=data.today)
+            money = _case_lines(r["cases"], profile.years, "buying", "renting")
+        else:
+            facts.append("Renting a similar flat: no rent estimate, so no buy-or-rent figures")
+    district = row["district"]
+    return Card("listing", _name(row["estate_name"], row["building_name"]),
+                district_label(district) if isinstance(district, str) else "",
+                _num(row["overall"]), _goal_lines(row, row, used), facts, money,
+                row["url"] if isinstance(row["url"], str) else None)
+
+
+def _owner_card(profile: advisor.Profile, data: advisor.AdvisorData, owner: dict,
+                notes: list) -> Card:
+    bid = owner["building_id"]
+    area = float(owner["area_sqft"])
+    r = advisor.advise_owner(bid, area, data, profile, floor_text=owner.get("floor_text") or None,
+                             rooms=owner.get("rooms") or None,
+                             value_hkd=owner.get("value_hkd") or None,
+                             rent_hkd=owner.get("rent_hkd") or None)
+    b = data.buildings.loc[bid] if bid in data.buildings.index else None
+    title = _name(b["estate_name"], b["building_name"]) if b is not None else str(bid)
+    d = r["district"] if isinstance(r["district"], str) else None
+    facts = [f"{area:,.0f} sq ft" + (f", floor {owner['floor_text']}"
+                                      if owner.get("floor_text") else "")]
+    if _num(r["value_hkd"]):
+        how = "your figure" if r["value_basis"] == "given" else r["value_basis"]
+        facts.append(f"Worth about {_hk(r['value_hkd'], 2)} ({how})")
+    if _num(r["rent_hkd"]):
+        how = "your figure" if r["rent_basis"] == "given" else BASIS_WORDS.get(
+            r["rent_basis"], r["rent_basis"])
+        facts.append(f"Could let for about HK${r['rent_hkd']:,.0f} a month ({how})")
+    money: list[str] = []
+    s = r["sell_vs_let"]
+    if s:
+        facts.append(f"Selling now: about {_hk(s['sell_now'], 2)} after the agent's fee")
+        money = _case_lines(s["cases"], r["years"], "letting", "selling now")
+        facts.append(f"Growth used: {r['growth_basis']}")
+    notes += [f"Cannot compare selling and letting: {n}" for n in r["notes"]]
+    return Card("owner", title, district_label(d) if d else "", None, [], facts, money)
+
+
+def plan_cards(profile: advisor.Profile, data: advisor.AdvisorData, owner: dict | None = None,
+               top_estates: int = 5, per_estate: int = 3) -> PlanCards:
+    """The page's answer: estate cards first, then listing cards (the best `per_estate` of each
+    of the top `top_estates` estates), or for an owner (sell / let) one card with the sell-vs-let
+    figures. Each card says why in one line per goal the person weighted."""
+    notes: list[str] = []
+    if profile.stations and not (data.stations and data.graph):
+        notes.append(NO_STATIONS_NOTE)
+    if profile.intent in ("sell", "let"):
+        card = _owner_card(profile, data, owner, notes) if owner else None
+        return PlanCards([], [], card, notes, {})
+    res = advisor.recommend(profile, data)
+    for n in res.notes:
+        if n.startswith("no school net data"):
+            notes.append("School net data is not loaded yet, so every flat's net is unknown.")
+        elif n.startswith("no listing passes"):
+            left = ", ".join(f"{v:,} {LEFT_OUT_WORDS.get(k, k)}"
+                             for k, v in res.left_out.items() if v)
+            notes.append("Nothing matches all your limits" + (f". Left out: {left}." if left
+                                                            else "."))
+        elif n.startswith("no ranked") or n.startswith("no active"):
+            notes.append("No listings are loaded yet for this choice.")
+    if res.estates.empty and not notes:
+        notes.append("No listings to show for these answers.")
+    used = [g for g in advisor.GOALS if res.weights[g] > 0]
+    estates, listings, ranges = [], [], {}
+    top = res.estates.head(top_estates)
+    for _, e in top.iterrows():
+        mine = res.listings[res.listings["estate_key"] == e["estate_key"]]
+        best = mine.iloc[0]
+        facts = [f"{int(e['listings'])} {'flats' if profile.intent == 'buy' else 'rentals'} "
+                 f"listed, from {_hk(e['lowest_price_hkd'], 2)}"
+                 + ("" if profile.intent == "buy" else " a month")]
+        estates.append(Card("estate", str(e["estate_name"]), district_label(e["district"])
+                            if isinstance(e["district"], str) else "", _num(e["overall"]),
+                            _goal_lines(best, e, used), facts))
+        listings += [_listing_card(r, profile, data, used, ranges)
+                     for _, r in mine.head(per_estate).iterrows()]
+    return PlanCards(estates, listings, None, notes, res.left_out)
 
 
 @dataclass

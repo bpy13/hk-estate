@@ -13,8 +13,8 @@ import pytest
 from phase4_data import add_listing, make_db
 from streamlit.testing.v1 import AppTest
 
+from hkestate import commute, db, features, model, rank
 from hkestate import dashboard_data as dd
-from hkestate import db, features, model, rank
 
 APP = str(Path(__file__).resolve().parents[1] / "app" / "dashboard.py")
 TODAY = date(2026, 10, 17)
@@ -310,3 +310,133 @@ def test_market_page_renders_tiles_pickers_table_and_charts(data_dir, monkeypatc
     assert len(at.metric) == 4 and len(at.dataframe) == 1
     at.selectbox[1].select("B").run()
     assert not at.exception
+
+
+# ---- Plan a move (Task 21) -------------------------------------------------------------------
+
+
+@pytest.fixture
+def plan():
+    """The advisor's small fixture (tests/test_advisor.py) as the page's data."""
+    import test_advisor as ta
+
+    from hkestate import advisor
+    stations, names = advisor.read_stations(ta.STATIONS_CSV)
+    graph = commute.build_graph(ta.LINES_CSV, {c: (la, lo) for c, la, lo in stations})
+    districts, effects = advisor.growth_tables(ta.FIX / "growth", "all")
+    return advisor.AdvisorData(
+        sale=ta.SALE, rent_listings=ta._rent_listings(), buildings=ta.BUILDINGS,
+        district_growth=districts, effects=effects, stations=stations, station_names=names,
+        graph=graph, rent_model=ta._rent_model(), today=ta.TODAY, growth_setting="all",
+        district_index=advisor.growth_index(ta.FIX / "growth", "all"))
+
+
+def test_plan_profile_turns_answers_into_a_profile(plan):
+    p = dd.plan_profile({"intent": "buy", "goals": {"investment": 3, "near_place": 2,
+                                                    "school": 2, "space": 0},
+                         "budget": 9_000_000, "stations": ["ADM"], "max_commute": 40,
+                         "school_net": None, "min_rooms": 0, "min_sqft": 0}, plan)
+    assert p.weights["investment"] == 3 and p.weights["near_place"] == 2
+    assert p.weights["school"] == 0  # no net chosen: the goal is dropped, not scored 0
+    assert p.min_rooms is None and p.min_sqft is None and p.max_commute_min == 40
+    # no place chosen: the near-a-place goal is dropped too
+    p2 = dd.plan_profile({"goals": {"near_place": 3, "space": 1}}, plan)
+    assert p2.weights["near_place"] == 0 and p2.weights["space"] == 1
+
+
+def test_plan_cards_for_an_investor(plan):
+    p = dd.plan_profile({"intent": "buy", "goals": {"investment": 3}, "budget": 10_000_000}, plan)
+    out = dd.plan_cards(p, plan)
+    assert [c.title for c in out.estates] == ["Harbour Court", "Sunny Garden", "Mid Tower"]
+    first = out.estates[0]
+    assert [g["label"] for g in first.goals] == ["Investment"]
+    assert "district grew 5.0%/yr" in first.goals[0]["reason"]
+    assert 0 < first.score <= 100
+    l1 = out.listings[0]
+    assert l1.link == "https://example.test/L1" and l1.title.startswith("Harbour Court")
+    # three cases in plain words, from the buy-vs-rent figures
+    assert len(l1.money) == 3
+    assert l1.money[0].startswith("Low growth: over 10 years, buying comes out about HK$")
+    assert all(" if prices grow " in m and m.endswith(" a year.") for m in l1.money)
+    assert "ahead" in l1.money[1] or "behind" in l1.money[1]
+    assert any("rent" in line.lower() for line in l1.facts)
+    assert out.notes == [] or all("station" not in n for n in out.notes)
+
+
+def test_plan_cards_for_a_family(plan):
+    p = dd.plan_profile({"intent": "buy", "goals": {"near_place": 3, "school": 2, "space": 3},
+                         "budget": 10_000_000, "min_sqft": 600, "min_rooms": 3,
+                         "stations": ["ADM"]}, plan)
+    out = dd.plan_cards(p, plan)
+    assert [c.title for c in out.estates] == ["Sunny Garden", "Mid Tower"]
+    labels = [g["label"] for g in out.listings[0].goals]
+    assert labels == ["Near a place", "Space"]  # no net chosen, so no school line
+    near = out.listings[0].goals[0]["reason"]
+    assert "min to Admiralty" in near
+    assert out.listings[0].goals[0]["score"] is not None
+    # Mid Tower has no coordinates: shown as unknown, never as good
+    mid = [c for c in out.listings if c.title.startswith("Mid Tower")][0]
+    assert mid.goals[0]["score"] is None and "unknown" in mid.goals[0]["reason"]
+
+
+def test_plan_cards_without_station_data_say_so_and_do_not_fail(plan):
+    from dataclasses import replace
+    bare = replace(plan, stations=[], graph={})
+    p = dd.plan_profile({"goals": {"near_place": 3, "space": 1}, "stations": ["ADM"],
+                         "max_commute": 30, "min_sqft": 500}, bare)
+    assert p.max_commute_min is None  # a limit on an unknowable value would drop every flat
+    out = dd.plan_cards(p, bare)
+    assert out.estates  # still answers
+    assert any("commute times appear once station data is loaded" in n for n in out.notes)
+
+
+def test_plan_cards_for_an_owner_selling_or_letting(plan):
+    owner = {"building_id": "b-harbour", "area_sqft": 450, "floor_text": "18樓",
+             "value_hkd": 9_000_000}
+    for intent in ("sell", "let"):
+        p = dd.plan_profile({"intent": intent, "years": 10}, plan)
+        out = dd.plan_cards(p, plan, owner=owner)
+        assert out.estates == [] and out.listings == []
+        card = out.owner
+        assert card.title.startswith("Harbour Court")
+        assert any("HK$9.00m" in f for f in card.facts)  # the value given
+        assert len(card.money) == 3
+        assert card.money[0].startswith("Low growth: over 10 years, letting comes out about "
+                                        "HK$")
+        assert "selling now if prices grow" in card.money[1]
+    # no fair-price model and no value given: say why, no figures
+    out = dd.plan_cards(dd.plan_profile({"intent": "sell"}, plan), plan,
+                        owner={"building_id": "b-harbour", "area_sqft": 450,
+                               "floor_text": "中層"})
+    assert out.owner.money == [] and any("no fair-price model" in n for n in out.notes)
+
+
+def test_find_buildings_searches_estate_and_building_names(plan):
+    r = dd.find_buildings(plan, "sunny")
+    assert list(r["building_id"]) == ["b-sunny"]
+    assert dd.find_buildings(plan, "zzz").empty and dd.find_buildings(plan, " ").empty
+    assert set(dd.find_buildings(plan, "tower")["building_id"]) == {"b-harbour", "b-mid"}
+
+def test_plan_page_opens_answers_and_shows_the_assumptions(data_dir, monkeypatch):
+    at = _app(data_dir, monkeypatch, page="plan")
+    assert not at.exception
+    assert at.title[0].value == "Plan a move"
+    assert "not financial or legal advice" in at.caption[0].value
+    assert [e.label for e in at.expander] == ["What the figures assume"]
+    # the test database has no station or school data: the page says so and still works
+    assert any("appear once station data is loaded" in c.value for c in at.caption)
+    at.number_input[0].set_value(100.0)  # HK$100m: no price limit in effect
+    at.button[0].click().run()
+    assert not at.exception
+    text = " ".join(m.value for m in at.markdown)
+    # the test database may hold no valued listing: then the page says so instead of failing
+    assert "Overall score" in text or any("No listings" in i.value for i in at.info), \
+        [i.value for i in at.info]
+
+
+def test_plan_page_sell_asks_for_the_building_first(data_dir, monkeypatch):
+    at = _app(data_dir, monkeypatch, page="plan")
+    at.radio[0].set_value("sell").run()
+    assert not at.exception and any(t.label.startswith("Your estate") for t in at.text_input)
+    at.button[0].click().run()
+    assert any("Search for your building" in w.value for w in at.warning)

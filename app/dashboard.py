@@ -4,7 +4,7 @@
 
 Reads what `hkestate train` and `hkestate rank` write to data/model/ (no long database
 access; the run-status banner reads `run_log` read-only). Pages can be opened directly:
-?page=market, ?page=ranked, ?page=detail&listing=<source>:<id>, ?page=model,
+?page=plan, ?page=market, ?page=ranked, ?page=detail&listing=<source>:<id>, ?page=model,
 ?page=growth&setting=<name>
 (the growth page reads the CSVs under data/reports/growth/, nothing from the database).
 """
@@ -17,8 +17,8 @@ import altair as alt
 import pandas as pd
 import streamlit as st
 
+from hkestate import advisor, model
 from hkestate import dashboard_data as dd
-from hkestate import model
 from hkestate.report import CAVEAT as MODEL_VALUED_CAVEAT
 
 st.set_page_config(page_title="HK Estate", layout="wide")
@@ -26,8 +26,8 @@ st.set_page_config(page_title="HK Estate", layout="wide")
 # Reference palette (dataviz skill): blue raises the value, red lowers it; text labels carry
 # the sign too, so colour is never the only cue.
 RAISES, LOWERS, SERIES = "#2a78d6", "#e34948", "#2a78d6"
-PAGES = {"market": "Market today", "ranked": "Ranked listings", "detail": "Listing detail",
-         "model": "Model", "growth": "Growth study"}
+PAGES = {"plan": "Plan a move", "market": "Market today", "ranked": "Ranked listings",
+         "detail": "Listing detail", "model": "Model", "growth": "Growth study"}
 
 
 @st.cache_data(ttl=300)
@@ -501,9 +501,167 @@ def page_market() -> None:
                "to sort.")
 
 
+@st.cache_resource(show_spinner="Loading the market data (first time only)...")
+def load_plan(stamp: tuple):
+    """advisor data, built once per snapshot / ranked list (the argument is the cache key)."""
+    return dd.plan_data()
+
+
+INTENT_LABELS = {"buy": "Buy a home", "rent": "Rent a home", "sell": "Sell my flat",
+                 "let": "Let out my flat"}
+GOAL_QUESTIONS = {"investment": "Good investment: value and growth",
+                  "near_place": "Near the places I go (MTR)",
+                  "school": "A particular primary school net",
+                  "space": "Space: bigger and newer"}
+
+
+def render_card(c: dd.Card) -> None:
+    """One result as a bordered card, single column so it reads on a phone."""
+    with st.container(border=True):
+        st.markdown(f"#### {c.title}")
+        if c.subtitle:
+            st.caption(c.subtitle)
+        if c.score is not None:
+            st.markdown(f"**Overall score {c.score:.0f} out of 100**")
+            st.progress(min(max(c.score / 100, 0.0), 1.0))
+        for g in c.goals:
+            score = "unknown" if g["score"] is None else f"{g['score']:.0f}/100"
+            st.markdown(f"**{g['label']}: {score}.** {g['reason']}")
+        for f in c.facts:
+            st.markdown(f"- {f}")
+        if c.money:
+            st.markdown("**" + ("Buy or rent?" if c.kind == "listing" else "Sell or let?")
+                        + "**")
+            for m in c.money:
+                st.markdown(f"- {m}")
+        if c.link:
+            st.link_button("Open the listing", c.link)
+
+
+def plan_answers(pd_: dd.PlanData, intent: str) -> tuple[dict, dict | None, bool]:
+    """The questionnaire. Returns the answers, the owner's flat (sell / let) and whether the
+    person pressed the button. The search for the owner's building sits outside the form so
+    its matches can appear before the form is sent."""
+    owner_pick = None
+    if intent in ("sell", "let"):
+        q = st.text_input("Your estate or building (English or Chinese name)",
+                          placeholder="e.g. Mei Foo or 美孚")
+        found = dd.find_buildings(pd_.advisor, q)
+        if q.strip() and found.empty:
+            st.caption("No building found with that name.")
+        if not found.empty:
+            owner_pick = st.selectbox("Pick your building", list(found["building_id"]),
+                                      format_func=dict(zip(found["building_id"],
+                                                           found["label"], strict=True)).get)
+    a: dict = {"intent": intent}
+    owner = None
+    with st.form("plan"):
+        if intent in ("buy", "rent"):
+            st.markdown("**What matters to you?**")
+            a["goals"] = {}
+            defaults = {"investment": "Important", "near_place": "A little", "school": "A little",
+                        "space": "Important"}
+            for goal, text in GOAL_QUESTIONS.items():
+                pick = st.select_slider(text, list(dd.GOAL_CHOICES), value=defaults[goal],
+                                        key=f"goal_{goal}")
+                a["goals"][goal] = dd.GOAL_CHOICES[pick]
+            if intent == "buy":
+                m = st.number_input("Most you would pay (HK$ million)", 0.0, 500.0, 8.0, 0.5)
+                a["budget"] = m * 1e6
+            else:
+                a["budget"] = st.number_input("Highest rent (HK$ a month)", 0, 500_000, 25_000,
+                                              1_000)
+            a["min_sqft"] = st.number_input("Smallest size (sq ft, 0 = any)", 0, 5_000, 0, 50)
+            a["min_rooms"] = st.selectbox("Fewest rooms", [0, 1, 2, 3, 4],
+                                          format_func=lambda n: "Any" if n == 0 else str(n))
+            if pd_.stations:
+                a["stations"] = st.multiselect("Places to be near (MTR stations)",
+                                               list(pd_.stations), format_func=pd_.stations.get)
+                a["max_commute"] = st.number_input("Longest trip to them (minutes, 0 = no limit)",
+                                                   0, 180, 0, 5)
+            else:
+                st.caption("MTR stations and commute times appear once station data is loaded.")
+            if pd_.nets:
+                net = st.selectbox("Primary school net (optional)", ["Any"] + pd_.nets)
+                a["school_net"] = None if net == "Any" else net
+            else:
+                st.caption("School nets appear once school data is loaded.")
+            if intent == "buy":
+                buyer = st.radio("You are", ["First home", "I already own a flat"])
+                a["buyer"] = "first" if buyer == "First home" else "additional"
+                a["income"] = st.number_input("Monthly income (HK$, optional, 0 = skip)", 0,
+                                              5_000_000, 0, 5_000,
+                                              help="With an income, flats you could not get a "
+                                                   "mortgage for are left out.")
+                a["rate"] = st.number_input("Mortgage rate (% a year, optional)", 0.5, 10.0, 3.5,
+                                            0.1) / 100
+        else:
+            st.markdown("**Your flat**")
+            area = st.number_input("Saleable area (sq ft)", 0, 10_000, 500, 10)
+            floor = st.text_input("Floor", placeholder="e.g. 18樓 or 中層 or 18/F")
+            value = st.number_input("What you think it is worth (HK$ million, optional, 0 = let "
+                                    "us estimate)", 0.0, 500.0, 0.0, 0.5)
+            rent_in = st.number_input("Rent you could get (HK$ a month, optional, 0 = let us "
+                                      "estimate)", 0, 500_000, 0, 1_000)
+            owner = {"building_id": owner_pick, "area_sqft": float(area),
+                     "floor_text": floor.strip(), "value_hkd": value * 1e6 or None,
+                     "rent_hkd": rent_in or None}
+            a["buyer"] = "first"
+        a["years"] = st.slider("Years ahead", 3, 30, 10)
+        go = st.form_submit_button("Show me", type="primary", width="stretch")
+    return a, owner, go
+
+
+def page_plan() -> None:
+    st.title("Plan a move")
+    st.caption("Answer a few questions; we rank estates and listings for you and compare buying "
+               "with renting (or selling with letting). Estimates for research, not "
+               "financial or legal advice.")
+    pd_ = load_plan(dd.plan_stamp())
+    if pd_ is None:
+        st.info("No market data yet: run `hkestate train` to save a snapshot.")
+        return
+    intent = st.radio("What do you want to do?", list(INTENT_LABELS),
+                      format_func=INTENT_LABELS.get)
+    answers, owner, go = plan_answers(pd_, intent)
+    if intent in ("sell", "let") and go and not (owner and owner["building_id"]
+                                                  and owner["area_sqft"] > 0):
+        st.warning("Search for your building and enter the area first.")
+        go = False
+    if go:
+        profile = dd.plan_profile(answers, pd_.advisor)
+        with st.spinner("Working it out..."):
+            out = dd.plan_cards(profile, pd_.advisor, owner)
+        for n in out.notes:
+            st.info(n)
+        if out.owner:
+            st.subheader("Your flat")
+            render_card(out.owner)
+        if out.estates:
+            st.subheader("Estates that suit you")
+            for c in out.estates:
+                render_card(c)
+            st.subheader("Listings in those estates")
+            for c in out.listings:
+                render_card(c)
+        if out.owner or out.estates:
+            st.caption("These are estimates for research, not financial advice. Prices change "
+                       "and listings may be gone.")
+    with st.expander("What the figures assume"):
+        for k, v in advisor.assumptions().items():
+            st.markdown(f"- **{k}**: {v}")
+        st.markdown("- **growth**: low and high cases are the district's 25th and 75th "
+                    "percentile outcomes over the same number of years; the middle case is "
+                    "its long-run median")
+    st.caption("Estimates for research, not financial advice.")
+
+
 def main() -> None:
     page = nav()
     banner()
+    if page == "plan":
+        page_plan()
+        return
     if page == "market":
         page_market()
         return
