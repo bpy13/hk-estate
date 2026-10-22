@@ -67,7 +67,8 @@ cache pruning.)*
   could be tuned against Centadata's own label (agrees on 217,503 of 222,951 labelled
   first-hand sales). `test_connect_gives_up_after_the_wait_limit` failed once under heavy CPU
   load and passed on rerun (timing-sensitive test).
-- **`QUARANTINE_SQL` matches nothing now.** The 14,562 wrong LOHAS Park rows were deleted
+- [x] *(Removed 2026-10-23, Task 10, 2fbbb24, with the `excl_quarantine` flag.)*
+  **`QUARANTINE_SQL` matches nothing now.** The 14,562 wrong LOHAS Park rows were deleted
   on 2026-10-18, so the guard in `db.py` is a no-op (data check 2026-10-21). Harmless; remove
   it when convenient.
 - **Two SRPE rows carry dates from the developer's register that look wrong:** one sale

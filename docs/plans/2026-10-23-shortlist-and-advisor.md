@@ -279,7 +279,7 @@ building, so it finds no subsidised estate. Tasks 2-3 below follow
   - Files: modify `src/hkestate/sources/srpe.py`. Test `tests/test_srpe.py`.
   - Done when: a test built from row `3085:3 3:2 5:A A:2016-12-03` (HK$728,100,014,452,000)
     gives one row per flat with one price each. Existing SRPE tests pass. Green.
-- [ ] **Task 10: remove `QUARANTINE_SQL`** `[parallel-ok]`
+- [x] **Task 10: remove `QUARANTINE_SQL`** `[parallel-ok]`
   - Files: modify `src/hkestate/db.py`, `src/hkestate/features.py`, `src/hkestate/study.py`
     and their tests, plus `docs/architecture.md`.
   - Done when: `rg QUARANTINE_SQL src tests` finds nothing. The `excl_quarantine` flag and its
@@ -387,7 +387,14 @@ building, so it finds no subsidised estate. Tasks 2-3 below follow
 
 ## Phase 5 – Decision helper calculations (fable)
 
-- [ ] **Task 18: user profile and scoring**
+- [x] **Task 18: user profile and scoring** *(done: `advisor.Profile`, `AdvisorData`,
+  `load_data`, `recommend`; scoring in decisions.md "Decision helper scoring". The snapshot
+  carries neither `school_net` nor the `mtr_station` table, so `load_data` takes a stations
+  CSV (code, name_en, lat, lon) and a building->net Series; Task 21 should dump both from the
+  database in one short read, or Task 11's snapshot should add them. Real run 2026-10-23 on
+  the 10-22 snapshot: investor (budget 8m) 13,091 listings in 2,180 estates, 6 s; family
+  (600+ sq ft, 3 rooms, 45 min to Admiralty) 604 listings in 24 estates, since only
+  geocoded buildings have a commute.)*
   - Files: create `src/hkestate/advisor.py` and `tests/test_advisor.py`.
   - Done when:
     - a `Profile` holds the user's inputs:
@@ -424,7 +431,7 @@ building, so it finds no subsidised estate. Tasks 2-3 below follow
 
     Growth defaults to the district's long-run rate from the growth study, with a low/high
     range from its 25th/75th percentiles.
-- [ ] **Task 20: market today summary** `[parallel-ok]`
+- [x] **Task 20: market today summary** `[parallel-ok]`
   - Files: create `src/hkestate/market.py` and `tests/test_market.py`.
   - Done when: `summary(snapshot)` gives these per district and size class, and a fixture
     test checks one district's figures. Green.

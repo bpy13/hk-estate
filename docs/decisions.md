@@ -313,7 +313,8 @@ Details and measurements in `docs/sources.md`. Supersedes parts of "Source roles
   - houses, villas and subsidised estates (master-list coverage filter; SRPE house registers)
   - Ricacorp previous deals derived from days held and % gain
   - the ~14,500 wrong-building LOHAS Park Centadata rows from the first cross-check run,
-    filtered read-only by fetch time (`db.QUARANTINE_SQL`; 8,954 are still the newest copy)
+    filtered read-only by fetch time (`db.QUARANTINE_SQL`, removed 2026-10-23 after the rows
+    were deleted on 2026-10-18; 8,954 were then still the newest copy)
     before the duplicate/bulk/outlier tests, so they can't distort them. Deleting them still
     waits for the owner (open-items).
 - **Price check** (added after the first ranking): deals under half or over double their
