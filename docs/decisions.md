@@ -493,6 +493,36 @@ unchanged; the rule lives in the model's feature table only.
   median (2,793 matched; 1.24x for 2010-13, 1.01x for 2014-17, 1.07x for 2018-21, 1.05x for
   2022+), less than the diagnosis's 1.12x. Takes effect at the Task 11 retrain.
 
+## Decision helper scoring (2026-10-23, Claude's call)
+`advisor.recommend` (Task 18). Hard limits first, then four goal scores of 0-100, then a
+weighted average by the profile's goal weights.
+- **Candidates.** Buy: the ranked sale listings with no `exclude_reason`. Rent: the active
+  rent listings `rent.clean_rent_listings` keeps. Sell and let have no listing search.
+- **Hard limits, in this order** (a row counts against the first it fails): budget (buy:
+  asking at or under the budget, and when a monthly income is given the HKMA test
+  `mortgage.affordable` must pass; rent: asking rent at or under the limit); minimum size;
+  minimum rooms; longest commute; school net. A limit on a value the data lacks (no
+  coordinates, no net, no room count) counts the row out, unless `Profile.allow_unknown`.
+- **Investment (buy)** = mean of four parts: district growth from the growth study's
+  `districts.csv` (setting `all`, flats sold twice): 0 at 0%/yr, 100 at 8%/yr; attribute
+  effects from `effects.csv`, robust verdicts only, summed for the attributes the flat has:
+  50 + 25 points per percentage point a year; rent yield (rent.py estimate x 12 / asking):
+  100 at 6%; listing discount: 50 + 500 x discount (10% below fair price = 100), only for
+  normal-confidence rows. **Investment (rent)** = 50 + 500 x (1 - asking / rent estimate).
+- **Near a place** = 100 at 15 minutes or less, 0 at 60 or more, linear; minutes are the
+  average over the chosen stations of `commute.minutes`.
+- **School** = 100 when the building's net is the profile's, else 0.
+- **Space** = 0.75 x size + 0.25 x age, where size = 100 x area / (2 x the minimum size;
+  400 sq ft when none is given), capped at 100, and age = 100 - 2 x building age in years.
+- **Unknown** (no coordinates, no net, no rent estimate, no district in the study, a
+  low-confidence discount): the part or goal scores 0 and the reason says "unknown". It is
+  never scored as average or good. The overall score counts an unknown goal as 0.
+- **Estates** rank by the mean overall score of their listings; listings follow in estate
+  order. Weights that are all zero mean equal weights.
+- Why these numbers: linear scales with round anchors so a reader can check a score by hand
+  (a reason line names every input). Robust effects only, because the study calls the others
+  hints. Rent intent reuses the investment slot for value-for-money.
+
 ## Repository
 - **Public GitHub repo `hk-estate` on account `bpy13`** (2026-10-16). Because it is public:
   scraped data, the database and raw-page cache are never committed (`data/` ignored), and no

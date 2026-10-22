@@ -1,0 +1,6 @@
+setting,pairs_type,attribute,label,coef,se,p,n_with,n,verdict
+all,recorded,size_xl,"Very large flat, 1,076 sq ft or more (vs 430-752)",0.02,0.001,0.0,100,1000,robust
+all,recorded,mtr_near,"Under 500 m from an MTR station (vs 500-1,000 m)",0.01,0.001,0.0,100,1000,robust
+all,recorded,mtr_far,"Over 1,000 m from an MTR station (vs 500-1,000 m)",-0.007,0.001,0.0,100,1000,"significant, not robust"
+all,recorded,floor_low,"Low floor, bottom third of the building (vs middle third)",-0.002,0.001,0.0,100,1000,robust
+all,estimated,mtr_near,"Under 500 m from an MTR station (vs 500-1,000 m)",0.05,0.001,0.0,100,1000,robust
