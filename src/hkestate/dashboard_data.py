@@ -16,7 +16,7 @@ from pathlib import Path
 import duckdb
 import pandas as pd
 
-from hkestate import db, model
+from hkestate import db, features, market, model
 from hkestate.config import get_data_dir
 from hkestate.report import plain_words  # the study's labels and notes still say "pairs"
 from hkestate.study import district_label  # noqa: F401  (one label, shared with the report)
@@ -305,6 +305,94 @@ def district_index(s: GrowthSetting, pairs_type: str = "recorded") -> pd.DataFra
     i["District"] = i["group"].str[len("district:"):].map(district_label)
     i["month"] = pd.to_datetime(i["month"])
     return i
+
+
+# ---- Market today (plan Task 22; figures from market.summary on the snapshot) ----------------
+
+SIZE_LABELS = {  # the government's size classes, as flat sizes anyone can picture
+    "ALL": "All sizes", "A": "Under 430 sq ft", "B": "430-750 sq ft", "C": "750-1,075 sq ft",
+    "D": "1,075-1,720 sq ft", "E": "Over 1,720 sq ft"}
+ALL_HK = "All of Hong Kong"
+
+
+@dataclass
+class MarketData:
+    summary: pd.DataFrame
+    trends: dict  # district name (market.TERRITORY for all) -> market.trend frame
+    data_to: pd.Timestamp
+    three_month_ends: pd.Timestamp
+
+
+def build_market(raw: dict) -> MarketData:
+    """The summary and a 36-month trend per district, from a loaded snapshot. The deal table
+    is built once and shared, so this is a few seconds, not one pass per district."""
+    deals_ft = features.deal_features(raw)
+    s = market.summary(raw, deals=deals_ft)
+    trends = {market.TERRITORY: market.trend(raw, None, deals=deals_ft)}
+    for dist in sorted(set(s["district"]) - {market.TERRITORY}):
+        trends[dist] = market.trend(raw, dist, deals=deals_ft)
+    data_to, ends = s.attrs["data_to"], s.attrs["three_month_change_ends"]
+    s.attrs = {}  # Timestamps in attrs trip Streamlit's table serialiser
+    return MarketData(s, trends, data_to, ends)
+
+
+def market_data() -> MarketData | None:
+    """build_market on data/model/snapshot, or None when there is no snapshot yet."""
+    folder = model.model_dir() / "snapshot"
+    if not (folder / "meta.json").exists():
+        return None
+    return build_market(features.load_snapshot(folder))
+
+
+def snapshot_stamp() -> float:
+    """The snapshot's meta.json modified time: the cache key, so the summary is rebuilt only
+    when a new snapshot is written."""
+    path = model.model_dir() / "snapshot" / "meta.json"
+    return path.stat().st_mtime if path.exists() else 0.0
+
+
+def market_district_label(name: str) -> str:
+    return ALL_HK if name == market.TERRITORY else district_label(name)
+
+
+def pct_text(x, digits: int = 1) -> str:
+    """'+3.2%' for a fraction, '-' when unknown."""
+    return "–" if x is None or pd.isna(x) else f"{x * 100:+.{digits}f}%"
+
+
+def market_cell(summary: pd.DataFrame, district: str, size: str) -> pd.Series | None:
+    r = summary[(summary["district"] == district) & (summary["size_class"] == size)]
+    return r.iloc[0] if len(r) else None
+
+
+def market_table(summary: pd.DataFrame, size: str) -> pd.DataFrame:
+    """The district table for one size: plain column names, numbers kept numeric so it sorts.
+    `Note` says 'few sales' when the change from our sales rests on fewer than
+    market.THIN_DEALS sales in either window."""
+    t = summary[summary["size_class"] == size].copy()
+    t["District"] = t["district"].map(market_district_label)
+    thin = (t["n_own_12m"] < market.THIN_DEALS) | (t["n_own_3m"] < market.THIN_DEALS)
+    t["Note"] = thin.map({True: "few sales", False: ""})
+    t = t.rename(columns={
+        "median_psf_12m": "Price per sq ft (HK$)", "n_sales_12m": "Sales in 12 months",
+        "own_chg_12m": "12 months (our sales)", "own_chg_3m": "3 months (our sales)",
+        "idx_chg_12m": "12 months (gov. index)", "idx_chg_3m": "3 months (gov. index)",
+        "ask_premium": "Asking vs deals"})
+    for c in ("12 months (our sales)", "3 months (our sales)", "12 months (gov. index)",
+              "3 months (gov. index)", "Asking vs deals"):
+        t[c] = t[c] * 100  # shown with a % sign by the page
+    t["_terr"] = t["district"] != market.TERRITORY  # all of Hong Kong first
+    t = t.sort_values(["_terr", "District"])
+    return t[["District", "Price per sq ft (HK$)", "Sales in 12 months", "12 months (our sales)",
+              "3 months (our sales)", "12 months (gov. index)", "3 months (gov. index)",
+              "Asking vs deals", "Note"]].reset_index(drop=True)
+
+
+def market_header(data_to, three_month_ends) -> str:
+    d = pd.Timestamp(data_to)
+    weeks = max(1, round((d - pd.Timestamp(three_month_ends)).days / 7))
+    return (f"Sales up to {d.day} {d.strftime('%b %Y')}; the last {weeks} weeks are "
+            "incomplete (deals reach the register late).")
 
 
 @dataclass

@@ -4,7 +4,8 @@
 
 Reads what `hkestate train` and `hkestate rank` write to data/model/ (no long database
 access; the run-status banner reads `run_log` read-only). Pages can be opened directly:
-?page=ranked, ?page=detail&listing=<source>:<id>, ?page=model, ?page=growth&setting=<name>
+?page=market, ?page=ranked, ?page=detail&listing=<source>:<id>, ?page=model,
+?page=growth&setting=<name>
 (the growth page reads the CSVs under data/reports/growth/, nothing from the database).
 """
 
@@ -25,8 +26,8 @@ st.set_page_config(page_title="HK Estate", layout="wide")
 # Reference palette (dataviz skill): blue raises the value, red lowers it; text labels carry
 # the sign too, so colour is never the only cue.
 RAISES, LOWERS, SERIES = "#2a78d6", "#e34948", "#2a78d6"
-PAGES = {"ranked": "Ranked listings", "detail": "Listing detail", "model": "Model",
-         "growth": "Growth study"}
+PAGES = {"market": "Market today", "ranked": "Ranked listings", "detail": "Listing detail",
+         "model": "Model", "growth": "Growth study"}
 
 
 @st.cache_data(ttl=300)
@@ -426,9 +427,86 @@ def page_growth() -> None:
                    "Log scale: equal slopes mean equal percentage changes.")
 
 
+@st.cache_data(show_spinner="Working out the market figures (first time only)...")
+def load_market(snapshot_stamp: float):
+    """Built once per snapshot: the argument is the snapshot's meta.json mtime (cache key)."""
+    return dd.market_data()
+
+
+def _tile(label: str, value: str, note: str = "") -> None:
+    with st.container(border=True):
+        st.metric(label, value)
+        if note:
+            st.caption(note)
+
+
+def trend_chart(df: pd.DataFrame, y: str, title: str, fmt: str) -> alt.Chart:
+    base = alt.Chart(df.dropna(subset=[y])).encode(
+        x=alt.X("month:T", title=None, axis=alt.Axis(format="%b %Y", labelAngle=-40)),
+        y=alt.Y(f"{y}:Q", title=title, scale=alt.Scale(zero=False)),
+        tooltip=[alt.Tooltip("month:T", format="%b %Y"), alt.Tooltip(f"{y}:Q", format=fmt)])
+    pts = base.mark_circle(size=40).encode(
+        opacity=alt.condition("datum.partial", alt.value(0.35), alt.value(1)))
+    return (base.mark_line(color=SERIES) + pts).properties(height=220)
+
+
+def page_market() -> None:
+    st.title("Market today")
+    data = load_market(dd.snapshot_stamp())
+    if data is None:
+        st.info("No market figures yet: run `hkestate train` to save a snapshot.")
+        return
+    st.caption(dd.market_header(data.data_to, data.three_month_ends))
+
+    districts = list(data.trends)  # all of Hong Kong first, then A-Z
+    district = st.selectbox("Where", districts, format_func=dd.market_district_label)
+    size = st.selectbox("Flat size", list(dd.SIZE_LABELS), format_func=dd.SIZE_LABELS.get)
+    cell = dd.market_cell(data.summary, district, size)
+    if cell is None:
+        st.info("No figures for this choice.")
+        return
+
+    few = min(cell["n_own_12m"], cell["n_own_3m"]) < dd.market.THIN_DEALS
+    pct = dd.pct_text
+    _tile("Typical price per sq ft, last 12 months", hkd(cell["median_psf_12m"]))
+    _tile("Change in price per sq ft over 12 months", pct(cell["own_chg_12m"]),
+          f"3 months: {pct(cell['own_chg_3m'])} (from our sales). Government index for this "
+          f"size, all of Hong Kong: {pct(cell['idx_chg_12m'])} over 12 months, "
+          f"{pct(cell['idx_chg_3m'])} over 3."
+          + (" Few sales behind this: treat it as rough." if few else ""))
+    _tile("Sales in the last 12 months", f"{int(cell['n_sales_12m']):,}")
+    _tile("Asking prices vs recent deals in the same building", pct(cell["ask_premium"]),
+          "Not enough matched listings to say." if pd.isna(cell["ask_premium"])
+          else f"{int(cell['n_premium'])} homes for sale compared.")
+
+    st.subheader("Last 36 months")
+    tr = data.trends[district]
+    st.altair_chart(trend_chart(tr, "median_psf", "Typical price per sq ft (HK$)", ",.0f"),
+                    width="stretch")
+    if "rvd_index" in tr:
+        st.altair_chart(trend_chart(tr, "rvd_index", "Government index, all of Hong Kong "
+                                    "(first month = 100)", ".1f"), width="stretch")
+    st.caption("Faint dots: months still filling in as deals are registered. "
+               "All sizes together.")
+
+    st.subheader("By district: " + dd.SIZE_LABELS[size].lower())
+    t = dd.market_table(data.summary, size)
+    pcts = [c for c in t.columns if "months (" in c or c == "Asking vs deals"]
+    styled = (t.style.format({c: "{:+.1f}%" for c in pcts}
+                             | {"Price per sq ft (HK$)": "{:,.0f}",
+                                "Sales in 12 months": "{:,.0f}"}, na_rep="–")
+              .apply(lambda r: ["color: #9aa0a6" if r["Note"] else "" for _ in r], axis=1))
+    st.dataframe(styled, hide_index=True, width="stretch")
+    st.caption("Grey rows marked 'few sales' rest on very few deals. Tap a column heading "
+               "to sort.")
+
+
 def main() -> None:
     page = nav()
     banner()
+    if page == "market":
+        page_market()
+        return
     if page == "growth":
         page_growth()
         return

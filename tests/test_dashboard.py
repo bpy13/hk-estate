@@ -275,3 +275,38 @@ def test_growth_page_opens_for_all_and_a_phase_setting(growth_root, tmp_path, mo
                for w in at.warning)
     at = _app(tmp_path / "empty", monkeypatch, page="growth")
     assert not at.exception and any("No growth study" in i.value for i in at.info)
+
+
+# ---- Market today (Task 22) ------------------------------------------------------------------
+
+
+def test_market_loader_labels_and_table(data_dir, monkeypatch):
+    monkeypatch.setenv("HKESTATE_DATA_DIR", str(data_dir))
+    m = dd.market_data()
+    assert m is not None and dd.market.TERRITORY in m.trends
+    assert dd.snapshot_stamp() > 0
+    assert dd.market_header("2026-10-20", "2026-09-08") == (
+        "Sales up to 20 Oct 2026; the last 6 weeks are incomplete "
+        "(deals reach the register late).")
+    t = dd.market_table(m.summary, "ALL")
+    assert t.iloc[0]["District"] == dd.ALL_HK  # all of Hong Kong first
+    text = " ".join(t.columns) + " " + " ".join(dd.SIZE_LABELS.values())
+    assert "psf" not in text.lower() and "rvd" not in text.lower()
+    assert set(t["Note"]) <= {"", "few sales"}
+    assert dd.pct_text(0.032) == "+3.2%" and dd.pct_text(float("nan")) == "–"
+
+
+def test_market_loader_none_without_snapshot(tmp_path, monkeypatch):
+    monkeypatch.setenv("HKESTATE_DATA_DIR", str(tmp_path))
+    assert dd.market_data() is None and dd.snapshot_stamp() == 0.0
+
+
+def test_market_page_renders_tiles_pickers_table_and_charts(data_dir, monkeypatch):
+    at = _app(data_dir, monkeypatch, page="market")
+    assert not at.exception
+    assert at.title[0].value == "Market today"
+    assert at.caption[0].value.startswith("Sales up to ")
+    assert [s.label for s in at.selectbox] == ["Where", "Flat size"]
+    assert len(at.metric) == 4 and len(at.dataframe) == 1
+    at.selectbox[1].select("B").run()
+    assert not at.exception

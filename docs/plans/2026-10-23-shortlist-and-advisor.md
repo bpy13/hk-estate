@@ -526,7 +526,7 @@ building, so it finds no subsidised estate. Tasks 2-3 below follow
       figures
     - a real browser check on port 8531 at 390 px and at desktop width works with both
       profiles from Task 18, with no sideways scrolling
-- [ ] **Task 22: "Market today" page** `[parallel-ok]` with Task 23
+- [x] **Task 22: "Market today" page** `[parallel-ok]` with Task 23
   - Files: modify `app/dashboard.py` (its own page function) and
     `src/hkestate/dashboard_data.py`.
   - Done when: a district table and a trend chart show from `market.summary`, checked in a
