@@ -148,7 +148,9 @@ def _cell(d: pd.DataFrame, li: pd.DataFrame, index_df, cls: str, end: pd.Timesta
     def chg(now, before):
         return float(now.median() / before.median() - 1) if len(now) and len(before) else np.nan
 
-    ratios = li["ratio"].dropna()
+    # only listings compared with deals of similar size: the all-sizes fallback is too wrong
+    # for big flats (class E) to be worth showing
+    ratios = li.loc[li["similar_size"].fillna(False).astype(bool), "ratio"].dropna()
     ask = _asking_psf(li).dropna()
     med_ask = float(ask.median()) if len(ask) else np.nan
     med6 = float(deals6.median()) if len(deals6) else np.nan

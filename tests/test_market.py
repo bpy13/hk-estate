@@ -61,11 +61,11 @@ def test_one_district_by_hand(table):
 
 def test_ask_premium_is_building_matched(monkeypatch):
     monkeypatch.setattr(market, "PREMIUM_MIN_LISTINGS", 2)
-    rows = [("X", "C", "2026-06-01", p, None, b) for b, p in
+    rows = [("X", "C", "2026-06-01", p, None, b, 5000) for b, p in
             [("b1", 100), ("b1", 100), ("b1", 100), ("b2", 200), ("b2", 200), ("b2", 200),
              ("b4", 100), ("b4", 100)]]  # b4: only 2 deals, too few to match
     deals = pd.DataFrame(rows, columns=["district", "rvd_class", "agreement_date", "psf_hkd",
-                                        "exclude_reason", "building_id"])
+                                        "exclude_reason", "building_id", "area_sqft"])
     li = pd.DataFrame([("sale", "X", 5000, 550_000, "b1"),    # ask 110 vs 100
                        ("sale", "X", 5000, 1_100_000, "b2"),  # ask 220 vs 200
                        ("sale", "X", 5000, 5_000_000, "b3"),  # no deals: not used
@@ -98,6 +98,24 @@ def test_ask_premium_compares_with_deals_of_similar_size(monkeypatch):
     # the last one falls back to all sizes: median 15,000
     assert list(ratios["ratio"]) == pytest.approx([1.10, 1.10, 11_000 / 15_000])
     assert list(ratios["similar_size"]) == [True, True, False]
+
+
+def test_premium_uses_similar_size_listings_only(monkeypatch):
+    monkeypatch.setattr(market, "PREMIUM_MIN_LISTINGS", 2)
+    rows = [("X", "C", "2026-06-01", 20000, None, "b1", a) for a in (500, 510, 520)]
+    rows += [("X", "C", "2026-06-01", 10000, None, "b2", a) for a in (1500, 1500, 1500)]
+    deals = pd.DataFrame(rows, columns=["district", "rvd_class", "agreement_date", "psf_hkd",
+                                        "exclude_reason", "building_id", "area_sqft"])
+    li = pd.DataFrame([("sale", "X", 500, 11_000_000, "b1"),   # similar: ratio 1.10
+                       ("sale", "X", 500, 11_000_000, "b1"),   # similar: ratio 1.10
+                       ("sale", "X", 900, 30_000_000, "b1")],  # fallback: ratio 1.67, left out
+                      columns=["kind", "district", "area_sqft", "price_hkd", "building_id"])
+    li["rvd_class"] = "C"
+    r = _row(market.summary(_raw(), deals=deals, listings=li), "X", "C")
+    assert r.n_premium == 2 and r.ask_premium == pytest.approx(0.10)
+    monkeypatch.setattr(market, "PREMIUM_MIN_LISTINGS", 3)  # only 2 similar-size: blank
+    r = _row(market.summary(_raw(), deals=deals, listings=li), "X", "C")
+    assert r.n_premium == 2 and np.isnan(r.ask_premium)
 
 
 def test_index_columns_are_labelled_territory_wide(table):
