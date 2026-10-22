@@ -209,5 +209,18 @@ cache pruning.)*
   to the probe allowance only those two were tested. A larger page would cut calls by up to
   a third on big buildings. *(Task 2.)*
 
+- **Subsidised-estate list is a seed only (2026-10-23, Tasks 2-3).**
+  `src/hkestate/subsidised_estates.csv` holds 銀蔚苑 only. The `check_subsidised` price rule
+  catches 5 more listings. Add the Housing Authority's HOS / PSPS / TPS court list. Also wire
+  in the master list's exclusion and `master_overrides`; today `building_table` drops those
+  estates as "house or subsidised estate", so their listings never reach the ranking anyway.
+- **Territory rematch, first run (2026-10-23, Task 2c).** The first daily run after 878d84d
+  re-checks every `contains`/`single` territory listing in the usual 1,000-row sessions. It
+  wasn't timed on the live database. Check that day's daily log for its length. Rows that lose
+  their building keep the old `dup_group` until that run's dedupe step recomputes it (untested
+  path).
+- **峰景大廈 vs 峯景 (ranking diagnosis 2.4).** Only partly fixed by Task 2b. The diagnosis's
+  district check (rule c) is not built.
+
 ## Later
 - **Dashboard map** (decisions.md: "a map in a later phase"): not built in Phase 4.
