@@ -294,7 +294,7 @@ building, so it finds no subsidised estate. Tasks 2-3 below follow
 
 ## Phase 3 – Report wording (sonnet)
 
-- [ ] **Task 12: rename "pairs" and add the caveat**
+- [x] **Task 12: rename "pairs" and add the caveat**
   - Files: modify `src/hkestate/report.py`, `src/hkestate/charts.py`, `app/dashboard.py`,
     `src/hkestate/dashboard_data.py` (labels only) and `README.md`. Tests in
     `tests/test_report.py` and `tests/test_dashboard.py`.
@@ -358,7 +358,7 @@ building, so it finds no subsidised estate. Tasks 2-3 below follow
     - tests cover each fallback level
 
     Green.
-- [ ] **Task 16: mortgage rules** `[parallel-ok]`
+- [x] **Task 16: mortgage rules** `[parallel-ok]`
   - Files: create `src/hkestate/mortgage.py` and `tests/test_mortgage.py`.
   - Done when:
     - the current HKMA loan-to-value caps and stress-test rule are read on HKMA's own pages
