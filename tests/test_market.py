@@ -1,0 +1,84 @@
+"""Market summary (Task 20): one district checked by hand on a small made-up table."""
+import numpy as np
+import pandas as pd
+import pytest
+
+from hkestate import market
+
+# district X, class C; the data runs to 2026-06-30, so the 3-month change ends 2026-05-19
+_X = [("2024-09-01", 100), ("2024-12-01", 120), ("2025-08-01", 130), ("2025-10-01", 140),
+      ("2025-12-15", 150), ("2026-01-15", 160), ("2026-03-01", 170), ("2026-04-01", 190),
+      ("2026-06-30", 200)]
+
+
+def _deals():
+    rows = [("X", "C", d, p, None) for d, p in _X]
+    rows.append(("X", "C", "2026-04-15", 999, "bulk"))  # not a clean sale: ignored
+    rows.append(("Y", "C", "2026-06-01", 1000, None))
+    return pd.DataFrame(rows, columns=["district", "rvd_class", "agreement_date", "psf_hkd",
+                                       "exclude_reason"])
+
+
+def _listings():
+    rows = [("sale", "X", 5000, 1_000_000), ("sale", "X", 5000, 1_200_000),
+            ("sale", "X", np.nan, 2_000_000),  # no area: counted, not valued
+            ("rent", "X", 500, 30_000), ("sale", "Y", 5000, 5_000_000)]
+    li = pd.DataFrame(rows, columns=["kind", "district", "area_sqft", "price_hkd"])
+    li["rvd_class"] = "C"
+    return li
+
+
+def _raw():
+    idx = pd.DataFrame({"class": "C", "value": [88.0, 100.0, 110.0],
+                        "period": pd.to_datetime(["2025-06-01", "2026-03-01", "2026-06-01"])})
+    return {"index": idx}
+
+
+@pytest.fixture
+def table():
+    return market.summary(_raw(), deals=_deals(), listings=_listings())
+
+
+def _row(table, district, cls):
+    return table[(table.district == district) & (table.size_class == cls)].iloc[0]
+
+
+def test_one_district_by_hand(table):
+    r = _row(table, "X", "C")
+    # last 12 months (2025-06-30, 2026-06-30]: 130 140 150 160 170 190 200
+    assert r.median_psf_12m == 160 and r.n_sales_12m == 7
+    # 12 months before: 100 120 -> 110
+    assert r.own_chg_12m == pytest.approx(160 / 110 - 1) and r.n_own_12m == 2
+    # 3 months to 2026-05-19: 170 190 -> 180; the 3 before: 150 160 -> 155
+    assert r.own_chg_3m == pytest.approx(180 / 155 - 1) and r.n_own_3m == 2
+    # RVD index 110 now, 100 three months back, 88 twelve months back
+    assert r.idx_chg_3m == pytest.approx(0.10) and r.idx_chg_12m == pytest.approx(0.25)
+    assert r.sale_listings == 3 and r.rent_listings == 1
+    # asking 200 and 240 -> 220; deals of the last 6 months 160 170 190 200 -> 180
+    assert r.median_ask_psf == 220 and r.median_deal_psf_6m == 180
+    assert r.ask_premium == pytest.approx(220 / 180 - 1)
+
+
+def test_all_sizes_and_territory_rows(table):
+    assert _row(table, "X", "ALL").n_sales_12m == 7
+    t = _row(table, market.TERRITORY, "ALL")
+    assert t.n_sales_12m == 8 and t.sale_listings == 4  # X's 7 and Y's 1
+    assert _row(table, "X", "A").n_sales_12m == 0
+    assert np.isnan(_row(table, "X", "A").median_psf_12m)
+    assert table.iloc[0].district == market.TERRITORY
+
+
+def test_data_date_is_latest_clean_deal(table):
+    assert table.attrs["data_to"] == pd.Timestamp("2026-06-30")
+    assert table.attrs["three_month_change_ends"] == pd.Timestamp("2026-05-19")
+
+
+def test_trend_monthly_series():
+    t = market.trend(_raw(), "X", months=12, deals=_deals())
+    assert list(t.columns[:3]) == ["month", "median_psf", "n_sales"]
+    assert t["month"].iloc[-1] == pd.Timestamp("2026-06-01")
+    assert len(t) == 12
+    mar = t[t.month == "2026-03-01"].iloc[0]
+    assert mar.median_psf == 170 and mar.n_sales == 1
+    assert t[t.month == "2026-05-01"].iloc[0].n_sales == 0  # empty month stays in the series
+    assert bool(t["partial"].iloc[-1]) and not bool(t["partial"].iloc[0])
