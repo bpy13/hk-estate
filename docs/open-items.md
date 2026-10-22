@@ -227,5 +227,15 @@ cache pruning.)*
 - **峰景大廈 vs 峯景 (ranking diagnosis 2.4).** Only partly fixed by Task 2b. The diagnosis's
   district check (rule c) is not built.
 
+- **Mortgage rules (Task 16, 2026-10-23, 35733ba).** HKMA rules are entered from
+  2024-02-28 (current: 70% LTV for all, DSR 50%, stress test suspended, since 2024-10-16).
+  Still to do: confirm the HK Mortgage Corporation's mortgage-insurance limits (80%/90%;
+  read only from a summary), decide on the Dec 2024 scheme for uncompleted first-hand flats
+  (reported 80% LTV, 60% DSR, not entered), and add older rules if past purchases need them.
+- **First-hand window counts (Task 8b, 384a649).** The 72-month window removes 5,012 clean
+  deals; the diagnosis counted 4,153 with a different filter, not reconciled. Price ratio to
+  resales is 1.05 overall (1.24 for buildings completed 2010-13), below the diagnosis's
+  1.12. Check the shortlist after the Task 11 retrain.
+
 ## Later
 - **Dashboard map** (decisions.md: "a map in a later phase"): not built in Phase 4.
