@@ -160,7 +160,7 @@ def load_flats(con, estates: list[str] | None = None) -> list[Estate]:
                        ORDER BY fetched_at DESC) AS rn
             FROM txn_raw
             WHERE source = 'centadata' AND building_id IS NOT NULL
-              AND NOT {db.QUARANTINE_SQL} {where}
+              {where}
         ) WHERE rn = 1 AND code IS NOT NULL
         ORDER BY estate_id, building_id, floor_label, flat
         """

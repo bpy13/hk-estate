@@ -69,7 +69,7 @@ def raw():
     buildings = pd.DataFrame([{"building_id": "cd-1-B", "estate_name": "測試苑",
                                "building_name": "1座"}])
     return {"deals": pd.DataFrame(deals), "buildings": buildings,
-            "meta": {"extracted_at": "2026-10-21T16:59:17", "quarantined_rows": 0}}
+            "meta": {"extracted_at": "2026-10-21T16:59:17"}}
 
 
 REGISTRY = {

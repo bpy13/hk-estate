@@ -431,7 +431,6 @@ def write_report(res: dict, raw: dict, path: Path | None = None) -> Path:
     L += ["", "Most common floor labels that gave no floor number (bands such as 高層 are "
           "expected; anything else is a parsing gap): "
           + (", ".join(f"{k} ({v:,})" for k, v in res["floor_labels"].items()) or "none")
-          + ".", "", f"Quarantined rows in the snapshot (db.QUARANTINE_SQL): "
-          f"{meta.get('quarantined_rows', '?')}.", ""]
+          + ".", ""]
     path.write_text("\n".join(L), encoding="utf-8")
     return path

@@ -307,7 +307,6 @@ def coverage(raw: dict, deals: pd.DataFrame) -> dict:
         "estates_clean": int(clean["estate_key"].nunique()),
         "by_source": by_source, "clean_by_year": years,
         "exclusions": d["exclude_reason"].fillna("(clean)").value_counts(),
-        "quarantined": raw["meta"].get("quarantined_rows"),
         "running": running,
         "feature_cover": {
             "MTR distance": float(clean["mtr_m"].notna().mean()),

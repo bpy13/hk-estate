@@ -767,8 +767,6 @@ def write_report(path: Path, ev: EvalResult, deals: pd.DataFrame, listings: pd.D
     for reason, n in deals["exclude_reason"].fillna("(trained on)").value_counts().items():
         lines.append(f"| {reason} | {n:,} |")
     lines += [
-        f"| quarantined LOHAS Park rows (not read at all) | "
-        f"{meta['data'].get('quarantined_rows', 0):,} |",
         "",
         "## Feature coverage",
         "",

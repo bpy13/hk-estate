@@ -1,6 +1,5 @@
 """Task 4.1: the feature table. One row per deal and one per listing, with the feature
-definitions the plan names, and the Phase 4 exclusions (parking, first-hand, houses, the
-quarantined LOHAS Park rows)."""
+definitions the plan names, and the Phase 4 exclusions (parking, first-hand, houses)."""
 
 import math
 from datetime import date, datetime
@@ -227,7 +226,7 @@ def test_low_psf_reason_on_deals(tmp_path):
 def snap(tmp_path):
     path = make_db(tmp_path / "t.duckdb", n_deals=120)
     con = db.connect(path)
-    # parking deal, SRPE first-hand deal, house deal, a quarantined LOHAS Park row
+    # parking deal, SRPE first-hand deal, house deal
     add_deal(con, "park", "h28-1-b1", 12, "A", date(2025, 5, 1), 9_000_000,
              raw={"with_parking": True})
     # a part-share-like transfer at a fifth of the building's price per sq ft
@@ -236,8 +235,6 @@ def snap(tmp_path):
              first_hand=True, raw={"has_parking": False})
     add_deal(con, "house", "cd-1-HHH", 1, "H1", date(2025, 6, 1), 30_000_000,
              source="centadata", area=2000.0)
-    add_deal(con, "bad-lohas", "h28-9-b1", 5, "A", date(2024, 1, 1), 5_000_000,
-             source="centadata", estate_id="h28-9", fetched_at=datetime(2026, 10, 16, 19, 30))
     add_deal(con, "good-lohas", "h28-9-b1", 6, "B", date(2024, 2, 1), 5_100_000,
              source="centadata", estate_id="h28-9", fetched_at=datetime(2026, 10, 16, 19, 50))
     # a new building with a launch of 6 flats in its first months (no completion date)
@@ -267,9 +264,7 @@ def test_one_row_per_deal_with_exclusion_reasons(snap):
     # a lone one is caught by the yearly MAD rule already; clusters by the price check
     # (test_price_check_flags_deals_far_from_the_building_median_even_in_clusters)
     assert reasons["share"] in ("outlier", "price_check")
-    assert "good-lohas" in reasons.index  # fetched by the fixed run: kept
-    assert "bad-lohas" not in reasons.index  # quarantined before the flags are computed
-    assert snap["meta"]["quarantined_rows"] == 1
+    assert "good-lohas" in reasons.index
     assert (reasons[[f"new{i}" for i in range(6)]] == "first_hand_rule").all()
     assert deals["first_hand"].sum() >= 7
 

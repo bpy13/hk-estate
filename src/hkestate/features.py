@@ -23,7 +23,6 @@ Rows left out of training (column `exclude_reason`, docs/decisions.md "Phase 4")
 - deals that include a parking space (28Hse 連車位, SRPE parking column)
 - houses, villas and subsidised estates (master list coverage filter, SRPE house registers)
 - Ricacorp previous deals derived from days held and % gain (not a recorded price)
-- the quarantined LOHAS Park rows (db.QUARANTINE_SQL), dropped before the flags are computed
 - deals at under half or over double their building's median price per sq ft (`price_check`)
 """
 
@@ -307,7 +306,7 @@ def _deals_sql() -> str:
             ELSE false END AS parking,
         CASE WHEN json_valid(a.raw_json)
              THEN json_extract_string(a.raw_json, '$.feature') END AS cd_feature
-    FROM ({db.txn_all_sql('_model_latest')}) a
+    FROM ({db.txn_all_sql('_latest')}) a
     LEFT JOIN unit u ON u.unit_id = a.unit_id
     """
 
@@ -361,10 +360,6 @@ def extract(con) -> dict:
     cd_master.ensure_tables(con)
     geo.ensure_tables(con)
     con.execute("CREATE OR REPLACE TEMP TABLE _latest AS SELECT * FROM txn_latest")
-    con.execute("CREATE OR REPLACE TEMP TABLE _model_latest AS "
-                f"SELECT * FROM _latest WHERE NOT {db.QUARANTINE_SQL}")
-    quarantined = con.execute(
-        f"SELECT count(*) FROM _latest WHERE {db.QUARANTINE_SQL}").fetchone()[0]
     lag = con.execute("""
         SELECT median(date_diff('day', instrument_date, registration_date))
         FROM _latest
@@ -396,10 +391,8 @@ def extract(con) -> dict:
             "SELECT run_id, command, args, started_at, finished_at, status, message "
             "FROM run_log ORDER BY run_id DESC LIMIT 200").df(),
     }
-    con.execute("DROP TABLE _model_latest")  # gigabytes on the full data: free them
-    con.execute("DROP TABLE _latest")
+    con.execute("DROP TABLE _latest")  # gigabytes on the full data: free them
     raw["meta"] = {
-        "quarantined_rows": int(quarantined),
         "agreement_lag_days": int(round(lag)) if lag is not None else AGREEMENT_LAG_DEFAULT,
         "agreement_lag_measured": lag is not None,
         "extracted_at": datetime.now().isoformat(timespec="seconds"),
@@ -545,7 +538,7 @@ def snapshot_cutoff(raw: dict) -> pd.Timestamp:
 
 
 def deal_features(raw: dict) -> pd.DataFrame:
-    """One row per deal (newest version of each source row, quarantined rows already gone)
+    """One row per deal (newest version of each source row)
     with features, target (log price per sq ft) and `exclude_reason` (None = trainable)."""
     d = raw["deals"].copy()
     lag = raw["meta"].get("agreement_lag_days", AGREEMENT_LAG_DEFAULT)

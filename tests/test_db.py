@@ -311,7 +311,7 @@ def test_unit_id_is_building_floor_flat():
     assert db.unit_id("b1", "10", "A") == "b1|10|A"
 
 
-# ---- Phase 5: shared clean view (price check, parking, quarantined rows) -------------------
+# ---- Phase 5: shared clean view (price check, parking) -------------------
 
 
 def _txn_raw_row(source_id, price, day, *, unit, building="b1", saleable=500.0,
@@ -380,40 +380,12 @@ def test_parking_deals_are_flagged_and_left_out(con):
     assert _clean_ids(con) == {"flat"}
 
 
-def test_quarantined_lohas_park_rows_are_flagged_and_ignored_by_other_rules(con):
-    # Centadata rows stored against the wrong LOHAS Park building by the first cross-check run
-    # (before 19:44 on 2026-10-16): flagged, out of `txn`, and not counted towards a bulk deal.
-    con.execute("INSERT INTO estate (estate_id, name_zh, group_name, source, source_key) "
-                "VALUES ('lp', 'LP6', 'lohas-park', 'hse28', '9')")
-    con.execute("INSERT INTO building (building_id, estate_id, name_zh) VALUES ('lpb', 'lp', 'x')")
-    bad = datetime(2026, 10, 16, 19, 30)
-    db.insert_txn_raw(con, [
-        _txn_raw_row("q1", 8_000_000, date(2024, 5, 5), unit="A", building="lpb",
-                     source="centadata", estate="lp", fetched_at=bad),
-        _txn_raw_row("h1", 8_000_000, date(2024, 5, 5), unit="B", building="lpb", estate="lp"),
-        _txn_raw_row("h2", 8_100_000, date(2024, 5, 5), unit="C", building="lpb", estate="lp"),
-        _txn_raw_row("late", 8_000_000, date(2024, 6, 5), unit="D", building="lpb",
-                     source="centadata", estate="lp",
-                     fetched_at=datetime(2026, 10, 16, 19, 50)),
-    ])
-    flags = {r[0]: r[1:] for r in con.execute(
-        "SELECT source_id, excl_quarantine, excl_bulk FROM txn_all").fetchall()}
-    assert flags["q1"][0] is True
-    assert flags["late"][0] is False
-    assert flags["h1"] == (False, False)  # two real deals that day: not a bulk deal
-    assert _clean_ids(con) == {"h1", "h2", "late"}
-
-
 def test_duplicate_flag_lands_on_the_worse_copy_only(con):
     """The duplicate test's two ways of matching (same unit; a floor-band agency report on the
     same building and flat), the source-rank tie-break, the price and date limits, and
-    quarantined rows not counting as the other copy. Written against the OR join and kept
+    Written against the OR join and kept
     for its replacement (two equi-joins, 2026-10-21): both must flag exactly these rows."""
     _setup_building(con)
-    con.execute("INSERT INTO estate (estate_id, name_zh, group_name, source, source_key) "
-                "VALUES ('lp', 'LP6', 'lohas-park', 'hse28', '9')")
-    con.execute("INSERT INTO building (building_id, estate_id, name_zh) VALUES ('lpb', 'lp', 'x')")
-    bad = datetime(2026, 10, 16, 19, 30)  # quarantined: Centadata LOHAS Park before 19:44
     db.insert_txn_raw(con, [
         # (a) one sale of flat A on floor 10, from 28Hse (registry, rank 1) and Centadata
         # (rank 3), plus an agency report (rank 2) that gives only the floor band
@@ -430,23 +402,12 @@ def test_duplicate_flag_lands_on_the_worse_copy_only(con):
         # (b) two sources of equal rank (both 9): the alphabetically first source wins
         _txn_raw_row("r-B", 7_000_000, date(2024, 3, 1), unit="B", source="ricacorp"),
         _txn_raw_row("s-B", 7_000_000, date(2024, 3, 1), unit="B", source="squarefoot"),
-        # (c) a quarantined Centadata row is not "the other copy": the rank-9 row of the
-        # same unit, and the band report of the same flat, are kept
-        _txn_raw_row("q-C", 8_000_000, date(2024, 5, 5), unit="C", building="lpb",
-                     source="centadata", estate="lp", fetched_at=bad),
-        _txn_raw_row("r-C", 8_000_000, date(2024, 5, 5), unit="C", building="lpb",
-                     source="ricacorp", estate="lp"),
-        _txn_raw_row("q-D", 8_000_000, date(2024, 5, 5), unit="D", building="lpb",
-                     source="centadata", estate="lp", fetched_at=bad),
-        _txn_raw_row("r-D", 8_000_000, date(2024, 5, 9), unit="D", building="lpb",
-                     source="ricacorp", estate="lp", floor="低層"),
     ])
     flags = dict(con.execute("SELECT source_id, excl_duplicate FROM txn_all").fetchall())
     assert flags == {
         "h-A": False, "c-A": True, "m-A": True, "c-A-far": False, "c-A-old": False,
         "m-E": False,
         "r-B": False, "s-B": True,
-        "q-C": False, "r-C": False, "q-D": False, "r-D": False,
     }
 
 

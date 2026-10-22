@@ -138,17 +138,6 @@ def test_only_named_groups_are_loaded(db_path):
         assert [e.estate_id for e in ch.load_flats(con, ["pilot"])] == ["h28-1"]
 
 
-def test_quarantined_rows_are_not_used_for_placement(db_path):
-    with db.session(db_path) as con:
-        con.execute("INSERT INTO estate (estate_id, name_zh, group_name, source, source_key) "
-                    "VALUES ('h28-9', 'LP', 'lohas-park', 'hse28', '9')")
-        bad = master_row("q1", "CODEQ", "h28-9-b1", "h28-9", "1", "A", date(2015, 1, 1))
-        bad["fetched_at"] = datetime(2026, 10, 16, 19, 30)
-        db.insert_txn_raw(con, [bad])
-        codes = {f.code for e in ch.load_flats(con) for b in e.buildings for f in b.flats}
-    assert "CODEQ" not in codes
-
-
 # ---- the run ---------------------------------------------------------------------------------
 
 

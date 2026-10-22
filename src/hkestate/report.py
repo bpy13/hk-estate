@@ -437,8 +437,8 @@ def _coverage(s: Study) -> list[str]:
     lines = ["## Data coverage", "",
              f"Database snapshot: {cov['snapshot_at']}. Clean sales: {_n(cov['clean'])} of "
              f"{_n(cov['deals'])} stored ({_n(cov['pilot_clean'])} in the pilot estates), in "
-             f"{_n(cov['buildings_clean'])} buildings and {_n(cov['estates_clean'])} estates. "
-             f"Quarantined LOHAS Park rows not read: {_n(cov['quarantined'])}.", ""]
+             f"{_n(cov['buildings_clean'])} buildings and {_n(cov['estates_clean'])} estates.",
+             ""]
     if cov["running"]:
         lines += ["Marked as running in run_log when the snapshot was taken (loads still going; "
                   "a run that stopped abnormally can stay marked): "

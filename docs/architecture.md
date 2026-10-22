@@ -40,7 +40,7 @@ hkestate update (weekly) -> backfill.update_estates: newest 28Hse deal-list page
 
 hkestate train                               (fair price, Phase 4)
   └─ features.snapshot: one short DB session -> data/model/snapshot/*.parquet
-       (txn_all query minus db.QUARANTINE_SQL rows, buildings, listings, RVD index, run_log)
+       (txn_all query, buildings, listings, RVD index, run_log)
   └─ features.deal_features: one row per deal, exclude_reason (None = trainable)
   └─ model.train: 3 LightGBM fits (calibration, out-of-time test, final)
        -> data/model/fair_price.txt + .json, test_predictions.parquet, deals.parquet
@@ -90,7 +90,7 @@ hkestate report                              (growth study, Phase 5)
 | `hse28_territory.py` | territory 28Hse backfill: estate list (sitemap, CSV, listing cards), largest-first order, resumable run |
 | `locks.py` | job lock files (`hse28`, `listings`, `centanet`, `cd-history`, `model`) |
 | `maintenance.py` | deletes cached listing pages 7+ days old |
-| `features.py` | Phase 4 feature table: database extract/snapshot, one row per deal and per listing, model exclusions (parking, first-hand rule, houses, price check, quarantine), 28Hse agreement dates, RVD deflator |
+| `features.py` | Phase 4 feature table: database extract/snapshot, one row per deal and per listing, model exclusions (parking, first-hand rule, houses, price check), 28Hse agreement dates, RVD deflator |
 | `model.py` | fair-price LightGBM: time split, index-adjusted target, conformal intervals, comparables check, TreeSHAP reasons, `model_eval.md` |
 | `gap.py` | asking-vs-deal pairs and per-district gap (5% `assumed` under 30 pairs) |
 | `rank.py` | values active sale listings, discount, confidence, cross-site dedupe, ranked CSV |
@@ -146,7 +146,6 @@ Exclusion flags in `txn_all` (decisions.md "Schema"):
 | `excl_non_market` | non-market transfer (when a source marks it) |
 | `excl_bulk` | 3 or more flats in one building on the same day |
 | `excl_outlier` | price per sq ft more than 5 median absolute deviations from the building's median for that year (MAD scaled by 1.4826, floor 5% of the median; needs ≥5 deals in the building-year) |
-| `excl_quarantine` | the wrongly-attached LOHAS Park Centadata rows (`db.QUARANTINE_SQL`); also ignored by the duplicate, bulk, outlier and price-check tests of other rows (Phase 5) |
 | `excl_parking` | the price includes a parking space (28Hse 連車位 `with_parking`, SRPE `has_parking`) (Phase 5) |
 | `excl_price_check` | under half or over double the building's median price per sq ft, adjusted to today's market by the RVD index of the flat's size class (5+ otherwise-clean deals; part-share transfers) (Phase 5) |
 
@@ -159,8 +158,8 @@ the district's clean median, or under 0.5× the same flat's other clean sales wi
 
 The fair-price model adds its own exclusions on top (`features.py` `exclude_reason`,
 decisions.md "Phase 4 build"); the stored views are unchanged. `db.txn_all_sql(latest)`
-runs the `txn_all` query over any `txn_latest`-shaped source, which is how the model leaves
-out the quarantined rows (`db.QUARANTINE_SQL`) before the flags are computed.
+runs the `txn_all` query over any `txn_latest`-shaped source. (The quarantine flag was
+removed 2026-10-23: the wrong LOHAS Park rows were deleted.)
 
 The views are recomputed on every query. At territory scale (Phase 3) `txn_all` may need to
 be materialised as a table after each load.

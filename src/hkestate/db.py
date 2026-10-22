@@ -360,12 +360,11 @@ TABLES_DDL = [
 def _same_sale_sql() -> str:
     """When row `o` is another copy of the sale in row `a` (both from `base`, already matched
     on the unit or on building + flat) and the better copy: not the row itself, not
-    quarantined, price within 1%, dates within 90 days, and a better (lower) source rank,
+    price within 1%, dates within 90 days, and a better (lower) source rank,
     ties going to the source that sorts first and, within one source, to the lowest
     source_id (Centadata stores some sales under two ids, the agreement and its assignment
     weeks apart at the same price: 4,225 pairs on 2026-10-21)."""
     return f"""NOT (a.source = o.source AND a.source_id = o.source_id)
-         AND NOT o.excl_quarantine
          AND abs(a.price_hkd - o.price_hkd) <= {DUP_PRICE_TOL} * o.price_hkd
          AND abs(date_diff('day', a.deal_date, o.deal_date)) <= {DUP_DAYS}
          AND (o.source_rank < a.source_rank
@@ -376,20 +375,18 @@ def _same_sale_sql() -> str:
 
 def txn_all_sql(latest: str = "txn_latest") -> str:
     """The query behind the `txn_all` view, reading deals from `latest` (a view or table
-    shaped like `txn_latest`). The fair-price model passes a filtered copy so rows it must
-    ignore (see QUARANTINE_SQL) never take part in the duplicate, bulk or outlier tests.
+    shaped like `txn_latest`).
 
     Added in Phase 5 (so the growth study and any other reader of `txn` share them):
-    `excl_quarantine` (QUARANTINE_SQL rows: flagged, and ignored by the duplicate, bulk,
-    outlier and price-check tests of other rows), `excl_parking` (the price includes a
-    parking space) and `excl_price_check` (the fair-price model's price check).
+    `excl_parking` (the price includes a parking space) and `excl_price_check` (the
+    fair-price model's price check).
 
     Task 4b (2026-10-21): `first_hand_label` is Centadata's own first/second-hand label
     (true/false, NULL where a row has none) and decides `excl_first_hand` where present;
     `excl_bad_date` flags deals dated before MIN_DEAL_DATE or after today."""
     return f"""
     WITH latest AS (
-        SELECT *, {QUARANTINE_SQL} AS excl_quarantine,
+        SELECT *,
             CASE WHEN json_valid(raw_json) THEN
                 coalesce(json_extract_string(raw_json, '$.with_parking') = 'true'
                          OR json_extract_string(raw_json, '$.has_parking') = 'true', false)
@@ -456,7 +453,7 @@ def txn_all_sql(latest: str = "txn_latest") -> str:
     ),
     bulk AS (
         SELECT building_id, deal_date
-        FROM flagged WHERE NOT excl_duplicate AND NOT excl_quarantine
+        FROM flagged WHERE NOT excl_duplicate
         GROUP BY building_id, deal_date
         HAVING count(DISTINCT unit_id) >= {BULK_MIN_UNITS}
     ),
@@ -472,7 +469,7 @@ def txn_all_sql(latest: str = "txn_latest") -> str:
             median(psf_hkd) AS med, count(*) AS n
         FROM psf
         WHERE psf_hkd IS NOT NULL
-          AND NOT (excl_duplicate OR excl_low_price OR excl_bulk OR excl_quarantine)
+          AND NOT (excl_duplicate OR excl_low_price OR excl_bulk)
         GROUP BY ALL
     ),
     mad AS (
@@ -482,7 +479,7 @@ def txn_all_sql(latest: str = "txn_latest") -> str:
         FROM psf p JOIN yr
           ON p.building_id = yr.building_id AND year(p.deal_date) = yr.yr
         WHERE p.psf_hkd IS NOT NULL
-          AND NOT (p.excl_duplicate OR p.excl_low_price OR p.excl_bulk OR p.excl_quarantine)
+          AND NOT (p.excl_duplicate OR p.excl_low_price OR p.excl_bulk)
         GROUP BY p.building_id, yr.yr, yr.med, yr.n
     ),
     outl AS (
@@ -518,7 +515,7 @@ def txn_all_sql(latest: str = "txn_latest") -> str:
         FROM adj
         WHERE _adj_psf IS NOT NULL
           AND NOT (excl_duplicate OR excl_low_price OR excl_first_hand OR excl_non_market
-                   OR excl_bulk OR excl_outlier OR excl_quarantine OR excl_parking
+                   OR excl_bulk OR excl_outlier OR excl_parking
                    OR excl_bad_date)
         GROUP BY building_id
     )
@@ -532,18 +529,6 @@ def txn_all_sql(latest: str = "txn_latest") -> str:
     LEFT JOIN bmed bm ON bm.building_id = adj.building_id
     LEFT JOIN unit u ON u.unit_id = adj.unit_id
     """
-
-
-# Rows stored wrongly and kept out of analysis without deleting them (raw data is
-# append-only; deleting needs the owner's OK, docs/open-items.md). Evaluated on txn_latest.
-# - The first LOHAS Park cross-check run (2026-10-16 19:28-19:31, before the matching fix)
-#   stored ~14,500 Centadata rows against the wrong LOHAS Park buildings. The fixed run
-#   started 19:44; every LOHAS Park Centadata row fetched before that is from the bad run.
-QUARANTINE_SQL = """
-    (source = 'centadata'
-     AND fetched_at < TIMESTAMP '2026-10-16 19:44:00'
-     AND estate_id IN (SELECT estate_id FROM estate WHERE group_name = 'lohas-park'))
-"""
 
 
 VIEWS_DDL = [
@@ -563,7 +548,7 @@ VIEWS_DDL = [
     CREATE OR REPLACE VIEW txn AS
     SELECT * FROM txn_all
     WHERE NOT (excl_duplicate OR excl_low_price OR excl_first_hand OR excl_non_market
-               OR excl_bulk OR excl_outlier OR excl_quarantine OR excl_parking
+               OR excl_bulk OR excl_outlier OR excl_parking
                OR excl_price_check OR excl_bad_date)
     """,
 ]
