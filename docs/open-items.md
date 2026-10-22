@@ -57,6 +57,10 @@ cache pruning.)*
     pages.
 
   The plan file's Tasks 5, 6, 7, 11 and 17 track them.
+- **SRPE multi-flat rows (pre-release review 2026-10-23, judgment call).** The parking cell
+  is copied to every flat in a multi-flat row. A one-flat row whose block cell wraps onto two
+  lines now raises and is skipped. Compare the skipped count at the next SRPE run with the
+  last one.
 - **The step after geocoding is untimed on live data (pre-release review 2026-10-23).**
   `geo.main`'s tail (`mark_mismatches`, `assign_mtr`, `set_building_ages`,
   `fill_districts`) runs in one database session with per-row updates over ~40k buildings.
