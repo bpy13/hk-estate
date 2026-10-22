@@ -155,6 +155,53 @@ def test_price_check_flags_deals_far_from_the_building_median_even_in_clusters()
     assert not features.price_check(pd.Series([10000.0, 1000.0]), pd.Series(["c", "c"])).any()
 
 
+def test_low_psf_check_floor_under_the_district_and_the_flats_own_sales():
+    """Task 8 (cheap-sale rule). A 50-row sample of the clean sales under HK$1,000/sq ft was
+    94% real 1995-2006 tenement prices, so a district-level floor must sit very low (0.15 x the
+    district's index-adjusted median); part shares show up against the flat's own other clean
+    sales instead (under half of them, within 5 years)."""
+    adj = pd.Series([10000.0, 9500.0, 10500.0, 1200.0, 2000.0,  # district x
+                     10000.0, 10500.0, 4000.0, 4000.0,           # unit u in district y
+                     1000.0])                                     # no district
+    district = pd.Series(["x"] * 5 + ["y"] * 4 + [None])
+    unit = pd.Series(["x1", "x2", "x3", "x4", "x5", "u", "u", "u", "u", "z"])
+    dates = pd.to_datetime(["2020-01-01"] * 5
+                           + ["2020-01-01", "2022-01-01", "2021-01-01", "2010-01-01"]
+                           + ["2020-01-01"])
+    got = features.low_psf_check(adj, district, unit, dates)
+    # 1,200 is 0.12 of district x's median (10,000): flagged; 2,000 (0.2) is not
+    assert list(got[:5]) == [False, False, False, True, False]
+    # the 2021 sale at 4,000 is under half the flat's other clean sales within 5 years; the
+    # 2010 one has no other sale within 5 years and sits at 0.4 of district y: kept
+    assert list(got[5:9]) == [False, False, True, False]
+    # no district: judged against the median of every clean deal
+    assert bool(got[9])
+
+
+def test_low_psf_reason_on_deals(tmp_path):
+    path = make_db(tmp_path / "t.duckdb", n_deals=120)
+    con = db.connect(path)
+    # a small building (under 5 clean deals, so the building price check never judges it)
+    con.execute("INSERT INTO building (building_id, estate_id, name_zh, completion_date, floors, "
+                "flats, saleable_to_gross) VALUES ('cd-1-LOW', 'cd-2-AAA', '第4座', "
+                "DATE '2005-06-01', 30, 240, NULL)")
+    con.execute("INSERT INTO master_building (building_id, estate_code, block_name, district, "
+                "lat, lon, mtr_m, built_year, built_basis) VALUES ('cd-1-LOW', '2-AAA', '第4座', "
+                "'元朗區', 22.46, 114.0, 800, 2005, 'completion')")
+    # flat 20/B sold whole in 2024 and as a part share (about a third of the price) in 2025
+    add_deal(con, "whole", "cd-1-LOW", 20, "B", date(2024, 1, 10), 7_000_000, source="centadata")
+    add_deal(con, "part", "cd-1-LOW", 20, "B", date(2025, 1, 10), 2_500_000, source="centadata")
+    # a lone sale at HK$1,200/sq ft, about a tenth of the district's level
+    add_deal(con, "floor", "cd-1-LOW", 8, "C", date(2025, 3, 1), 600_000, source="centadata")
+    raw = features.extract(con)
+    con.close()
+    reasons = features.deal_features(raw).set_index("source_id")["exclude_reason"]
+    assert reasons["part"] == "low_psf"
+    assert reasons["floor"] == "low_psf"
+    assert reasons["whole"] is None
+    assert "low_psf" in features.EXCLUDE_ORDER
+
+
 # ---- the feature tables from a database ----------------------------------------------------
 
 

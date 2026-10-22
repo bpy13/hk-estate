@@ -211,6 +211,38 @@ def price_check(adj_psf: pd.Series, building: pd.Series) -> pd.Series:
     return out.fillna(False).astype(bool)
 
 
+# Cheap-sale rule (Task 8, 2026-10-23): a floor for buildings the price check can't judge
+# (under 5 clean deals: tenements, village houses, small blocks). A 50-row sample of the clean
+# sales under HK$1,000/sq ft was 94% real 1995-2006 tenement prices at 0.2-0.35 of the
+# district's index-adjusted median, so the district floor sits at 0.15 (only impossible
+# prices). Part shares show instead against the flat's own other clean sales: under half of
+# their index-adjusted level within 5 years (the price check's 0.5, applied to one flat).
+LOW_PSF_DISTRICT_SHARE = 0.15
+LOW_PSF_UNIT_SHARE = 0.5
+LOW_PSF_UNIT_YEARS = 5
+
+
+def low_psf_check(adj_psf: pd.Series, district: pd.Series, unit: pd.Series,
+                  dates: pd.Series) -> pd.Series:
+    """True for deals under LOW_PSF_DISTRICT_SHARE x their district's median adjusted price
+    per sq ft (the median of every deal where the district is unknown), or under
+    LOW_PSF_UNIT_SHARE x the median of the same flat's other deals within LOW_PSF_UNIT_YEARS.
+    All inputs are the otherwise-clean deals, aligned on one index."""
+    dist_med = district.map(adj_psf.groupby(district).median()).fillna(adj_psf.median())
+    low = adj_psf < LOW_PSF_DISTRICT_SHARE * dist_med
+
+    k = pd.DataFrame({"unit": unit, "date": pd.to_datetime(dates), "adj": adj_psf})
+    k = k[k["unit"].notna() & k["adj"].notna() & k["date"].notna()]
+    k = k[k["unit"].duplicated(keep=False)].reset_index()  # flats sold more than once
+    if not k.empty:
+        pairs = k.merge(k, on="unit", suffixes=("", "_o"))
+        near = (pairs["index"] != pairs["index_o"]) & (
+            (pairs["date"] - pairs["date_o"]).abs() <= pd.Timedelta(days=365 * LOW_PSF_UNIT_YEARS))
+        ref = pairs[near].groupby("index")["adj_o"].median()
+        low |= (adj_psf < LOW_PSF_UNIT_SHARE * ref.reindex(adj_psf.index)).fillna(False)
+    return low.fillna(False).astype(bool)
+
+
 def agreement_dates(df: pd.DataFrame, lag_days: int) -> pd.Series:
     """Agreement (instrument) date per deal: the source's own where it gives one (Centadata,
     SRPE); 28Hse Land Registry deals carry the registration date, so they move back by the
@@ -491,6 +523,7 @@ EXCLUDE_ORDER = [
     "no_building", "house", "duplicate", "first_hand", "first_hand_rule", "parking",
     "non_market", "low_price", "bulk", "outlier", "derived", "no_area", "too_old", "in_future",
     "price_check",  # applied last, against the deals left (see price_check)
+    "low_psf",  # after price_check, against the deals it left (see low_psf_check)
 ]
 
 
@@ -575,6 +608,13 @@ def deal_features(raw: dict) -> pd.DataFrame:
             raw["index"], d.loc[clean, "rvd_class"], d.loc[clean, "agreement_date"])
         flagged = price_check(pd.Series(adj, index=d.index[clean]), d.loc[clean, "building_id"])
         reason = reason.mask(flagged.reindex(d.index, fill_value=False), "price_check")
+        # the cheap-sale rule judges the deals the price check left, against their district
+        # and the flat's own other sales (small buildings the price check never judges)
+        left = clean & reason.isna()
+        adj_left = pd.Series(adj, index=d.index[clean]).reindex(d.index[left])
+        low = low_psf_check(adj_left, d.loc[left, "district"], d.loc[left, "unit_id"],
+                            d.loc[left, "agreement_date"])
+        reason = reason.mask(low.reindex(d.index, fill_value=False), "low_psf")
     d["exclude_reason"] = reason
     d = d.drop(columns=["anchor_date", "building_flats"])
     return d.reset_index(drop=True)

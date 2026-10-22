@@ -181,7 +181,7 @@ building, so it finds no subsidised estate. Tasks 2-3 below follow
     within 2% and price within 2%, and their floor band and flat are equal **or either is
     blank**. The new `also_listed` column names the other. Applies across and within
     sources. Green.
-- [ ] **Task 4: shortlist file and dashboard default**
+- [x] **Task 4: shortlist file and dashboard default**
   - Files: modify `src/hkestate/rank.py` (`write`), `src/hkestate/dashboard_data.py` and
     `app/dashboard.py`. Tests in `tests/test_rank.py` and `tests/test_dashboard.py`.
   - Done when:
@@ -234,6 +234,26 @@ building, so it finds no subsidised estate. Tasks 2-3 below follow
     - it removes most of the non-real ones and under 10% of the real ones in the sample
 
     Green.
+  - Notes (2026-10-23, done): on the 2026-10-22 snapshot 1,558 clean sales (deal_features
+    `exclude_reason` None) are under HK$1,000/sq ft, not 2,134: the datacheck counted the
+    `txn` view, which lacks the model's first-hand rule and other exclusions. All Centadata;
+    1990s 158, 2000s 1,391, 2010s 8, 2020s 1. Sample of 50 (seed 8), classified from the
+    flat's other sales, the building's same-year median and the flat's area against the
+    building's: **real old price 47, part share (suspected) 3, area error 0, other 0**. The
+    real ones are 1950s-60s tenement flats (Sham Shui Po, Yau Tsim Mong, Kowloon City) sold
+    1995-2006 for HK$0.5-0.8m, at 0.2-0.35 of the district's index-adjusted median (e.g.
+    福華街564號 5/F: 2002 $0.52m, 2004 $0.50m, 2014 $1.99m, 2018 $4.0m). The 3 suspected
+    part shares: 嘉湖山莊 8座 30/H 2002 at half the block's price that year; 鈞德樓 2/K 2009 at
+    0.56 of the building's; 九龍城道24號 7/F 2012 at HK$0.5m (0.11 of the district).
+    Rule chosen: `low_psf` = index-adjusted psf under 0.15x the district's clean median, or
+    under 0.5x the median of the flat's other clean sales within 5 years (the plan's 0.25
+    district floor would remove 14 of the 47 real ones; 0.15 removes 1 of 47 and 1 of the 3
+    part shares; a 25-row check of the flat-level part found about 20 part shares). Not met:
+    "most of the non-real ones" in the sample (1 of 3; the other two sit at 0.27 and 0.52 of
+    the district, among real prices, and have no clean sale of the same flat within 5 years).
+    Removes 485 clean sales on the snapshot (1990s 125, 2000s 193, 2010s 100, 2020s 67; 45
+    under HK$1,000). Decision recorded in docs/decisions.md. Takes effect at the Task 11
+    retrain.
 - [ ] **Task 8b: longer first-hand window for newer buildings**
   - Files: modify `src/hkestate/features.py` (first-hand rule). Test
     `tests/test_features.py`.

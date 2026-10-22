@@ -464,6 +464,24 @@ deleted. One reason per row, first that applies: `subsidised`, `check_match`, `c
   check_combined 115, check_area 89, check_price 81, check_area_basis 52, check_subsidised 5,
   subsidised 2); 5,233 duplicates merged.
 
+## Cheap-sale rule (2026-10-23, Claude's call)
+New `exclude_reason` value `low_psf` in `features.deal_features` (Task 8), applied after the
+building price check to the deals it left. A deal is out when its index-adjusted price per
+sq ft is (a) under 0.15x its district's median over clean deals (the median of every clean
+deal where the district is unknown), or (b) under half the median of the same flat's other
+clean sales within 5 years. Why so low a district floor: a 50-row sample of the 1,558 clean
+sales under HK$1,000/sq ft on the 2026-10-22 snapshot was 47 real old prices (1950s-60s
+tenement flats in Sham Shui Po, Yau Tsim Mong and Kowloon City sold 1995-2006 for
+HK$0.5-0.8m, consistent with the flat's later sales and the building's other deals), 3
+suspected part shares, 0 area errors. Real tenement prices sit at 0.2-0.35 of the district's
+level, so the plan's 0.25 floor would have removed about half of them; 0.15 catches only
+prices no whole flat fetched. The flat-level check (b) is the price check's 0.5 applied to one
+flat, for the small buildings (under 5 clean deals) the price check never judges; of 25 random
+hits, about 20 looked like part shares (the flat sold at 2-4x within a few years with the
+index flat or falling). On the snapshot the rule removes 485 clean sales (1990s 125, 2000s
+193, 2010s 100, 2020s 67; 45 of them under HK$1,000/sq ft). The shared `txn` view is
+unchanged; the rule lives in the model's feature table only.
+
 ## Repository
 - **Public GitHub repo `hk-estate` on account `bpy13`** (2026-10-16). Because it is public:
   scraped data, the database and raw-page cache are never committed (`data/` ignored), and no
