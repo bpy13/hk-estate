@@ -7,8 +7,13 @@ has 30 listing-deal pairs). Positive = the listing should sell below the model's
 
 Shown alongside, never changing the order: the 80% interval, confidence (`low` with fewer
 than 10 comparable deals in the same building in the last 24 months), keyword flags, and
-the top 3 SHAP reasons. Listings on several sites (same `dup_group`) are ranked once, at the
-lowest asking price, with the others in `also_listed`.
+the top 3 SHAP reasons. Listings on several sites (same `dup_group`), and the same flat listed
+twice (same building, area and price within 2%), are ranked once, at the lowest asking price,
+with the others in `also_listed`.
+
+Listing checks (`listing_checks`, docs/decisions.md "Listing checks"): a row with a data
+problem or doubtful value gets an `exclude_reason` (subsidised, check_area, check_price, ...)
+and goes after all other rows; `below_all_recent` is information, not an exclusion.
 
 Outputs: `data/reports/ranked_listings_<date>.csv` (UTF-8 with BOM so Excel shows Chinese)
 and `data/model/ranked_latest.parquet` (with SHAP values, for the dashboard).
@@ -16,6 +21,7 @@ and `data/model/ranked_latest.parquet` (with SHAP values, for the dashboard).
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -48,6 +54,171 @@ def _comps(deals: pd.DataFrame, today: date) -> pd.DataFrame:
     c = deals[deals["exclude_reason"].isna() & (deals["agreement_date"] > since)]
     return c.groupby("building_id").agg(comps_24m=("source_id", "size"),
                                         comps_median_psf=("psf_hkd", "median"))
+
+
+# ---- listing checks (plan 2026-10-23 Tasks 2-3; thresholds: docs/decisions.md "Listing checks")
+# A check never changes a listing's value; it names a reason to look at the listing before
+# believing its discount. Rows with a reason go to the end of the ranking, never deleted.
+SUBSIDISED_PATH = Path(__file__).with_name("subsidised_estates.csv")
+AREA_MIN_SQFT, AREA_MAX_SQFT = 150, 5000
+AREA_EXACT_TOL = 0.03          # within 3% of a recorded unit area = the same saleable area
+GROSS_RATIO = (1.12, 1.45)     # listed / recorded area in this band looks like a gross area
+NOT_ONE_FLAT_RATIO = 1.5       # at or above: a typo or more than one flat
+MIN_RECORDED_AREAS = 3         # recorded areas a building needs before we compare without a flat
+PRICE_RATIO = (0.6, 2.5)       # asking vs the building's index-adjusted median: typo guard
+MODEL_MIN_COMPS, MODEL_RATIO = 5, 1.25
+SUBSIDISED_RATIO, SUBSIDISED_MIN_DEALS = 0.7, 3
+BELOW_ALL_MIN_COMPS = 3        # below_all_recent needs this many deals in the window
+DUP_TOLERANCE = 0.02           # same-flat duplicates: area and price within 2%
+_NOT_ONE_FLAT_WORDS = re.compile(r"複式|天台")
+CHECK_ORDER = ["subsidised", "check_match", "check_area", "check_combined", "check_area_basis",
+               "check_price", "check_model", "check_subsidised"]
+
+
+def subsidised_estates(path: Path | None = None) -> frozenset[str]:
+    """Names of Housing Authority (HOS, PSPS, TPS) courts: resale rules distort their prices
+    and the project covers private flats only."""
+    df = pd.read_csv(path or SUBSIDISED_PATH, encoding="utf-8-sig")
+    return frozenset(df["estate_name"].dropna().astype(str).str.strip())
+
+
+def _text(*values) -> str:
+    return " ".join(v for v in values if isinstance(v, str))
+
+
+def _nearest(areas: np.ndarray, x: float) -> float:
+    return float(areas[np.abs(areas - x).argmin()])
+
+
+def _area_reasons(li: pd.DataFrame, deals: pd.DataFrame) -> pd.Series:
+    """check_area / check_combined / check_area_basis, against the unit areas the building's
+    deals record (saleable basis). Flat letters match their recorded area to 0.998-1.000."""
+    rec = deals[(deals["area_basis"] == "saleable") & (deals["area_sqft"] > 0)
+                & deals["building_id"].notna()][["building_id", "flat", "area_sqft"]].copy()
+    rec["area_sqft"] = rec["area_sqft"].round(1)
+    rec = rec.drop_duplicates()
+    by_building = {b: np.sort(g["area_sqft"].unique()) for b, g in rec.groupby("building_id")}
+    by_flat = {k: np.sort(g["area_sqft"].unique())
+               for k, g in rec.dropna(subset=["flat"]).groupby(["building_id", "flat"])}
+    out = []
+    for b, flat, area, feat, ftext in zip(li["building_id"], li["flat"], li["area_sqft"],
+                                          li["features"], li["floor_text"], strict=True):
+        text = _text(feat, ftext)
+        combined = "相鄰" in text
+        special = bool(_NOT_ONE_FLAT_WORDS.search(text))
+        if not area > 0:
+            out.append(None)
+        elif area < AREA_MIN_SQFT or area > AREA_MAX_SQFT:
+            out.append("check_area")
+        else:
+            everything = by_building.get(b)
+            enough = everything is not None and len(everything) >= MIN_RECORDED_AREAS
+            ref = by_flat.get((b, flat)) if isinstance(flat, str) and flat else None
+            if ref is None and enough:
+                ref = everything
+            ratio = area / _nearest(ref, area) if ref is not None else None
+            if ratio is not None and ratio >= NOT_ONE_FLAT_RATIO and enough \
+                    and not (special or combined):
+                out.append("check_area")
+            elif combined:
+                out.append("check_combined")
+            elif ratio is not None and not special and GROSS_RATIO[0] <= ratio <= GROSS_RATIO[1]:
+                out.append("check_area_basis")
+            else:
+                out.append(None)
+    return pd.Series(out, index=li.index, dtype=object)
+
+
+def listing_checks(li: pd.DataFrame, deals: pd.DataFrame, index: pd.DataFrame, today: date,
+                   subsidised=None) -> pd.DataFrame:
+    """`exclude_reason` (first of CHECK_ORDER that applies, else None) and the information
+    flag `below_all_recent` (asking per sq ft under the building's lowest clean deal of the
+    last 24 months) for each listing in `li` (needs the valuation columns of `rank`).
+    `deals` is `features.deal_features`; `index` the RVD price index."""
+    subsidised = subsidised_estates() if subsidised is None else subsidised
+    clean = deals[deals["exclude_reason"].isna() & deals["building_id"].notna()
+                  & (deals["psf_hkd"] > 0)]
+    since = pd.Timestamp(today) - pd.DateOffset(months=COMPS_MONTHS)
+    recent = clean[clean["agreement_date"] > since]
+
+    # asking vs the building's index-adjusted median (all years of clean deals)
+    psf = clean["psf_hkd"].astype(float)
+    ask = li["asking_psf"].astype(float)
+    if not index.empty:
+        psf = psf / pd.Series(features.deflator(index, clean["rvd_class"],
+                                                clean["agreement_date"]), index=clean.index)
+        ask = ask / features.deflator(index, li["rvd_class"],
+                                      pd.Series([pd.Timestamp(today)] * len(li)))
+    median = psf.groupby(clean["building_id"]).median()
+    price_ratio = ask / li["building_id"].map(median)
+
+    # stop-gap for subsidised courts missing from the names file: a 苑/邨 whose 24-month
+    # median is under 0.7x its district's
+    est = recent.groupby("estate_key")["psf_hkd"].agg(["median", "size"])
+    dist = recent.groupby("district")["psf_hkd"].median()
+    est_district = recent.groupby("estate_key")["district"].first().reindex(est.index)
+    est_ratio = est["median"] / est_district.map(dist)
+    cheap_estate = est_ratio[(est["size"] >= SUBSIDISED_MIN_DEALS)
+                             & (est_ratio < SUBSIDISED_RATIO)].index
+    name = li["estate_name"].fillna("")
+
+    conditions = {
+        "subsidised": name.isin(subsidised),
+        "check_match": li["match_method"].eq("check_match"),
+        "check_price": (price_ratio < PRICE_RATIO[0]) | (price_ratio > PRICE_RATIO[1]),
+        "check_model": (li["comps_24m"] >= MODEL_MIN_COMPS)
+                       & (li["fair_psf"] > MODEL_RATIO * li["comps_median_psf"]),
+        "check_subsidised": name.str.endswith(("苑", "邨")) & li["estate_key"].isin(cheap_estate),
+    }
+    area = _area_reasons(li, deals)
+    for k in ("check_area", "check_combined", "check_area_basis"):
+        conditions[k] = area.eq(k)
+    reason = pd.Series([None] * len(li), index=li.index, dtype=object)
+    for k in reversed(CHECK_ORDER):
+        reason = reason.mask(conditions[k].fillna(False).astype(bool), k)
+
+    lowest = recent.groupby("building_id")["psf_hkd"].agg(["min", "size"])
+    lowest = lowest["min"].where(lowest["size"] >= BELOW_ALL_MIN_COMPS)
+    below = li["asking_psf"] < li["building_id"].map(lowest)
+    return pd.DataFrame({"exclude_reason": reason, "below_all_recent": below.fillna(False)})
+
+
+def _blank(s: pd.Series) -> np.ndarray:
+    return (s.isna() | s.isin(["", "unknown"])).to_numpy()
+
+
+def _collapse_same_flat(li: pd.DataFrame) -> pd.DataFrame:
+    """Same building, area and price within 2%, floor band and flat equal or blank on either
+    side (one site may omit them): one flat listed twice, on one site or several. Keeps the
+    first row in sort order (clean rows first, then lowest asking price); the others go to
+    `also_listed`. Greedy against the kept row, so a chain of near-equal prices can't drift."""
+    li = li.sort_values(["_excluded", "asking_hkd", "key"])
+    drop = np.zeros(len(li), dtype=bool)
+    extra: dict[int, list[str]] = {}
+    area = li["area_sqft"].to_numpy(dtype=float)
+    price = li["asking_hkd"].to_numpy(dtype=float)
+    keys = li["key"].to_numpy()
+    flat, flat_blank = li["flat"].to_numpy(dtype=object), _blank(li["flat"])
+    band, band_blank = li["floor_band"].to_numpy(dtype=object), _blank(li["floor_band"])
+    for rows in li.groupby("building_id", sort=False).indices.values():
+        for n, i in enumerate(rows):
+            if drop[i]:
+                continue
+            later = rows[n + 1:]
+            later = later[~drop[later]]
+            hit = (np.abs(area[later] - area[i]) <= DUP_TOLERANCE * area[i]) \
+                & (np.abs(price[later] - price[i]) <= DUP_TOLERANCE * price[i]) \
+                & (flat_blank[later] | flat_blank[i] | (flat[later] == flat[i])) \
+                & (band_blank[later] | band_blank[i] | (band[later] == band[i]))
+            for j in later[hit]:
+                drop[j] = True
+                extra.setdefault(i, []).append(keys[j])
+    kept = li[~drop].copy()
+    for i, more in extra.items():
+        row = li.index[i]
+        old = kept.at[row, "also_listed"]
+        kept.at[row, "also_listed"] = ", ".join(([old] if isinstance(old, str) else []) + more)
+    return kept
 
 
 def _display_values(row) -> dict:
@@ -116,19 +287,31 @@ def rank(raw: dict, m: model.FairPrice, today: date | None = None) -> Ranked:
         li[f"reason_{k + 1}"] = [r[k] if len(r) > k else None for r in reasons]
     li["floor"] = li.apply(_floor_text, axis=1)
 
-    # one row per cross-site duplicate group, at the lowest asking price
+    checks = listing_checks(li, deals, raw["index"], today)
+    li["exclude_reason"] = checks["exclude_reason"]
+    li["below_all_recent"] = checks["below_all_recent"]
+    li["_excluded"] = li["exclude_reason"].notna()
+
+    # one row per cross-site duplicate group (same dup_group), at the lowest asking price,
+    # clean rows first
     li["key"] = li["source"] + ":" + li["listing_id"]
     li["dup_group"] = li["dup_group"].fillna(li["key"])
-    li = li.sort_values(["dup_group", "asking_hkd", "key"])
+    li = li.sort_values(["dup_group", "_excluded", "asking_hkd", "key"])
     others = li.groupby("dup_group")["key"].agg(list)
     li = li.drop_duplicates("dup_group", keep="first").copy()
     li["also_listed"] = [", ".join(k for k in others[g] if k != key) or None
                          for g, key in zip(li["dup_group"], li["key"], strict=True)]
+    # then the same flat listed twice (any site)
+    li = _collapse_same_flat(li)
 
-    li = li.sort_values("discount_pct", ascending=False).reset_index(drop=True)
+    # rows with a check reason go after all the others, each part best discount first
+    li = li.sort_values(["_excluded", "discount_pct"], ascending=[True, False]).drop(
+        columns="_excluded").reset_index(drop=True)
     li.insert(0, "rank", np.arange(1, len(li) + 1))
     counts = {"active_sale_listings": len(listings), "ranked": len(li),
               "duplicates_merged": int(listings["value_note"].isna().sum()) - len(li),
+              "excluded": {str(k): int(v) for k, v in
+                           li["exclude_reason"].value_counts().items()},
               "not_valued": {str(k): int(v) for k, v in not_valued.items()},
               "gap_pairs": int(gaps["n_pairs"].sum()) if not gaps.empty else 0}
     return Ranked(li, gaps, counts)
@@ -140,6 +323,7 @@ CSV_COLUMNS = [
     "asking_psf", "gap_pct", "gap_basis", "expected_deal_hkd", "fair_price_hkd", "fair_low_hkd",
     "fair_high_hkd", "fair_psf", "confidence", "comps_24m", "comps_median_psf", "flags",
     "reason_1", "reason_2", "reason_3", "group", "floor_basis", "first_seen", "also_listed",
+    "exclude_reason", "below_all_recent",
 ]
 
 

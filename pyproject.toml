@@ -39,7 +39,7 @@ dev = ["pytest>=8", "ruff>=0.5", "nbstripout>=0.7"]
 where = ["src"]
 
 [tool.setuptools.package-data]
-hkestate = ["keywords.yml"]
+hkestate = ["keywords.yml", "subsidised_estates.csv"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

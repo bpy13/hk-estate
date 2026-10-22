@@ -24,13 +24,33 @@ def ranked(tmp_path, monkeypatch):
     monkeypatch.setenv("HKESTATE_DATA_DIR", str(tmp_path))
     path = make_db(tmp_path / "hkestate.duckdb", n_deals=700)
     con = db.connect(path)
-    add_listing(con, "centanet", "CHEAP", "cd-1-AAA", price=3_000_000, area=520.0, flat="B",
+    add_listing(con, "centanet", "CHEAP", "cd-1-AAA", price=6_500_000, area=520.0, flat="B",
                 floor_text="高層", band="high", facing="東南", dup_group="g1")
-    add_listing(con, "spacious", "CHEAP-DUP", "cd-1-AAA", price=3_100_000, area=520.0,
+    add_listing(con, "spacious", "CHEAP-DUP", "cd-1-AAA", price=6_600_000, area=520.0,
                 flat="B", band="high", dup_group="g1")
+    # Task 2 checks: one listing per rule (areas follow the fixture's flat letters:
+    # A 500, B 520, C 610, D 700, others 450)
+    add_listing(con, "centanet", "TYPO", "cd-1-BBB", price=90_000_000, area=6000.0, flat="A")
+    add_listing(con, "centanet", "GROSS", "cd-1-AAA", price=9_000_000, area=730.0, flat="C")
+    add_listing(con, "centanet", "COMBINED", "cd-1-BBB", price=10_000_000, area=700.0, flat="D",
+                features="相鄰單位")
+    add_listing(con, "centanet", "TWOFLATS", "cd-1-BBB", price=16_000_000, area=1100.0)
+    add_listing(con, "centanet", "DUPLEX", "cd-1-BBB", price=20_000_000, area=1100.0,
+                features="複式")
+    add_listing(con, "centanet", "TOOHIGH", "cd-1-AAA", price=30_000_000, area=520.0, flat="B")
+    add_listing(con, "centanet", "TOOLOW", "cd-1-AAA", price=4_300_000, area=520.0, flat="B",
+                band="low")
+    add_listing(con, "centanet", "LOWEST", "cd-1-AAA", price=5_900_000, area=500.0, flat="A")
+    # Task 3: same flat on one site twice (one with flat and band blank), and two different
+    # flats of one size at one price
+    add_listing(con, "centanet", "SAME1", "cd-1-BBB", price=7_000_000, area=450.0, flat="E",
+                band="mid")
+    add_listing(con, "centanet", "SAME2", "cd-1-BBB", price=7_100_000, area=451.0)
+    add_listing(con, "centanet", "DIFF1", "h28-1-b1", price=14_000_000, area=450.0, flat="G")
+    add_listing(con, "centanet", "DIFF2", "h28-1-b1", price=14_000_000, area=450.0, flat="H")
     add_listing(con, "centanet", "DEAR", "h28-1-b1", price=40_000_000, area=610.0, flat="C",
                 floor_text="18樓", features="分層單位|車位")
-    add_listing(con, "centanet", "FEW", "cd-1-NEW", price=7_000_000, area=500.0, flat="A",
+    add_listing(con, "centanet", "FEW", "cd-1-NEW", price=12_000_000, area=500.0, flat="A",
                 floor_text="中層", band="mid")
     add_listing(con, "centanet", "NOMATCH", None, price=5_000_000, area=400.0)
     con.execute("INSERT INTO risk_flag (source, listing_id, flag, evidence) "
@@ -43,7 +63,8 @@ def ranked(tmp_path, monkeypatch):
 
 def test_ranked_listings_sorted_by_discount_with_all_columns(ranked):
     df = ranked.table
-    assert list(df["discount_pct"]) == sorted(df["discount_pct"], reverse=True)
+    clean = df[df["exclude_reason"].isna()]  # excluded rows follow, see the Task 2 tests
+    assert list(clean["discount_pct"]) == sorted(clean["discount_pct"], reverse=True)
     assert df.iloc[0]["listing_id"] == "CHEAP"
     for col in ["fair_price_hkd", "fair_low_hkd", "fair_high_hkd", "confidence", "comps_24m",
                 "flags", "reason_1", "reason_2", "reason_3", "gap_pct", "gap_basis", "url"]:
@@ -65,6 +86,110 @@ def test_duplicates_across_sites_are_ranked_once(ranked):
     df = ranked.table
     assert "CHEAP-DUP" not in set(df["listing_id"])
     assert "spacious:CHEAP-DUP" in df.set_index("listing_id").loc["CHEAP", "also_listed"]
+
+
+def test_listing_checks_give_each_rule_its_reason(ranked):
+    df = ranked.table.set_index("listing_id")
+    reason = df["exclude_reason"]
+    assert reason["TYPO"] == "check_area"
+    assert reason["TWOFLATS"] == "check_area"  # 1,100 sq ft vs nearest recorded 700 (1.57x)
+    assert reason["GROSS"] == "check_area_basis"  # 730 vs flat C's recorded 610 (1.20x)
+    assert reason["COMBINED"] == "check_combined"
+    assert reason["TOOHIGH"] == "check_price"
+    assert reason["TOOLOW"] == "check_price"
+    for ok in ("CHEAP", "DEAR", "FEW", "DUPLEX", "LOWEST"):  # duplex: 1,100 allowed
+        assert pd.isna(reason[ok]), ok
+
+
+def test_excluded_rows_go_to_the_end_and_are_kept(ranked):
+    df = ranked.table
+    flagged = df["exclude_reason"].notna()
+    assert flagged.any()
+    first_excluded = flagged.to_numpy().argmax()
+    assert flagged.iloc[first_excluded:].all()  # no clean row after an excluded one
+    assert list(df["rank"]) == list(range(1, len(df) + 1))
+    for part in (df[~flagged], df[flagged]):
+        assert list(part["discount_pct"]) == sorted(part["discount_pct"], reverse=True)
+    assert ranked.counts["excluded"]["check_area"] == 2
+
+
+def test_below_all_recent_is_information_only(ranked):
+    df = ranked.table.set_index("listing_id")
+    assert bool(df.loc["LOWEST", "below_all_recent"])
+    assert pd.isna(df.loc["LOWEST", "exclude_reason"])
+    assert not bool(df.loc["DEAR", "below_all_recent"])
+
+
+def test_same_flat_listed_twice_on_one_site_is_one_row(ranked):
+    df = ranked.table.set_index("listing_id")
+    # SAME2 has no flat or band: it matches SAME1 on building, area (2%) and price (2%)
+    assert "SAME2" not in df.index
+    assert "centanet:SAME2" in df.loc["SAME1", "also_listed"]
+    # different flats of one size at one price stay two rows
+    assert {"DIFF1", "DIFF2"} <= set(df.index)
+
+
+def _frame(**cols):
+    base = {"building_id": "b", "flat": None, "area_sqft": 500.0, "asking_psf": 10_000.0,
+            "features": None, "floor_text": None, "estate_name": "某苑", "estate_key": "e",
+            "district": "D", "match_method": "exact", "fair_psf": 10_000.0, "comps_24m": 20,
+            "comps_median_psf": 10_000.0, "rvd_class": "B"}
+    base.update(cols)
+    return pd.DataFrame([base])
+
+
+def _deals(n_areas=4, psf=10_000.0):
+    rows = [{"building_id": "b", "flat": "ABCDE"[i], "area_sqft": 400.0 + 100 * i,
+             "area_basis": "saleable", "psf_hkd": psf, "exclude_reason": None,
+             "agreement_date": pd.Timestamp("2026-06-01"), "rvd_class": "B",
+             "estate_key": "e", "district": "D"} for i in range(n_areas)]
+    return pd.DataFrame(rows)
+
+
+def _check(li, deals, subsidised=frozenset()):
+    return rank.listing_checks(li, deals, pd.DataFrame(), TODAY, subsidised=subsidised)
+
+
+def test_check_model_needs_five_comps_and_fair_over_1_25x():
+    d = _deals()
+    assert _check(_frame(fair_psf=12_600.0, comps_24m=5), d)["exclude_reason"][0] == "check_model"
+    assert pd.isna(_check(_frame(fair_psf=12_400.0, comps_24m=5), d)["exclude_reason"][0])
+    assert pd.isna(_check(_frame(fair_psf=15_000.0, comps_24m=4), d)["exclude_reason"][0])
+
+
+def test_area_band_and_nearest_area_rules():
+    d = _deals()  # recorded areas 400, 500, 600, 700
+    assert _check(_frame(area_sqft=149.0), d)["exclude_reason"][0] == "check_area"
+    assert _check(_frame(area_sqft=5001.0), d)["exclude_reason"][0] == "check_area"
+    assert _check(_frame(area_sqft=1050.0), d)["exclude_reason"][0] == "check_area"  # 1.5x of 700
+    assert pd.isna(_check(_frame(area_sqft=1050.0, features="天台"), d)["exclude_reason"][0])
+    assert pd.isna(_check(_frame(area_sqft=1050.0), _deals(n_areas=2))["exclude_reason"][0])
+
+def test_subsidised_names_and_the_stop_gap_flag():
+    d = _deals()
+    assert _check(_frame(estate_name="銀蔚苑"), d, subsidised={"銀蔚苑"})[
+        "exclude_reason"][0] == "subsidised"
+    assert "銀蔚苑" in rank.subsidised_estates()
+    # estate median under 0.7x its district's, 3+ deals, name ends 苑: stop-gap flag
+    cheap = _deals(psf=5_000.0).assign(estate_key="e")
+    other = _deals(psf=10_000.0).assign(estate_key="f", building_id="c")
+    deals = pd.concat([cheap, other])
+    assert _check(_frame(), deals)["exclude_reason"][0] == "check_subsidised"
+    assert pd.isna(_check(_frame(estate_name="某大廈"), deals)["exclude_reason"][0])
+
+
+def test_the_wrong_match_method_is_flagged():
+    assert _check(_frame(match_method="check_match"), _deals())["exclude_reason"][0] == (
+        "check_match")
+
+
+def test_gross_area_band_for_a_flat_letter_and_without_one():
+    d = _deals()  # flat A 400, B 500, C 600, D 700
+    assert _check(_frame(area_sqft=600.0, flat="B"), d)["exclude_reason"][0] == (
+        "check_area_basis")  # 600 / 500 = 1.20
+    assert pd.isna(_check(_frame(area_sqft=510.0, flat="B"), d)["exclude_reason"][0])
+    # no flat letter: against the nearest recorded area (840 / 700 = 1.20)
+    assert _check(_frame(area_sqft=840.0), d)["exclude_reason"][0] == "check_area_basis"
 
 
 def test_gap_assumed_flags_and_confidence(ranked):

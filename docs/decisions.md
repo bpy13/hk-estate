@@ -436,6 +436,34 @@ exit 0xC000013A (a console Ctrl+C/close); the day before, all three long jobs di
   apply (user, 2026-10-22). Fixtures, history and commit email stay as they are (user).
 - **Redirect robots check and the scheduled-task registration wait** (user, 2026-10-22).
 
+## Listing checks (2026-10-23, Claude's call)
+From `docs/ranking-diagnosis.md` (rank.py `listing_checks`). A check never changes a value;
+it puts a reason in `exclude_reason` and the row goes to the end of the ranking, never
+deleted. One reason per row, first that applies: `subsidised`, `check_match`, `check_area`,
+`check_combined`, `check_area_basis`, `check_price`, `check_model`, `check_subsidised`.
+- `subsidised`: estate named in `src/hkestate/subsidised_estates.csv` (seed: 銀蔚苑; the
+  Housing Authority's HOS/PSPS/TPS list still to be added). The master list's own flag finds
+  nothing (diagnosis 2.7). 景翠苑 and 豐盛苑 are not in it: gross area and wrong building.
+- `check_subsidised` (stop-gap): name ends 苑 or 邨, and the estate's 24-month clean median
+  price per sq ft is under 0.7x its district's, with 3+ deals.
+- `check_area`: area under 150 or over 5,000 sq ft; or at least 1.5x the nearest recorded
+  saleable area when the building has 3+ recorded areas, unless the text says 複式, 天台 or 相鄰.
+- `check_area_basis`: listed area 1.12-1.45x the flat's recorded saleable area (nearest, when
+  the flat letter has one; else the nearest of the building's 3+ areas). Within 3% passes.
+  Not for 複式/天台. `check_combined`: the text says 相鄰 (two flats in one listing).
+- `check_price`: asking per sq ft under 0.6x or over 2.5x the building's index-adjusted
+  median (all clean deals). Lower bound 0.6 not the plan's 0.4: nothing real is below it.
+  A typo guard, not a filter.
+- `check_model`: 5+ comps in 24 months and fair price over 1.25x their median.
+- `check_match`: reserved for the matcher's flag for a block the estate doesn't have (Task 2b).
+- `below_all_recent`: information only. Asking per sq ft under the building's lowest clean
+  deal of the last 24 months, with 3+ such deals.
+- Duplicates: same building, area within 2%, price within 2%, floor band and flat equal or
+  blank on either side, on any site. Kept: the clean row, then the lowest asking price.
+- On the 2026-10-22 snapshot: 24,392 clean rows, 591 with a reason (check_model 247,
+  check_combined 115, check_area 89, check_price 81, check_area_basis 52, check_subsidised 5,
+  subsidised 2); 5,233 duplicates merged.
+
 ## Repository
 - **Public GitHub repo `hk-estate` on account `bpy13`** (2026-10-16). Because it is public:
   scraped data, the database and raw-page cache are never committed (`data/` ignored), and no
