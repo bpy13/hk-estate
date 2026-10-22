@@ -57,7 +57,8 @@ ROBUST_ONLY = True             # attribute effects: only the study's robust verd
 DISTRICT_YIELD_PULL = 0.5      # a district-level rent estimate: yield pulled halfway to the
 #                                district's median yield (growth study); building and estate
 #                                estimates count in full, an RVD-average estimate not at all
-SAME_FLAT_TOLERANCE = 0.02     # same building, floor and flat, area within 2%: one flat
+SAME_FLAT_TOLERANCE = 0.02     # same building and flat letter, area within 2% ...
+SAME_FLAT_PRICE_GAP = 0.05     # ... and asking within 5% of the cheaper: one flat
 
 # ---- buy-vs-rent and sell-vs-let assumptions (Task 19; docs/decisions.md) -------------------
 # Rates: 5% of the rateable value, taken here as the flat's annual rent (Rating and
@@ -307,32 +308,50 @@ def _candidates(profile: Profile, data: AdvisorData) -> tuple[pd.DataFrame, list
     return c, notes
 
 
+def _floors_agree(a, b) -> bool:
+    """Two floor labels from rank.py ('12/F' exact, 'high band', 'not given') can be one
+    flat unless both are known and differ: two exact floors, or two bands. An unknown floor,
+    or an exact floor against a band, cannot tell the flats apart, so it does not object."""
+    def kind(x):
+        if not isinstance(x, str) or x in ("", "not given", "unknown"):
+            return None
+        return "band" if x.endswith(" band") else "exact"
+    ka, kb = kind(a), kind(b)
+    return not (ka is not None and ka == kb and a != b)
+
+
 def _keep_cheaper_of_same_flat(c: pd.DataFrame) -> tuple[pd.DataFrame, int]:
-    """rank.py merges the same flat listed twice only when the prices are within 2%; two
-    listings of one flat (same building, floor and flat, area within 2%) at prices further
-    apart both reach here. Keep the cheaper, name the others in `also_listed`, and return how
-    many were merged. A blank floor or flat never matches (it could be another flat)."""
+    """rank.py merges the same flat listed twice only when the prices are within 2%. Merge
+    further listings only when they are truly that flat (changed 2026-10-23 after the
+    pre-release review; the ranked floor is a band or 'not given', never exact, so a shared
+    floor label alone matched different flats): same building, same non-blank flat letter,
+    floors that agree (`_floors_agree`), area within SAME_FLAT_TOLERANCE and price within
+    SAME_FLAT_PRICE_GAP of the cheaper. Keep the cheaper, name the others in `also_listed`,
+    and return how many were merged."""
     if c.empty or "floor" not in c or "flat" not in c:
         return c, 0
     if "also_listed" not in c:
         c["also_listed"] = None
     c = c.sort_values("price_hkd", kind="stable").reset_index(drop=True)  # unique labels
-    floor = c["floor"].astype(object)
     flat = c["flat"].astype(object)
-    known = (floor.notna() & ~floor.isin(["", "not given", "unknown"])
-             & flat.notna() & ~flat.isin(["", "unknown"]) & c["building_id"].notna())
+    known = (flat.notna() & ~flat.astype(str).str.strip().isin(["", "unknown", "nan"])
+             & c["building_id"].notna())
     drop, extra = [], {}
-    for _, rows in c[known].groupby(["building_id", "floor", "flat"], sort=False):
+    for _, rows in c[known].groupby(["building_id", "flat"], sort=False):
         if len(rows) < 2:
             continue
-        kept = rows.index[0]
-        area = float(rows["area_sqft"].iloc[0])
-        same = rows.iloc[1:]
-        same = same[(same["area_sqft"] - area).abs() <= SAME_FLAT_TOLERANCE * area]
-        if same.empty:
-            continue
-        drop += list(same.index)
-        extra[kept] = list(same["key"])
+        kept_rows: list = []  # cheapest first, so each row is compared with cheaper ones
+        for i, row in rows.iterrows():
+            home = next((k for k in kept_rows
+                         if abs(row["area_sqft"] - c.at[k, "area_sqft"])
+                         <= SAME_FLAT_TOLERANCE * c.at[k, "area_sqft"]
+                         and row["price_hkd"] <= (1 + SAME_FLAT_PRICE_GAP) * c.at[k, "price_hkd"]
+                         and _floors_agree(row["floor"], c.at[k, "floor"])), None)
+            if home is None:
+                kept_rows.append(i)
+            else:
+                drop.append(i)
+                extra.setdefault(home, []).append(row["key"])
     for kept, keys in extra.items():
         old = c.at[kept, "also_listed"]
         c.at[kept, "also_listed"] = ", ".join(([old] if isinstance(old, str) and old else [])

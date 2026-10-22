@@ -291,17 +291,34 @@ def test_yield_counts_by_how_near_the_rent_evidence_is(data):
 
 
 def test_same_flat_listed_twice_keeps_the_cheaper(data):
-    """rank.py merges the same flat only when the two prices are within 2%; a second listing
-    of L1's flat (10/F A, 452 sq ft) at 8.5m is merged into L1 (8.0m) here, named in
-    `also_listed`. A listing with no floor or flat given is never merged."""
-    twice = pd.DataFrame([_sale("L5", "b-harbour", 452, 2, 8_500_000, 9_500_000),
-                          {**_sale("L6", "b-harbour", 450, 2, 8_600_000, 9_500_000),
-                           "floor": "not given"}])
-    r = advisor.recommend(INVESTOR, replace(data, sale=pd.concat([SALE, twice])))
-    keys = list(r.listings["key"])
-    assert "L5" not in keys and "L6" in keys and "L1" in keys
-    assert r.listings.set_index("key").loc["L1", "also_listed"] == "L5"
-    assert "1 listings of a flat already listed cheaper merged into it" in r.notes
+    """rank.py merges the same flat only when the two prices are within 2%; the helper also
+    merges listings 2-5% apart, but only when they are truly one flat: same building, same
+    flat letter (never blank), same floor when both floors are known (an exact floor, or a
+    band), area within 2% and price within 5% of the cheaper. The ranked table's floor is
+    usually a band or 'not given', so the same flat letter on different floors must not
+    merge."""
+    rows = [
+        _sale("L5", "b-harbour", 452, 2, 8_300_000, 9_500_000),       # L1's flat, 3.75% dearer
+        {**_sale("L13", "b-harbour", 450, 2, 8_200_000, 9_500_000),   # floor unknown: may be L1
+         "floor": "not given"},
+        {**_sale("L7", "b-harbour", 450, 2, 8_100_000, 9_500_000),    # another floor
+         "floor": "11/F"},
+        {**_sale("L8", "b-harbour", 450, 2, 8_050_000, 9_500_000),    # no flat letter
+         "flat": ""},
+        _sale("L14", "b-harbour", 450, 2, 8_600_000, 9_500_000),      # 7.5% dearer: kept
+        # the same flat letter in different floor bands: two flats
+        {**_sale("L11", "b-mid", 600, 3, 6_600_000, 7_200_000), "floor": "high band",
+         "flat": "B"},
+        {**_sale("L12", "b-mid", 600, 3, 6_700_000, 7_200_000), "floor": "low band",
+         "flat": "B"},
+    ]
+    r = advisor.recommend(INVESTOR, replace(data, sale=pd.concat([SALE, pd.DataFrame(rows)])))
+    keys = set(r.listings["key"])
+    assert keys == {"L1", "L2", "L3", "L7", "L8", "L14", "L11", "L12"}
+    assert r.listings.set_index("key").loc["L1", "also_listed"] == "L13, L5"
+    assert "2 listings of a flat already listed cheaper merged into it" in r.notes
+    # 10/F A at 8.0m and 11/F A at 8.1m stay apart even though area and price match
+    assert pd.isna(r.listings.set_index("key").loc["L7", "also_listed"])
     # the same flat at a different size is another flat (L1 450 vs L4's 5,500 sq ft)
     assert r.listings.set_index("key").loc["L1", "score_space"] == \
         advisor.recommend(INVESTOR, data).listings.set_index("key").loc["L1", "score_space"]

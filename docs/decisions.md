@@ -509,6 +509,13 @@ weighted average by the profile's goal weights.
   building, floor and flat, area within 2%) at prices further apart, keeping the cheaper and
   naming the other in `also_listed` (809 of 13,091 investor candidates on the 10-22
   snapshot). A blank floor or flat never matches. Space score unchanged.
+  (changed 2026-10-23 after the pre-release review) The ranked table's floor is a band or
+  "not given", never exact, so matching on that label merged different flats (the same flat
+  letter on other floors). Now two listings merge only when they are truly one flat: same
+  building, same non-blank flat letter, floors that do not contradict (two exact floors or
+  two bands must be equal; "not given" does not object), area within 2% and asking within 5%
+  of the cheaper. Anything else is kept as its own listing. On the 10-22 ranked table: 420
+  of 24,385 clean listings merged (809 under the old rule).
 - **Investment (buy)** = mean of four parts: district growth from the growth study's
   `districts.csv` (setting `all`, flats sold twice): 0 at 0%/yr, 100 at 8%/yr; attribute
   effects from `effects.csv`, robust verdicts only, summed for the attributes the flat has:
