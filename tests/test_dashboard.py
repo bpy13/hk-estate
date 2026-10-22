@@ -107,6 +107,24 @@ def test_filters_narrow_the_list():
     assert len(dd.filter_ranked(df, confidence=["low"])) == 1
 
 
+def test_excluded_rows_are_hidden_unless_asked():
+    df = pd.DataFrame({"district": ["a", "b", "c"], "exclude_reason": [None, "check_area", None]})
+    assert list(dd.filter_ranked(df)["district"]) == ["a", "c"]
+    assert len(dd.filter_ranked(df, show_excluded=True)) == 3
+    assert len(dd.filter_ranked(df.drop(columns="exclude_reason"))) == 3  # older file
+
+
+def test_ranked_page_has_the_show_excluded_checkbox(data_dir, monkeypatch):
+    at = _app(data_dir, monkeypatch)
+    box = next(c for c in at.sidebar.checkbox if c.label.startswith("Show rows that failed"))
+    assert box.value is False
+    hidden = len(at.dataframe[0].value)
+    at = box.check().run()
+    assert not at.exception
+    assert len(at.dataframe[0].value) >= hidden
+    assert "exclude_reason" in at.dataframe[0].value.columns
+
+
 def test_run_status_names_commands_whose_newest_run_failed():
     log = pd.DataFrame({"run_id": [1, 2, 3], "command": ["ricacorp", "daily", "daily"],
                         "status": ["failed", "failed", "ok"], "started_at": ["a", "b", "c"],

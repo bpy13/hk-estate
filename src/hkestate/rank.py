@@ -327,6 +327,66 @@ CSV_COLUMNS = [
 ]
 
 
+SHORTLIST_SIZE = 50
+
+
+def shortlist(table: pd.DataFrame, n: int = SHORTLIST_SIZE) -> tuple[pd.DataFrame, pd.Series]:
+    """The top `n` rows with no exclusion reason and normal confidence (table order = best
+    discount first), plus how many rows each filter left out (by exclude_reason, and
+    'low confidence' for clean rows with few comparable deals)."""
+    clean = table["exclude_reason"].isna()
+    normal = table["confidence"] == "normal"
+    left_out = table.loc[~clean, "exclude_reason"].value_counts()
+    left_out.loc["low confidence"] = int((clean & ~normal).sum())
+    return table[clean & normal].head(n), left_out[left_out > 0]
+
+
+def _hk(x) -> str:
+    return f"{x / 1e6:,.2f}m"
+
+
+def shortlist_markdown(table: pd.DataFrame, today: date, n: int = SHORTLIST_SIZE) -> str:
+    top, left_out = shortlist(table, n)
+    lines = [
+        f"# Shortlist {today:%Y-%m-%d}", "",
+        f"The top {n} listings with the biggest discount to the model's fair price, after "
+        "leaving out rows with a data check reason (such as a doubtful area or price, or a "
+        "subsidised flat) and rows with low confidence (fewer than "
+        f"{LOW_CONFIDENCE_COMPS} comparable deals in the building in 24 months).", "",
+        "- **Discount**: how far the expected deal price (asking less the usual "
+        "asking-vs-deal gap) sits below fair price.",
+        "- **Fair range**: the model's 80% range for the fair price (HK$).",
+        "- **Reasons**: the three features that moved the fair price most.",
+        "- **Below all recent**: asking per sq ft is under every recent clean deal in the "
+        "building (information only).",
+        "- **Also listed**: the same flat on other sites or listings.", "",
+    ]
+    if len(left_out):
+        why = ", ".join(f"{k}: {v}" for k, v in left_out.items())
+        lines += [f"Left out: {int(left_out.sum())} rows ({why}).", ""]
+    for i, row in enumerate(top.itertuples(index=False), 1):
+        flat = " ".join(str(x) for x in (row.floor, row.flat) if isinstance(x, str) and x
+                        and x != "not given") or "floor and flat not given"
+        reasons = "; ".join(x for x in (row.reason_1, row.reason_2, row.reason_3)
+                            if isinstance(x, str))
+        flags = row.flags if isinstance(row.flags, str) and row.flags else "none"
+        also = row.also_listed if isinstance(row.also_listed, str) and row.also_listed else "no"
+        lines += [
+            f"## {i}. {row.estate_name or '(no estate)'} - {row.building_name or ''}".rstrip(" -"),
+            f"- Flat: {flat}, {row.area_sqft:,.0f} sq ft",
+            f"- Asking HK${_hk(row.asking_hkd)}; fair HK${_hk(row.fair_low_hkd)} to "
+            f"{_hk(row.fair_high_hkd)} (mid {_hk(row.fair_price_hkd)})",
+            f"- Discount: {row.discount_pct * 100:.1f}%",
+            f"- Reasons: {reasons or 'none'}",
+            f"- Flags: {flags}; below all recent: {'yes' if row.below_all_recent else 'no'}; "
+            f"also listed: {also}",
+            f"- {row.url}", "",
+        ]
+    if top.empty:
+        lines += ["No listing passes the filters.", ""]
+    return "\n".join(lines)
+
+
 def write(r: Ranked, today: date | None = None) -> dict[str, Path]:
     today = today or date.today()
     reports = get_data_dir() / "reports"
@@ -347,4 +407,7 @@ def write(r: Ranked, today: date | None = None) -> dict[str, Path]:
     mdir.mkdir(parents=True, exist_ok=True)
     parquet_path = mdir / "ranked_latest.parquet"
     r.table.assign(ranked_on=str(today)).to_parquet(parquet_path, index=False)
-    return {"csv": csv_path, "gaps": gap_path, "parquet": parquet_path}
+    short_path = reports / f"shortlist_{today:%Y%m%d}.md"
+    short_path.write_text(shortlist_markdown(r.table, today), encoding="utf-8")
+    return {"csv": csv_path, "gaps": gap_path, "parquet": parquet_path,
+            "shortlist": short_path}

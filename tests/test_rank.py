@@ -203,6 +203,38 @@ def test_gap_assumed_flags_and_confidence(ranked):
     assert ranked.counts["not_valued"] == {"no building match": 1}
 
 
+def test_shortlist_is_clean_normal_confidence_rows_only(ranked):
+    top, left_out = rank.shortlist(ranked.table)
+    assert len(top) <= rank.SHORTLIST_SIZE
+    assert top["exclude_reason"].isna().all() and (top["confidence"] == "normal").all()
+    assert list(top["discount_pct"]) == sorted(top["discount_pct"], reverse=True)
+    assert {"CHEAP", "DEAR"} <= set(top["listing_id"])
+    assert not {"TYPO", "TOOHIGH", "FEW"} & set(top["listing_id"])  # FEW: low confidence
+    assert left_out["check_area"] == 2 and left_out["low confidence"] >= 1
+    assert len(rank.shortlist(ranked.table, n=2)[0]) == 2
+
+
+def test_shortlist_file_is_plain_english_with_every_field(ranked):
+    text = rank.shortlist_markdown(ranked.table, TODAY)
+    assert text.startswith("# Shortlist 2026-10-17")
+    head = text.split("## 1.")[0]
+    for word in ("Discount", "Fair range", "Reasons", "Below all recent", "Also listed",
+                 "Left out"):
+        assert word in head, word
+    entry = text.split("## 1.")[1].split("## 2.")[0]
+    for part in ("Flat:", "Asking HK$", "fair HK$", "Discount:", "Reasons:", "Flags:",
+                 "below all recent:", "also listed:", "http"):
+        assert part in entry, part
+    assert "spacious:CHEAP-DUP" in text  # CHEAP's also_listed
+    assert "TYPO" not in text
+
+
+def test_write_makes_the_dated_shortlist(tmp_path, ranked):
+    paths = rank.write(ranked, today=TODAY)
+    assert paths["shortlist"] == tmp_path / "reports" / "shortlist_20261017.md"
+    assert paths["shortlist"].read_text(encoding="utf-8").startswith("# Shortlist")
+
+
 def test_rank_command_writes_dated_csv(tmp_path, monkeypatch, ranked):
     # the fixture trained a model in tmp_path; the command snapshots and ranks again
     assert cli.main(["--db", str(tmp_path / "hkestate.duckdb"), "rank"]) == 0

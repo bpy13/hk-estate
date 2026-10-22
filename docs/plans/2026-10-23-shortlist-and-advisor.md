@@ -257,7 +257,7 @@ building, so it finds no subsidised estate. Tasks 2-3 below follow
     Removes 485 clean sales on the snapshot (1990s 125, 2000s 193, 2010s 100, 2020s 67; 45
     under HK$1,000). Decision recorded in docs/decisions.md. Takes effect at the Task 11
     retrain.
-- [ ] **Task 8b: longer first-hand window for newer buildings**
+- [x] **Task 8b: longer first-hand window for newer buildings**
   - Files: modify `src/hkestate/features.py` (first-hand rule). Test
     `tests/test_features.py`.
   - Done when: a test written first shows a flat's first-ever sale 50 months after
@@ -266,6 +266,10 @@ building, so it finds no subsidised estate. Tasks 2-3 below follow
     buildings and stays 24 for older ones. Green.
   - Notes: after Task 8, same file. Takes effect at the Task 11 retrain. Record in
     decisions.md as Claude's call.
+  - Result: done. Window 72 months when the completion date is 2010 or later (completion
+    anchors only). Removes 5,012 clean sales on the snapshot (diagnosis counted 4,153; its
+    filter differs); median price 1.05x same-building-year resales (diagnosis: 1.12x).
+    Existing completion-date test fixture moved to a 2027 sale. Numbers in decisions.md.
 - [x] **Task 9: SRPE glued prices** `[parallel-ok]`
   - Files: modify `src/hkestate/sources/srpe.py`. Test `tests/test_srpe.py`.
   - Done when: a test built from row `3085:3 3:2 5:A A:2016-12-03` (HK$728,100,014,452,000)

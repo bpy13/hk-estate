@@ -53,9 +53,13 @@ def eval_report() -> str | None:
 
 
 def filter_ranked(df: pd.DataFrame, *, districts=None, price_m=None, size=None,
-                  need_flags=None, hide_flags=None, confidence=None) -> pd.DataFrame:
-    """The ranked list narrowed by the dashboard's filters (None = no filter)."""
+                  need_flags=None, hide_flags=None, confidence=None,
+                  show_excluded=False) -> pd.DataFrame:
+    """The ranked list narrowed by the dashboard's filters (None = no filter). Rows with an
+    `exclude_reason` (a data check failed) are hidden unless `show_excluded`."""
     out = df
+    if not show_excluded and "exclude_reason" in out:
+        out = out[out["exclude_reason"].isna()]
     if districts:
         out = out[out["district"].isin(districts)]
     if price_m:

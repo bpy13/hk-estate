@@ -86,8 +86,12 @@ def page_ranked(df: pd.DataFrame, meta: dict) -> None:
     need = sb.multiselect("Has any of these flags", all_flags, format_func=dd.FLAG_LABELS.get)
     hide = sb.multiselect("Hide listings flagged", all_flags, format_func=dd.FLAG_LABELS.get)
     conf = sb.multiselect("Confidence", ["normal", "low"])
+    show_ex = sb.checkbox("Show rows that failed a data check", value=False,
+                          help="Doubtful area or price, subsidised flats and similar. "
+                               "Hidden by default; the reason shows in the Check column.")
     out = dd.filter_ranked(df, districts=districts, price_m=price, size=size,
-                           need_flags=need, hide_flags=hide, confidence=conf)
+                           need_flags=need, hide_flags=hide, confidence=conf,
+                           show_excluded=show_ex)
 
     assumed = (df["gap_basis"] == "assumed").all()
     st.caption(
@@ -98,8 +102,8 @@ def page_ranked(df: pd.DataFrame, meta: dict) -> None:
         + ") sits below the model's fair price. Confidence and flags don't change the order.")
     table = out[["rank", "discount_pct", "estate_name", "building_name", "district", "floor",
                  "flat", "area_sqft", "asking_hkd", "fair_price_hkd", "fair_low_hkd",
-                 "fair_high_hkd", "confidence", "comps_24m", "flags", "reason_1", "source",
-                 "url", "key"]].copy()
+                 "fair_high_hkd", "confidence", "comps_24m", "flags", "reason_1", "exclude_reason",
+                 "source", "url", "key"]].copy()
     table["discount_pct"] = table["discount_pct"] * 100
     table["flags"] = out["flag_list"].map(flag_text)
     event = st.dataframe(
@@ -117,7 +121,8 @@ def page_ranked(df: pd.DataFrame, meta: dict) -> None:
             "fair_high_hkd": st.column_config.NumberColumn("80% high", format="%,.0f"),
             "confidence": "Confidence",
             "comps_24m": st.column_config.NumberColumn("Comps 24m", format="%d"),
-            "flags": "Flags", "reason_1": "Main reason", "source": "Site",
+            "flags": "Flags", "reason_1": "Main reason", "exclude_reason": "Check",
+            "source": "Site",
             "url": st.column_config.LinkColumn("Listing", display_text="open"),
         })
     rows = event.selection.rows if event and event.selection else []
