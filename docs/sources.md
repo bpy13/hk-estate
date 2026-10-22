@@ -161,6 +161,32 @@ time), one host at a time. Different hosts can run in parallel. All counts are r
 - `opendata.mtr.com.hk/data/mtr_lines_and_stations.csv`: line, station code, Chinese and
   English names (no coordinates). **Keep.**
 
+### EDB primary school nets (added 2026-10-23)
+- The EDB publishes no net boundary polygons. Its GeoInfo layer is a web map only, and the
+  CSDI API is disallowed (above). So the net is estimated from two files on www.edb.gov.hk,
+  both allowed by robots.txt:
+  1. School Location and Information (DATA.GOV.HK), CSV, monthly:
+     `https://www.edb.gov.hk/attachment/en/student-parents/sch-info/sch-search/sch-location-info/SCH_LOC_EDB.csv`.
+     It gives coordinates and school number, but no net.
+  2. Primary School Lists by School Net, PDF, yearly (August):
+     `https://www.edb.gov.hk/attachment/en/edu-system/primary-secondary/spa-systems/primary-1-admission/school-lists/SchoolLists.pdf`.
+     It lists government and aided schools per net. It joins to the CSV on the first 6
+     digits of the school number.
+- A building's net is the one most common among its 3 nearest netted schools
+  (`sources/schools.py`). It is an estimate near net borders. The authority is the EDB
+  address search on map.gov.hk.
+- Direct Subsidy, private and ESF schools have no net, which is correct: they sit outside
+  Primary One allocation.
+- Licence: no explicit licence on the dataset page; the generic government terms of use
+  apply.
+- 2026-10-23 parse: 36 nets, 433 schools. Rerun each August when the PDF is replaced.
+  **Keep.**
+
+### HKMA mortgage rules (added 2026-10-23)
+- Loan-to-value and debt-servicing-ratio rules are read by hand from HKMA press releases
+  and the HKMA FAQ table. They are entered as dated tables in `mortgage.py`, with URLs, for
+  2024-02-28 and 2024-10-16 (read 2026-10-23). No web requests at run time.
+
 ## Pilot single-block building
 
 **高雲臺 Goldwin Heights**, 2 Seymour Road, Mid-Levels West (Hong Kong Island). Single tower,
