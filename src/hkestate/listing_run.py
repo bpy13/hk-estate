@@ -808,22 +808,24 @@ def run_listings(groups: list[str], sources: list[str], *, db_path=None, log: Lo
 
 def match_territory(db_path, today: date, log: Log = print) -> dict:
     """Match territory listings that have no building yet (new ones, and earlier misses now
-    that the master list has grown), group cross-site duplicates, link relistings. Short
-    sessions of 1,000 listings."""
+    that the master list has grown), re-check those matched loosely ('contains', 'single')
+    so a match the current rules reject is dropped ('manual' and 'exact' stay), group
+    cross-site duplicates, link relistings. Short sessions of 1,000 listings."""
     with db.session(db_path) as con:
         matcher = match.TerritoryMatcher(con)
         manual = match.load_manual_map()
         rows = con.execute(
             """
             SELECT l.source, l.listing_id, l.building_text, r.estate_name, r.source_building_key,
-                   r.floor_text, r.floor_range
+                   r.floor_text, r.floor_range, l.building_id
             FROM listing l LEFT JOIN (
                 SELECT source, listing_id, arg_max(estate_name, fetched_at) AS estate_name,
                        arg_max(source_building_key, fetched_at) AS source_building_key,
                        arg_max(floor_text, fetched_at) AS floor_text,
                        arg_max(floor_range, fetched_at) AS floor_range
                 FROM listing_raw GROUP BY source, listing_id) r USING (source, listing_id)
-            WHERE l.group_name = ? AND l.building_id IS NULL
+            WHERE l.group_name = ?
+              AND (l.building_id IS NULL OR l.match_method IN ('contains', 'single'))
             """, [TERRITORY]).fetchall()
     methods: dict[str, int] = {}
     matched = 0
@@ -831,14 +833,17 @@ def match_territory(db_path, today: date, log: Log = print) -> dict:
         updates = []
         with db.session(db_path) as con:
             matcher.con = con
-            for src, lid, text, estate, bkey, floor_text, floor_range in rows[i:i + 1000]:
+            for src, lid, text, estate, bkey, floor_text, floor_range, old_bid in \
+                    rows[i:i + 1000]:
                 bid, how = matcher.match(text, block_key=bkey, estate=estate, source=src,
                                          manual=manual)
+                if old_bid is not None and bid == old_bid:
+                    continue  # a loose match the current rules still accept: leave it
                 band = match.floor_band(floor_text, matcher.top_floor(bid),
                                         floor_range=floor_range)
                 updates.append([bid, how, band, src, lid])
                 methods[how] = methods.get(how, 0) + 1
-                matched += bid is not None
+                matched += bid is not None and old_bid is None
             if updates:  # executemany rejects an empty list
                 con.executemany("UPDATE listing SET building_id = ?, match_method = ?, "
                                 "floor_band = ? WHERE source = ? AND listing_id = ?", updates)

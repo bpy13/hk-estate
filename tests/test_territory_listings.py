@@ -165,6 +165,40 @@ def test_territory_run_records_matches_and_snapshots(tmp_path):
                            ).fetchone() == ("cd-1-N",)
 
 
+def test_rematch_drops_old_contains_and_single_matches_the_rules_now_reject(tmp_path):
+    path = tmp_path / "t.duckdb"
+    with db.session(path) as con:
+        db.init_db(con)
+        link.ensure_tables(con)
+        seed(con)
+        con.execute("INSERT INTO master_estate (code, name_zh, units, excluded, pilot) "
+                    "VALUES ('2-X', '孤島苑', 100, false, false)")
+        con.execute("INSERT INTO master_building (building_id, estate_code, block_code, "
+                    "estate_name, block_name, floors) VALUES ('cd-1-X', '2-X', '1-X', '孤島苑', "
+                    "'孤島苑', 20)")
+        # (listing, text, building it holds from an older, looser rule set, how it got it)
+        for lid, text, bid, how in [
+            ("K1", "海景苑灣 甲座", "cd-1-A", "contains"),  # a longer estate name: no match
+            ("K2", "孤島苑 榮盛閣", "cd-1-X", "single"),  # a block the estate lacks
+            ("K3", "海景苑灣 甲座", "cd-1-A", "manual"),  # kept: manual
+            ("K4", "海景苑灣 甲座", "cd-1-A", "exact"),  # kept: exact
+            ("K5", "海景苑 甲座", "cd-1-A", "contains"),  # still fine: unchanged
+        ]:
+            con.execute("INSERT INTO listing (source, listing_id, kind, group_name, "
+                        "building_text, building_id, match_method) "
+                        "VALUES ('centanet', ?, 'sale', 'territory', ?, ?, ?)",
+                        [lid, text, bid, how])
+    listing_run.match_territory(path, TODAY, log=lambda *a: None)
+    with db.session(path) as con:
+        got = dict((lid, (b, m)) for lid, b, m in con.execute(
+            "SELECT listing_id, building_id, match_method FROM listing").fetchall())
+    assert got["K1"] == (None, "none")
+    assert got["K2"] == (None, "check_match")
+    assert got["K3"] == ("cd-1-A", "manual")
+    assert got["K4"] == ("cd-1-A", "exact")
+    assert got["K5"][0] == "cd-1-A"
+
+
 def test_territory_only_run_leaves_pilot_listings_alone(tmp_path, monkeypatch):
     monkeypatch.setenv("HKESTATE_DATA_DIR", str(tmp_path))  # the `centanet` lock file
     path = tmp_path / "t.duckdb"

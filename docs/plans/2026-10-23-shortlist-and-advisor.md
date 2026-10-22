@@ -167,7 +167,7 @@ building, so it finds no subsidised estate. Tasks 2-3 below follow
     tests pass. Green.
   - Notes: rematching stored listings happens in the next daily run. Task 5 notes how many
     listings changed.
-- [ ] **Task 2c: rematch already-matched territory listings** *(added after Task 2b: the
+- [x] **Task 2c: rematch already-matched territory listings** *(added after Task 2b: the
   territory rematch in `listing_run.py` (~line 826) only touches rows with no building, so
   the wrong matches 2b now rejects, e.g. 逸瓏灣, keep their old building.)*
   - Files: modify `src/hkestate/listing_run.py`. Test `tests/test_territory_listings.py`.
