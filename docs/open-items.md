@@ -6,6 +6,22 @@ here; a limit or trap we live with goes in `known-issues.md`. Each item in one p
 ## Blockers
 
 ## Waiting on the user
+- **Which price growth should buy-vs-rent assume? (2026-10-23)** After the review fixes the
+  accounting is fair: both paths are cash at the same date, and the renter invests the
+  monthly gap. Even so, buying wins for every listing in the middle case. The cause is the
+  growth assumption.
+  - The middle case uses each district's long-run median from the growth study, 2.9-5.8% a
+    year since 1995.
+  - The typical listing breaks even at about 0.7% a year.
+  - In the low case, buying wins for only 3.9% of listings.
+
+  Options:
+  - (a) Keep long-run history (today's default).
+  - (b) Use growth since 2003 only, or since the 2021 peak.
+  - (c) Let the user type the growth rate on the page, with history as the hint.
+
+  Proposal: (c), defaulting to the district's since-2003 median.
+
 - **Register the new tasks (2026-10-20).** `scripts\register_task.ps1` (all) or
   `-Only 'daily listings'` (now 23 h limit) and `scripts\watchdog.ps1 -Register` (watchdog
   every 15 min). Then check `data\logs\watchdog_<date>.log` after a day. Running jobs started
