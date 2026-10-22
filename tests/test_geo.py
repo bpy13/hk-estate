@@ -126,3 +126,54 @@ def test_wikipedia_coords_fetches_only_wanted_stations():
     got = geo.wikipedia_coords(F(), {"admiralty", "nowhere"})
     assert got == {"admiralty": (22.2793, 114.1646)}
     assert len(seen) == 2  # the list and one station
+
+
+def _bld(con, bid, estate=None, district=None, geo_district=None, lat=None, lon=None):
+    con.execute(
+        "INSERT INTO master_building (building_id, estate_code, district, geo_district, lat, lon) "
+        "VALUES (?, ?, ?, ?, ?, ?)", [bid, estate, district, geo_district, lat, lon])
+
+
+def _district(con, bid):
+    return con.execute("SELECT district FROM master_building WHERE building_id = ?",
+                       [bid]).fetchone()[0]
+
+
+def test_fill_districts_from_als_answer(con):
+    _bld(con, "a", geo_district="沙田區")
+    _bld(con, "b", geo_district="Sha Tin")  # not a Chinese district name: not used
+    assert geo.fill_districts(con) == 1
+    assert _district(con, "a") == "沙田區"
+    assert _district(con, "b") is None
+
+
+def test_fill_districts_from_most_common_in_estate(con):
+    _bld(con, "x1", "E1", "東區")
+    _bld(con, "x2", "E1", "東區")
+    _bld(con, "x3", "E1", "灣仔區")
+    _bld(con, "x4", "E1")
+    _bld(con, "y1", "E2", "沙田區")
+    _bld(con, "z1", None)  # no estate: nothing to copy
+    assert geo.fill_districts(con) == 1
+    assert _district(con, "x4") == "東區"
+    assert _district(con, "z1") is None
+
+
+def test_fill_districts_from_nearest_building_within_1km(con):
+    _bld(con, "near", None, "油尖旺區", lat=22.3200, lon=114.1700)
+    _bld(con, "far", None, "觀塘區", lat=22.3300, lon=114.2000)
+    _bld(con, "a", None, lat=22.3205, lon=114.1702)   # about 60 m from 'near'
+    _bld(con, "b", None, lat=22.3400, lon=114.2500)   # nothing within 1 km
+    _bld(con, "c", None)                               # not geocoded
+    assert geo.fill_districts(con) == 1
+    assert _district(con, "a") == "油尖旺區"
+    assert _district(con, "b") is None and _district(con, "c") is None
+
+
+def test_fill_districts_order_and_never_overwrites(con):
+    _bld(con, "e1", "E1", "東區")
+    _bld(con, "keep", "E1", "南區", geo_district="沙田區")   # has one: untouched
+    _bld(con, "als", "E1", None, geo_district="沙田區")       # ALS beats the estate
+    assert geo.fill_districts(con) == 1
+    assert _district(con, "keep") == "南區" and _district(con, "als") == "沙田區"
+    assert geo.fill_districts(con) == 0

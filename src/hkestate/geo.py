@@ -287,6 +287,64 @@ def assign_mtr(con) -> int:
     return len(rows)
 
 
+# ---- district ----------------------------------------------------------------------------------
+
+NEAREST_DISTRICT_M = 1000  # last resort: a neighbour further away may be in another district
+
+
+def _als_district(text) -> str | None:
+    """ALS's Chinese district ('沙田區') in the same 18-district naming as the rest of the data;
+    None for anything else (English names, empty)."""
+    found = re.findall(r"([^\s()（）|]+區)", str(text or ""))
+    return found[-1] if found else None
+
+
+def fill_districts(con) -> int:
+    """Set master_building.district where it is NULL; existing values are never changed.
+    In order: (1) the building's own ALS answer, (2) the most common district of the other
+    buildings of the same estate, (3) the district of the nearest geocoded building within
+    1 km. Returns the number of buildings set."""
+    n = 0
+    for bid, gd in con.execute(
+            "SELECT building_id, geo_district FROM master_building "
+            "WHERE district IS NULL AND geo_district IS NOT NULL").fetchall():
+        d = _als_district(gd)
+        if d:
+            con.execute("UPDATE master_building SET district = ? WHERE building_id = ?", [d, bid])
+            n += 1
+    # ties go to the alphabetically first name, so a rerun gives the same answer
+    rows = con.execute("""
+        SELECT m.building_id, (SELECT d.district FROM master_building d
+                               WHERE d.estate_code = m.estate_code AND d.district IS NOT NULL
+                               GROUP BY d.district ORDER BY count(*) DESC, d.district LIMIT 1)
+        FROM master_building m WHERE m.district IS NULL AND m.estate_code IS NOT NULL""").fetchall()
+    for bid, d in rows:
+        if d:
+            con.execute("UPDATE master_building SET district = ? WHERE building_id = ?", [d, bid])
+            n += 1
+    import numpy as np
+
+    donors = con.execute("SELECT lat, lon, district FROM master_building "
+                         "WHERE district IS NOT NULL AND lat IS NOT NULL").fetchall()
+    todo = con.execute("SELECT building_id, lat, lon FROM master_building "
+                       "WHERE district IS NULL AND lat IS NOT NULL").fetchall()
+    if donors and todo:
+        dlat = np.array([r[0] for r in donors])
+        dlon = np.array([r[1] for r in donors])
+        names = [r[2] for r in donors]
+        for bid, lat, lon in todo:
+            p1, p2 = np.radians(lat), np.radians(dlat)
+            a = (np.sin((p2 - p1) / 2) ** 2
+                 + np.cos(p1) * np.cos(p2) * np.sin(np.radians(dlon - lon) / 2) ** 2)
+            dist = 2 * 6_371_000 * np.arcsin(np.sqrt(a))
+            i = int(dist.argmin())
+            if dist[i] <= NEAREST_DISTRICT_M:
+                con.execute("UPDATE master_building SET district = ? WHERE building_id = ?",
+                            [names[i], bid])
+                n += 1
+    return n
+
+
 # ---- age ---------------------------------------------------------------------------------------
 
 
@@ -343,6 +401,8 @@ def main(argv=None) -> int:
         with db.session(args.db) as con:
             n = assign_mtr(con)
             set_building_ages(con)
+            filled = fill_districts(con)
+            log(f"district filled for {filled} buildings")
             total, ok = con.execute(
                 "SELECT count(*), count(lat) FROM master_building").fetchone()
         log(f"coordinates for {ok}/{total} buildings; MTR distance set for {n}")
