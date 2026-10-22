@@ -356,7 +356,7 @@ building, so it finds no subsidised estate. Tasks 2-3 below follow
     A walking link of 5 min joins Hong Kong (HOK) and Central (CEN), and one of 4 min joins
     Tsim Sha Tsui (TST) and East Tsim Sha Tsui (ETS). The stop-count estimate stays as a
     fallback when coordinates are missing. Green.
-- [ ] **Task 15: rent estimate** `[parallel-ok]`
+- [x] **Task 15: rent estimate** `[parallel-ok]`
   - Files: create `src/hkestate/rent.py` and `tests/test_rent.py`.
   - Done when:
     - `estimate(flat)` returns a monthly rent and its basis, from the first level with 5+
