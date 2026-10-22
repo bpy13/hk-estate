@@ -27,11 +27,16 @@ ALL = "ALL"
 PREMIUM_MONTHS = 6  # asking price is compared with the deals of the last 6 months
 # the dashboard greys a cell whose own-sales change rests on fewer deals than this
 THIN_DEALS = 10
+# ask premium: a building needs this many clean resales in 12 months to be a yardstick, and a
+# cell needs this many matched listings to show a premium at all
+PREMIUM_MIN_DEALS = 3
+PREMIUM_MIN_LISTINGS = 10
 
 COLUMNS = [
     "district", "size_class", "median_psf_12m", "n_sales_12m",
     "idx_chg_3m", "idx_chg_12m", "own_chg_3m", "own_chg_12m", "n_own_3m", "n_own_12m",
     "sale_listings", "rent_listings", "median_ask_psf", "median_deal_psf_6m", "ask_premium",
+    "n_premium",
 ]
 
 
@@ -40,8 +45,23 @@ def _clean_deals(raw: dict, deals: pd.DataFrame | None) -> pd.DataFrame:
     d = d[d["exclude_reason"].isna()]
     d = d.assign(agreement_date=pd.to_datetime(d["agreement_date"]),
                  psf_hkd=pd.to_numeric(d["psf_hkd"], errors="coerce"))
+    if "building_id" not in d:
+        d = d.assign(building_id=None)
     return d.dropna(subset=["agreement_date", "psf_hkd"])[
-        ["district", "rvd_class", "agreement_date", "psf_hkd"]]
+        ["district", "rvd_class", "agreement_date", "psf_hkd", "building_id"]]
+
+
+def _listing_ratios(li: pd.DataFrame, d: pd.DataFrame, end: pd.Timestamp) -> pd.Series:
+    """Asking psf / the building's median deal psf of the last 12 months, for each sale
+    listing in a building with at least PREMIUM_MIN_DEALS such deals (NaN otherwise). Same
+    building, so the same sort of flat. Not index-adjusted: it is 12 months of one building."""
+    ask = _asking_psf(li)
+    if "building_id" not in li:
+        return pd.Series(np.nan, index=li.index)
+    recent = d[(d["agreement_date"] > end - pd.DateOffset(months=12)) & d["building_id"].notna()]
+    g = recent.groupby("building_id")["psf_hkd"].agg(["median", "size"])
+    med = g.loc[g["size"] >= PREMIUM_MIN_DEALS, "median"]
+    return ask / li["building_id"].map(med)
 
 
 def _active_listings(raw: dict, listings: pd.DataFrame | None) -> pd.DataFrame:
@@ -53,6 +73,7 @@ def _active_listings(raw: dict, listings: pd.DataFrame | None) -> pd.DataFrame:
     b = features.building_table(raw)
     out = pd.DataFrame({
         "kind": li["kind"].to_numpy(),
+        "building_id": li["building_id"].to_numpy(),
         "district": li["building_id"].map(b["district"]).to_numpy(),
         "area_sqft": pd.to_numeric(li["saleable_sqft"], errors="coerce").to_numpy(),
         "price_hkd": pd.to_numeric(li["price_hkd"], errors="coerce").to_numpy(),
@@ -108,6 +129,7 @@ def _cell(d: pd.DataFrame, li: pd.DataFrame, index_df, cls: str, end: pd.Timesta
     def chg(now, before):
         return float(now.median() / before.median() - 1) if len(now) and len(before) else np.nan
 
+    ratios = li["ratio"].dropna()
     ask = _asking_psf(li).dropna()
     med_ask = float(ask.median()) if len(ask) else np.nan
     med6 = float(deals6.median()) if len(deals6) else np.nan
@@ -124,7 +146,10 @@ def _cell(d: pd.DataFrame, li: pd.DataFrame, index_df, cls: str, end: pd.Timesta
         "rent_listings": int((li["kind"] == "rent").sum()),
         "median_ask_psf": med_ask,
         "median_deal_psf_6m": med6,
-        "ask_premium": med_ask / med6 - 1 if med_ask == med_ask and med6 == med6 else np.nan,
+        # like-for-like: median of (asking psf / own building's median deal psf) - 1
+        "ask_premium": float(ratios.median() - 1) if len(ratios) >= PREMIUM_MIN_LISTINGS
+        else np.nan,
+        "n_premium": int(len(ratios)),
     }
 
 
@@ -142,6 +167,7 @@ def summary(raw: dict, today: date | None = None, deals: pd.DataFrame | None = N
         d = d[d["agreement_date"] <= pd.Timestamp(today)]
     end = d["agreement_date"].max().normalize()
     li = _active_listings(raw, listings)
+    li = li.assign(ratio=_listing_ratios(li, d, end))
     index_df = raw.get("index")
 
     rows = []

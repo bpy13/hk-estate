@@ -56,7 +56,29 @@ def test_one_district_by_hand(table):
     assert r.sale_listings == 3 and r.rent_listings == 1
     # asking 200 and 240 -> 220; deals of the last 6 months 160 170 190 200 -> 180
     assert r.median_ask_psf == 220 and r.median_deal_psf_6m == 180
-    assert r.ask_premium == pytest.approx(220 / 180 - 1)
+    assert r.n_premium == 0 and np.isnan(r.ask_premium)  # no building ids in this fixture
+
+
+def test_ask_premium_is_building_matched(monkeypatch):
+    monkeypatch.setattr(market, "PREMIUM_MIN_LISTINGS", 2)
+    rows = [("X", "C", "2026-06-01", p, None, b) for b, p in
+            [("b1", 100), ("b1", 100), ("b1", 100), ("b2", 200), ("b2", 200), ("b2", 200),
+             ("b4", 100), ("b4", 100)]]  # b4: only 2 deals, too few to match
+    deals = pd.DataFrame(rows, columns=["district", "rvd_class", "agreement_date", "psf_hkd",
+                                        "exclude_reason", "building_id"])
+    li = pd.DataFrame([("sale", "X", 5000, 550_000, "b1"),    # ask 110 vs 100
+                       ("sale", "X", 5000, 1_100_000, "b2"),  # ask 220 vs 200
+                       ("sale", "X", 5000, 5_000_000, "b3"),  # no deals: not used
+                       ("sale", "X", 5000, 5_000_000, "b4")],  # too few deals: not used
+                      columns=["kind", "district", "area_sqft", "price_hkd", "building_id"])
+    li["rvd_class"] = "C"
+    r = _row(market.summary(_raw(), deals=deals, listings=li), "X", "C")
+    assert r.n_premium == 2 and r.ask_premium == pytest.approx(0.10)
+    # the naive comparison (all asks vs all deals, mixing different flats) is far higher
+    assert r.median_ask_psf / r.median_deal_psf_6m - 1 > 0.5
+    monkeypatch.setattr(market, "PREMIUM_MIN_LISTINGS", 3)
+    r = _row(market.summary(_raw(), deals=deals, listings=li), "X", "C")
+    assert r.n_premium == 2 and np.isnan(r.ask_premium)  # too few listings: blank
 
 
 def test_all_sizes_and_territory_rows(table):
