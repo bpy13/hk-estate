@@ -237,5 +237,16 @@ cache pruning.)*
   resales is 1.05 overall (1.24 for buildings completed 2010-13), below the diagnosis's
   1.12. Check the shortlist after the Task 11 retrain.
 
+- **Rent estimates (Task 15, 20135bc).** Of 44,830 active sale listings, the rent estimate
+  comes from the building's own rent listings for 9.4%, the estate 25.3%, the district 32.8%
+  and the RVD average 32.5%; median gross yield 3.3%. Much of the RVD share is the 2,315
+  buildings with no district; recheck after `fill_districts` runs (Task 7). District medians
+  mix small and large flats (no size band yet). Estimates are at asking-rent level;
+  `rent.achieved_from_asking()` converts, and the caller passes the `costs.py` anchor.
+- **Commute is an estimate (Tasks 14/14b).** No MTR timetable between stations is
+  published; trips are walk + 1.6 min per stop + distance at 1.7 km/min + 5 min per change,
+  fitted to five known journeys (within about 2 min). Buses, minibuses and ferries are not
+  modelled.
+
 ## Later
 - **Dashboard map** (decisions.md: "a map in a later phase"): not built in Phase 4.
