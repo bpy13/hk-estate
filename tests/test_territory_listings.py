@@ -183,11 +183,12 @@ def test_rematch_drops_old_contains_and_single_matches_the_rules_now_reject(tmp_
             ("K3", "海景苑灣 甲座", "cd-1-A", "manual"),  # kept: manual
             ("K4", "海景苑灣 甲座", "cd-1-A", "exact"),  # kept: exact
             ("K5", "海景苑 甲座", "cd-1-A", "contains"),  # still fine: unchanged
+            ("K6", "海景苑灣 甲座", "cd-1-A", "contains"),  # delisted: not re-checked
         ]:
             con.execute("INSERT INTO listing (source, listing_id, kind, group_name, "
-                        "building_text, building_id, match_method) "
-                        "VALUES ('centanet', ?, 'sale', 'territory', ?, ?, ?)",
-                        [lid, text, bid, how])
+                        "building_text, building_id, match_method, status) "
+                        "VALUES ('centanet', ?, 'sale', 'territory', ?, ?, ?, ?)",
+                        [lid, text, bid, how, "delisted" if lid == "K6" else "active"])
     listing_run.match_territory(path, TODAY, log=lambda *a: None)
     with db.session(path) as con:
         got = dict((lid, (b, m)) for lid, b, m in con.execute(
@@ -197,6 +198,7 @@ def test_rematch_drops_old_contains_and_single_matches_the_rules_now_reject(tmp_
     assert got["K3"] == ("cd-1-A", "manual")
     assert got["K4"] == ("cd-1-A", "exact")
     assert got["K5"][0] == "cd-1-A"
+    assert got["K6"] == ("cd-1-A", "contains")  # the re-check covers active listings only
 
 
 def test_territory_only_run_leaves_pilot_listings_alone(tmp_path, monkeypatch):

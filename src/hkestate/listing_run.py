@@ -807,7 +807,7 @@ def run_listings(groups: list[str], sources: list[str], *, db_path=None, log: Lo
 
 
 def match_territory(db_path, today: date, log: Log = print) -> dict:
-    """Match territory listings that have no building yet (new ones, and earlier misses now
+    """Match active territory listings that have no building yet (new ones, and earlier misses now
     that the master list has grown), re-check those matched loosely ('contains', 'single')
     so a match the current rules reject is dropped ('manual' and 'exact' stay), group
     cross-site duplicates, link relistings. Short sessions of 1,000 listings."""
@@ -824,7 +824,7 @@ def match_territory(db_path, today: date, log: Log = print) -> dict:
                        arg_max(floor_text, fetched_at) AS floor_text,
                        arg_max(floor_range, fetched_at) AS floor_range
                 FROM listing_raw GROUP BY source, listing_id) r USING (source, listing_id)
-            WHERE l.group_name = ?
+            WHERE l.group_name = ? AND l.status = 'active'
               AND (l.building_id IS NULL OR l.match_method IN ('contains', 'single'))
             """, [TERRITORY]).fetchall()
     methods: dict[str, int] = {}
