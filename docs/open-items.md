@@ -84,6 +84,11 @@ cache pruning.)*
   HK$500m"). Harmless today because those rows have no building (so they are `no_building`
   and never clean), but they would enter the analysis once SRPE buildings are matched. Fix
   the parser (one row per flat, one price each) before the next SRPE building pass.
+  *(Parser fixed 2026-10-23, e4fe623: a row listing several flats line by line becomes one
+  deal per flat. Still to do, needs the owner's OK because it deletes rows: re-parse the
+  cached register PDFs (no web requests) and delete the old glued rows; their `source_id`
+  (`3085:3 3:2 5:A A:...`) differs from the new per-flat ids, so they would otherwise stay
+  beside the corrected ones.)*
 - **2,134 clean rows under HK$1,000 per sq ft (pre-release review 2026-10-21).** The data
   check's "price per sq ft under 1,000" rule hits 8,181 stored rows (centadata 6,100,
   ricacorp 1,866, hse28 215) and 2,134 of them are still clean: sales a tenth of today's
