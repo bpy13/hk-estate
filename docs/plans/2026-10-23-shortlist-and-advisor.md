@@ -333,7 +333,7 @@ building, so it finds no subsidised estate. Tasks 2-3 below follow
   - Notes: if neither source gives nets with coordinates, record it in open-items and use
     the nearest 5 primary schools within 1 km instead. Run against the live database
     happens in Task 17.
-- [ ] **Task 14: commute estimate** `[parallel-ok]`
+- [x] **Task 14: commute estimate** `[parallel-ok]`
   - Files: create `src/hkestate/commute.py` and `tests/test_commute.py`.
   - Done when:
     - `minutes(building, station)` returns walk time plus train time
