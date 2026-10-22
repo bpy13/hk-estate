@@ -133,27 +133,46 @@ could later serve others. Going public is on hold (user, 2026-10-23: monetisatio
     comparable sales at HK$16,901) rank high. If comparable sales or fair prices mix in
     first-hand or gross-area prices, say so with numbers. Tasks 2-3 follow this file. Where
     it contradicts them, update the plan.
-- [ ] **Task 2: listing exclusions**
-  - Files: modify `src/hkestate/rank.py` and `src/hkestate/features.py` (`listing_features`).
-    Test `tests/test_rank.py`.
-  - Done when: the tests are written first and fail before the change. They cover:
-    - a listing in a subsidised estate is left out of the ranking with reason `subsidised`
-    - an area under 150 or over 5,000 sq ft gets `check_area`
-    - an asking price per sq ft under 0.4× or over 2.5× the building's index-adjusted median
-      gets `check_price`
+*(Task 1 done b39f27f. Top 200: plausible bargain 105, few comps 39, duplicate 17, wrong
+match 13, saleable/gross or two flats 10, first-hand in comps 8, area typo 6, subsidised 2.
+Checked 御海灣 in the main session: since 2024-10, 22 first-ever sales at median HK$20,033/sq
+ft vs 20 second sales at HK$15,044. The master list's `me_excluded` is False for every
+building, so it finds no subsidised estate. Tasks 2-3 below follow
+`docs/ranking-diagnosis.md` section 4.)*
+- [ ] **Task 2: listing checks** (Tasks 2 and 3 go to one helper, in order)
+  - Files: modify `src/hkestate/rank.py` and `src/hkestate/features.py` (`listing_features`
+    only). Create `src/hkestate/subsidised_estates.csv` (tracked). Test `tests/test_rank.py`.
+  - Done when: tests are written first and fail before the change. Each rule from
+    `docs/ranking-diagnosis.md` gets a reason in a new `exclude_reason` column:
+    - `subsidised`: estate in `subsidised_estates.csv`, seeded with 銀蔚苑 and any others
+      the diagnosis names
+    - `check_subsidised`: an estate named …苑 or …邨 asking under 0.7× the district median
+    - `check_area`: under 150 or over 5,000 sq ft, or 1.5× or more the nearest recorded unit
+      area (3+ recorded areas; not for 複式/天台/相鄰)
+    - `check_area_basis`: 1.12-1.45× the flat's (or nearest) recorded saleable area, which
+      looks like a gross area. `check_combined` for 相鄰 (two flats in one listing).
+    - `check_price`: asking per sq ft under 0.6× or over 2.5× the building's index-adjusted
+      median
+    - `check_model`: 5+ comps and fair price over 1.25× the comps median
+    - `below_all_recent`: an information flag only, not an exclusion
 
-    Flagged rows go to the end with their reason in a new `exclude_reason` column, not
-    deleted. Full pytest and ruff green.
-  - Notes:
-    - Subsidised comes from the master list's own exclusion (`buildings.me_excluded` /
-      `exclude_reason`) where present. Otherwise use Task 1's rule (e.g. HOS court names
-      ending in 苑 with no private sale history).
-    - Thresholds may change after Task 1. Record the final values in decisions.md.
+    Excluded rows go to the end, never deleted. Full pytest and ruff green.
+  - Notes: record the final thresholds in decisions.md as Claude's call (from the
+    diagnosis).
+- [ ] **Task 2b: stop wrong `contains` matches** `[parallel-ok]`
+  - Files: modify `src/hkestate/match.py`. Test `tests/test_match.py`.
+  - Done when: tests written first show two things. First, text that continues an estate
+    name with another Chinese character (逸瓏灣 against estate 逸瓏) is no match. Second, text
+    naming a block the estate doesn't have gets match method `check_match`. Existing match
+    tests pass. Green.
+  - Notes: rematching stored listings happens in the next daily run. Task 5 notes how many
+    listings changed.
 - [ ] **Task 3: collapse duplicate listings**
   - Files: modify `src/hkestate/rank.py`. Test `tests/test_rank.py`.
-  - Done when: a test shows two listings with the same building, floor band, flat (or both
-    blank), area within 2% and price within 2% become one row. The new `also_listed` column
-    names the other. Applies across and within sources. Green.
+  - Done when: a test shows two listings become one row when they share building, area
+    within 2% and price within 2%, and their floor band and flat are equal **or either is
+    blank**. The new `also_listed` column names the other. Applies across and within
+    sources. Green.
 - [ ] **Task 4: shortlist file and dashboard default**
   - Files: modify `src/hkestate/rank.py` (`write`), `src/hkestate/dashboard_data.py` and
     `app/dashboard.py`. Tests in `tests/test_rank.py` and `tests/test_dashboard.py`.
@@ -207,6 +226,15 @@ could later serve others. Going public is on hold (user, 2026-10-23: monetisatio
     - it removes most of the non-real ones and under 10% of the real ones in the sample
 
     Green.
+- [ ] **Task 8b: longer first-hand window for newer buildings**
+  - Files: modify `src/hkestate/features.py` (first-hand rule). Test
+    `tests/test_features.py`.
+  - Done when: a test written first shows a flat's first-ever sale 50 months after
+    completion, in a building completed 2010 or later, is marked first-hand. The diagnosis
+    counts 4,153 such sales, priced 1.12× resales. The window becomes 72 months for those
+    buildings and stays 24 for older ones. Green.
+  - Notes: after Task 8, same file. Takes effect at the Task 11 retrain. Record in
+    decisions.md as Claude's call.
 - [x] **Task 9: SRPE glued prices** `[parallel-ok]`
   - Files: modify `src/hkestate/sources/srpe.py`. Test `tests/test_srpe.py`.
   - Done when: a test built from row `3085:3 3:2 5:A A:2016-12-03` (HK$728,100,014,452,000)
