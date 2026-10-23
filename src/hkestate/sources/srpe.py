@@ -196,14 +196,19 @@ def _parse_row(row) -> list[RegisterDeal]:
     if not (pasp or asp) or _date(_cell(row, 2)):  # no date, or the sale was terminated
         return []
     if len(row) != _HOUSE_COLUMNS:
-        n = len(_lines(row, 3))
+        # Several flats in one row show as several prices. The block cell alone can't tell:
+        # most registers write it in two languages on two lines ('第2座\nTower 2'); counting
+        # its lines rejected nearly every row (fixed 2026-10-23, after a re-parse deleted
+        # 1,285 stored sales).
+        n = len([s for s in _lines(row, 7) if _AMOUNT_LINE.match(s)])
         if n > 1:
             return _parse_multi_flat_row(row, n, pasp, asp)
     deal = _parse_single(row, pasp, asp)
     return [deal] if deal else []
 
 
-_AMOUNT_LINE = re.compile(r"^\W*\d[\d,]*(?:\.\d+)?")
+# A line that is only an amount ('$7,281,000'); a note line that starts with digits is not.
+_AMOUNT_LINE = re.compile(r"^\s*(?:HK)?\$?\s*\d[\d,]*(?:\.\d+)?\s*$")
 
 
 def _parse_multi_flat_row(row, n: int, pasp, asp) -> list[RegisterDeal]:
@@ -211,11 +216,14 @@ def _parse_multi_flat_row(row, n: int, pasp, asp) -> list[RegisterDeal]:
     one line per flat, e.g. block "3\\n3", floor "2\\n5", unit "A\\nA", price
     "$7,281,000\\n$14,452,000"). Read as one cell the prices joined into
     HK$728,100,014,452,000 (development 3085). Lines are paired by position; when the counts
-    differ we cannot tell which price is whose, so the row raises (and is reported skipped)."""
-    cols = [_lines(row, i) for i in (3, 4, 5)]
+    differ we cannot tell which price is whose, so the row raises (and is reported skipped).
+    A block cell without one line per flat (one block named in two languages) applies to all."""
+    floors, units = _lines(row, 4), _lines(row, 5)
     prices = [s for s in _lines(row, 7) if _AMOUNT_LINE.match(s)]
-    if any(len(c) != n for c in cols) or len(prices) != n:
+    if len(floors) != n or len(units) != n or len(prices) != n:
         raise ValueError(f"row lists {n} flats but its cells do not line up")
+    blocks = _lines(row, 3)
+    cols = [blocks if len(blocks) == n else [_cell(row, 3)] * n, floors, units]
     related = _lines(row, 10)
     deals = []
     for k in range(n):
@@ -287,6 +295,8 @@ def register_deals(pdf, skipped: list[tuple[int, str]] | None = None) -> list[Re
             deals += parse_register_rows(table, bad)
             if skipped is not None:
                 skipped += [(n, text) for text in bad]
+        if hasattr(page, "close"):
+            page.close()  # pdfplumber keeps every page's layout otherwise (GBs on big registers)
     return deals
 
 

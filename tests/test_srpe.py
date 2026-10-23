@@ -233,10 +233,31 @@ def test_row_with_two_flats_in_its_cells_gives_one_deal_per_flat():
 
 
 def test_row_with_mismatched_line_counts_is_skipped_not_guessed():
-    row = ["03/12/2016", "", "", "3\n3", "2\n5", "A\nA", "", "$7,281,000", "", "", ""]
+    row = ["03/12/2016", "", "", "3\n3", "2\n5", "A", "", "$7,281,000\n$14,452,000", "", "", ""]
     skipped = []
     assert srpe.parse_register_rows([row], skipped) == []
     assert len(skipped) == 1
+
+
+def test_block_named_in_two_languages_is_one_flat():
+    # most registers (e.g. development 10505): the 2026-10-23 multi-flat change read the
+    # two-line block cell as two flats and rejected the row
+    row = ["10-11-2025", "17-11-2025", "", "第2座\nTower 2", "2", "B", "", "$15,030,000", "",
+           "招標文件第3-A號 Tender Document No. 3-A\n(1) 支付條款A2", ""]
+    skipped = []
+    (deal,) = srpe.parse_register_rows([row], skipped)
+    assert not skipped
+    assert (deal.block, deal.floor, deal.flat, deal.price_hkd) == (
+        "第2座 Tower 2", "2", "B", 15_030_000)
+    # three flats in one row, block in two languages: the block applies to all
+    three = ["03/12/2016", "", "", "第3座\nTower 3", "2\n5\n6", "A\nA\nA", "",
+             "$7,281,000\n$14,452,000\n$9,000,000", "", "", ""]
+    assert [(d.block, d.floor) for d in srpe.parse_register_rows([three])] == [
+        ("第3座 Tower 3", "2"), ("第3座 Tower 3", "5"), ("第3座 Tower 3", "6")]
+    # a note whose lines start with digits is not several prices
+    note = ["02/12/2023", "08/12/2023", "", "1", "9", "A", "", "$8,731,800\n3 of Price List\n"
+            "31/1/2024", "", "", ""]
+    assert [d.price_hkd for d in srpe.parse_register_rows([note])] == [8_731_800]
 
 
 def test_absurd_price_is_a_skipped_row_not_a_crash():

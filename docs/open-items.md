@@ -112,8 +112,12 @@ cache pruning.)*
   *(Parser fixed 2026-10-23, e4fe623: a row listing several flats line by line becomes one
   deal per flat. Still to do, needs the owner's OK because it deletes rows: re-parse the
   cached register PDFs (no web requests) and delete the old glued rows (owner's OK
-  2026-10-23; `python -m hkestate.sources.srpe --reparse-cached` started 13:20, ~5-6 h, log
-  `data\logs\srpe_<date>.log`); their `source_id`
+  2026-10-23). **The first `--reparse-cached` run (13:20-~14:00, stopped by a low-memory
+  clean-up after 202 of 377 files) deleted 1,285 stored SRPE rows, many of them real sales:**
+  the multi-flat parser read two-language block cells (`第2座\nTower 2`) as two flats and
+  rejected nearly every row. Fixed (several flats = several prices); a 20-file sample now
+  reads 3,964 sales and rejects 2. Rerunning `--reparse-cached` restores the deleted rows
+  from the saved files; needs the owner's go; their `source_id`
   (`3085:3 3:2 5:A A:...`) differs from the new per-flat ids, so they would otherwise stay
   beside the corrected ones.)*
 - *(Mostly settled 2026-10-23, Task 8, fd6b00f: on the model's clean data the count is
