@@ -526,6 +526,62 @@ def run_srpe(client: SrpeClient, db_path=None, log=print, limit: int | None = No
     return stats
 
 
+def reparse_cached(db_path=None, log=print, dry_run: bool = False) -> dict:
+    """Re-read every saved register PDF with today's parser (no web requests), store the
+    result, and delete that development's stored rows the new parse no longer gives: the old
+    multi-flat rows with joined prices (their source_id holds several flats, e.g.
+    `3085:3 3:2 5:A A:...`), and sales since terminated. A development whose PDF now gives no
+    deals at all is left untouched, so a PDF that fails to open never wipes its rows."""
+    import pdfplumber
+
+    pdf_dir = get_data_dir() / "cache" / HOST / "pdf"
+    newest: dict[str, object] = {}  # dev_id -> its newest saved register
+    for path in sorted(pdf_dir.glob("*_*"), key=lambda p: p.stat().st_mtime):
+        newest[path.name.split("_", 1)[0]] = path
+    with db.session(db_path) as con:
+        known = {r[0]: (r[1], [b for b in (r[2] or "").split(",") if b]) for r in con.execute(
+            "SELECT dev_id, name_zh, buildings FROM srpe_development").fetchall()}
+    stats = {"registers": 0, "added": 0, "deleted": 0, "skipped_rows": 0, "empty": 0}
+    for dev_id, path in sorted(newest.items()):
+        if dev_id not in known:
+            continue
+        name, bids = known[dev_id]
+        bad: list[tuple[int, str]] = []
+        try:
+            with pdfplumber.open(path) as pdf:
+                deals = register_deals(pdf, bad)
+        except Exception as e:  # one unreadable PDF must not stop the rest
+            log(f"FAILED {path.name}: {type(e).__name__}: {str(e)[:200]}")
+            continue
+        stats["skipped_rows"] += len(bad)
+        if not deals:
+            stats["empty"] += 1
+            continue
+        stats["registers"] += 1
+        with db.session(db_path) as con:
+            keep = {f"{dev_id}:{d.block}:{parse_floor(d.floor).label}:{d.flat}:"
+                    f"{d.pasp_date or d.asp_date}" for d in deals}
+            stale = [sid for (sid,) in con.execute(
+                "SELECT DISTINCT source_id FROM txn_raw WHERE source = ? AND source_id LIKE ?",
+                [SOURCE, f"{dev_id}:%"]).fetchall() if sid not in keep]
+            if dry_run:
+                stats["deleted"] += len(stale)
+                continue
+            # the old URL carried a session id; keep whatever the stored rows already have
+            url = con.execute("SELECT any_value(url) FROM txn_raw WHERE source = ? AND "
+                              "source_id LIKE ?", [SOURCE, f"{dev_id}:%"]).fetchone()[0]
+            stats["added"] += store_deals(con, dev_id, name, bids, deals, url or "")
+            for i in range(0, len(stale), 500):
+                part = stale[i:i + 500]
+                con.execute(f"DELETE FROM txn_raw WHERE source = ? AND source_id IN "
+                            f"({','.join('?' for _ in part)})", [SOURCE, *part])
+            stats["deleted"] += len(stale)
+        if stats["registers"] % 50 == 0:
+            log(f"{stats['registers']} registers {stats}")
+    log(f"reparse done{' (dry run, nothing written)' if dry_run else ''}: {stats}")
+    return stats
+
+
 def main(argv=None) -> int:
     import argparse
 
@@ -534,7 +590,14 @@ def main(argv=None) -> int:
     p = argparse.ArgumentParser(prog="python -m hkestate.sources.srpe")
     p.add_argument("--db", default=None)
     p.add_argument("--limit", type=int, default=None)
+    p.add_argument("--reparse-cached", action="store_true",
+                   help="re-read the saved register PDFs (no web requests) and replace each "
+                        "development's rows with the new parse")
+    p.add_argument("--dry-run", action="store_true", help="with --reparse-cached: count only")
     args = p.parse_args(argv)
+    if args.reparse_cached:
+        reparse_cached(args.db, _logger("srpe"), args.dry_run)
+        return 0
     from hkestate.fetch import Fetcher
 
     log = _logger("srpe")

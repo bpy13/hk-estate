@@ -249,6 +249,54 @@ def test_absurd_price_is_a_skipped_row_not_a_crash():
     assert len(skipped) == 2
 
 
+def test_reparse_cached_replaces_joined_rows_and_reads_no_web(tmp_path, monkeypatch):
+    import pdfplumber
+
+    monkeypatch.setenv("HKESTATE_DATA_DIR", str(tmp_path))
+    dbp = tmp_path / "t.duckdb"
+    pdf_dir = tmp_path / "cache" / srpe.HOST / "pdf"
+    pdf_dir.mkdir(parents=True)
+    (pdf_dir / "3085_rt.pdf").write_bytes(b"%PDF")
+    (pdf_dir / "9999_rt.pdf").write_bytes(b"%PDF")  # empty parse: its rows must stay
+    two_flats = ["03/12/2016", "14/12/2016", "", "3\n3", "2\n5", "A\nA", "",
+                 "$7,281,000\n$14,452,000", "", "", ""]
+    with db.session(dbp) as con:
+        db.init_db(con)
+        cm.ensure_tables(con)
+        srpe.ensure_tables(con)
+        for dev in ("3085", "9999"):
+            con.execute("INSERT INTO srpe_development (dev_id, name_zh, buildings) "
+                        "VALUES (?, 'X', '')", [dev])
+        db.insert_txn_raw(con, [
+            {"source": "srpe", "source_id": f"{sid}", "fetched_at": "2026-10-16 00:00:00",
+             "url": "u", "deal_date": date(2016, 12, 14), "price_hkd": price,
+             "first_hand": True}
+            for sid, price in [("3085:3 3:2 5:A A:2016-12-03", 728_100_014_452_000),
+                               ("9999:1:1:A:2016-01-01", 5_000_000)]])
+
+    class Pdf:
+        def __init__(self, path):
+            self.rows = [two_flats] if "3085" in str(path) else []
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    monkeypatch.setattr(pdfplumber, "open", Pdf)
+    monkeypatch.setattr(srpe, "register_deals",
+                        lambda pdf, skipped=None: srpe.parse_register_rows(pdf.rows))
+    assert srpe.reparse_cached(dbp, dry_run=True)["deleted"] == 1
+    stats = srpe.reparse_cached(dbp)
+    assert stats["added"] == 2 and stats["deleted"] == 1 and stats["empty"] == 1
+    with db.session(dbp) as con:
+        rows = con.execute("SELECT source_id, price_hkd FROM txn_raw ORDER BY source_id"
+                           ).fetchall()
+    assert rows == [("3085:3:2:A:2016-12-03", 7_281_000), ("3085:3:5:A:2016-12-03", 14_452_000),
+                    ("9999:1:1:A:2016-01-01", 5_000_000)]
+
+
 def test_one_bad_register_does_not_end_the_run(tmp_path, monkeypatch):
     import pdfplumber
 
