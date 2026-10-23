@@ -64,8 +64,8 @@ cache pruning.)*
   - `python -m hkestate.sources.schools`.
   - `hkestate train`, then `rank --from-snapshot`, then `report --settings standard
     --from-snapshot`.
-  - The manual check of 20 shortlist URLs, and the phone-width browser check of the new
-    pages.
+  - The manual check of 20 shortlist URLs. (The phone-width check is dropped: no phone app,
+    owner 2026-10-23.)
 
   The plan file's Tasks 5, 6, 7, 11 and 17 track them.
 - **SRPE multi-flat rows (pre-release review 2026-10-23, judgment call).** The parking cell
@@ -83,8 +83,10 @@ cache pruning.)*
 - **9.5% of the model's test sales have no district** (their building has none in the
   building table), so they get the weakest fallback; fill districts from `master_building`.
 - **Data check leftovers (2026-10-21, after Task 4b).** Small, not blocking the analysis:
-  ~5k Centadata floor labels still unread (`G-1`, `閣` mezzanine, duplex ranges `2-3`,
-  `高層地下`, house numbers); 309 clean same-day sales of one unit at different prices (likely
+  ~5k Centadata floor labels still unread *(2026-10-23: `parse_floor` now reads repeated
+  floors `3樓 3`, two-storey flats `2-3`/`G-1`/`20F & R` as the lower floor, and `高層地下`;
+  unread stored sales fell from 10,793 to 4,522, mostly houses `13號`/`H`/`3座`, mezzanine
+  `閣` and the unclear `G1`/`G2`; takes effect at the next `train`)*; 309 clean same-day sales of one unit at different prices (likely
   confirmor sales, no rule yet); the first-hand rule still decides 263k unlabelled rows and
   could be tuned against Centadata's own label (agrees on 217,503 of 222,951 labelled
   first-hand sales). `test_connect_gives_up_after_the_wait_limit` failed once under heavy CPU
@@ -109,7 +111,9 @@ cache pruning.)*
   the parser (one row per flat, one price each) before the next SRPE building pass.
   *(Parser fixed 2026-10-23, e4fe623: a row listing several flats line by line becomes one
   deal per flat. Still to do, needs the owner's OK because it deletes rows: re-parse the
-  cached register PDFs (no web requests) and delete the old glued rows; their `source_id`
+  cached register PDFs (no web requests) and delete the old glued rows (owner's OK
+  2026-10-23; `python -m hkestate.sources.srpe --reparse-cached` started 13:20, ~5-6 h, log
+  `data\logs\srpe_<date>.log`); their `source_id`
   (`3085:3 3:2 5:A A:...`) differs from the new per-flat ids, so they would otherwise stay
   beside the corrected ones.)*
 - *(Mostly settled 2026-10-23, Task 8, fd6b00f: on the model's clean data the count is

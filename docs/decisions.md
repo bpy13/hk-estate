@@ -436,6 +436,8 @@ exit 0xC000013A (a console Ctrl+C/close); the day before, all three long jobs di
 - **Licence: MIT; README notice** that the repo holds code only and each source's terms
   apply (user, 2026-10-22). Fixtures, history and commit email stay as they are (user).
 - **Redirect robots check and the scheduled-task registration wait** (user, 2026-10-22).
+- **No phone app** (user, 2026-10-23). The phone app idea is given up; pages need no
+  phone-width check. Supersedes "phone-sized screens" in the plan of 2026-10-23.
 - **Price growth for buy-vs-rent and sell-vs-let** (user, 2026-10-23). The "Plan a move" page
   has a box for the yearly price rise. Left empty, each district's index rise since 1997 is
   used (Hong Kong as a whole 2.4%/yr). Why: the long-run median made buying win for 100% of

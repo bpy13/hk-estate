@@ -171,8 +171,8 @@ could later serve others. Going public is on hold (user, 2026-10-23: monetisatio
 - B2. Given a user's profile, `advisor.py` returns ranked estates and listings with reasons.
   It also returns buy-vs-rent and sell-vs-let figures over the user's horizon. Tests check
   worked examples by hand.
-- B3. The dashboard has "Plan a move" and "Market today" pages. Both work in a real browser at
-  390 px width (phone size).
+- B3. The dashboard has "Plan a move" and "Market today" pages. Both work in a real browser.
+  *(Phone width dropped 2026-10-23: the owner has given up the phone app idea.)*
 
 ## Phase 1 – Usable bargain list (sonnet; Task 1 fable)
 

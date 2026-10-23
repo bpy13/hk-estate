@@ -70,7 +70,59 @@ def parse_floor(text: str | None) -> FloorInfo:
         return FloorInfo("頂層", None, "top")
     if core in _BANDS:
         return FloorInfo(core, None, "band")
+    # The forms below only add a number; the label stays the source's text, since stored
+    # unit keys are built from it (found by the data check of 2026-10-21, ~5k Centadata and
+    # ~4k SRPE sales).
+    if core in _GROUND_WORDS:
+        return FloorInfo(core, 0, "ground")
+    if core in _BASEMENT_WORDS:
+        return FloorInfo(core, -1, "basement")
+    same = _repeated(core)
+    if same is not None:
+        return FloorInfo(core, same.num, same.kind)
+    lower = _two_storey(core)
+    if lower is not None:
+        return FloorInfo(core, lower.num, lower.kind)
     return FloorInfo(core, None, "unknown")
+
+
+# Ground written another way: 高層地下 / 低層地下 (upper / lower ground), 地面層, 地下2
+# (ground-floor flat 2; 'G2' is left unread, as it can also be a shop or car-park level).
+_GROUND_WORDS = {"高層地下", "低層地下", "地面層", "地下1", "地下2", "地下3"}
+_BASEMENT_WORDS = {"地庫"}
+_TWO_STOREY_SPLIT = re.compile(r"\s*(?:-|&|至|及)\s*")
+
+
+def _simple(part: str) -> FloorInfo | None:
+    """A part of a compound label read on its own, if it is a plain floor."""
+    fl = parse_floor(part)
+    return fl if fl.kind in ("number", "ground") and fl.num is not None else None
+
+
+def _repeated(core: str) -> FloorInfo | None:
+    """'3樓 3', '18 樓 18', '地下 G': the same floor written twice (SRPE registers, Centadata)."""
+    parts = [p for p in re.split(r"[\s樓]+", core) if p]
+    if len(parts) < 2:
+        return None
+    read = [_simple(p) for p in parts]
+    if any(r is None for r in read) or len({(r.num, r.kind) for r in read}) != 1:
+        return None
+    return read[0]
+
+
+def _two_storey(core: str) -> FloorInfo | None:
+    """A flat over two (or more) floors: '2-3', 'G-1', '地下至1', '5&6', '20F & R' (with the
+    roof), '二十六樓-二十七'. Read as its lowest floor."""
+    parts = [p for p in _TWO_STOREY_SPLIT.split(core) if p]
+    if len(parts) < 2:
+        return None
+    first = _simple(parts[0])
+    if first is None:
+        return None
+    rest = [_simple(p) for p in parts[1:] if p != "R"]
+    if any(r is None for r in rest):
+        return None
+    return min([first, *rest], key=lambda r: r.num)
 
 
 def infer_skipped(labels) -> set[int]:

@@ -39,9 +39,7 @@ from hkestate import normalise as n
         ("廿三", 23, "number"),
         ("十二樓", 12, "number"),
         # forms that are not one numbered floor stay as they were
-        ("高層地下", None, "unknown"),
         ("閣", None, "unknown"),
-        ("2-3", None, "unknown"),
         ("13號", None, "unknown"),
         ("三五", None, "unknown"),
     ],
@@ -49,6 +47,34 @@ from hkestate import normalise as n
 def test_parse_floor(label, num, kind):
     info = n.parse_floor(label)
     assert (info.num, info.kind) == (num, kind)
+
+
+@pytest.mark.parametrize(
+    "label, num, kind",
+    [
+        # the same floor written twice (SRPE registers)
+        ("3樓 3", 3, "number"), ("18 樓 18", 18, "number"), ("地下 G", 0, "ground"),
+        ("地面層 G", 0, "ground"),
+        # two-storey flats: the lower floor
+        ("2-3", 2, "number"), ("15 -16", 15, "number"), ("5F - 6", 5, "number"),
+        ("G-1", 0, "ground"), ("地下-1", 0, "ground"), ("地下至1", 0, "ground"),
+        ("地下及1", 0, "ground"), ("G&1", 0, "ground"), ("5&6", 5, "number"),
+        ("3F&5", 3, "number"), ("20F & R", 20, "number"), ("二-三", 2, "number"),
+        ("二十六樓-二十七", 26, "number"), ("地下-二", 0, "ground"),
+        # ground and basement written another way
+        ("高層地下", 0, "ground"), ("低層地下", 0, "ground"), ("地下2", 0, "ground"),
+        ("地庫", -1, "basement"),
+        # left unread: houses, blocks, mezzanine, ambiguous or mismatched forms
+        ("13號", None, "unknown"), ("3號屋", None, "unknown"), ("3座", None, "unknown"),
+        ("閣", None, "unknown"), ("G2", None, "unknown"), ("3樓 5", None, "unknown"),
+        ("--", None, "unknown"), ("B-1", None, "unknown"),
+    ],
+)
+def test_compound_floor_labels(label, num, kind):
+    info = n.parse_floor(label)
+    assert (info.num, info.kind) == (num, kind)
+    # the stored label is the source's text, so existing unit keys don't change
+    assert info.label == label.upper().strip()
 
 
 def test_floor_label_is_cleaned_but_kept_as_text():
