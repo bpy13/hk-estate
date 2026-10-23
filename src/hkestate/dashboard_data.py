@@ -545,18 +545,23 @@ def price_check_lines(r: dict, on: date, price_hkd: float | None) -> list[str]:
     if not pd.notna(r["fair_hkd"]):
         return [f"We cannot value this flat: {r['basis']}."]
     when = f"{on:%d %b %Y}"
+    width = (r["high_hkd"] / r["fair_hkd"] - 1) * 100
     lines = [f"Fair price on {when}: {_hk(r['fair_hkd'], 2)}.",
-             f"Normal range: {_hk(r['low_hkd'], 2)} to {_hk(r['high_hkd'], 2)}."]
+             f"Normal range: {_hk(r['low_hkd'], 2)} to {_hk(r['high_hkd'], 2)} "
+             f"(about ±{width:.0f}%)."]
     if r["verdict"] is None:
         return lines
+    raw = r["gap_pct"] * 100
+    lines.append(f"The price of {_hk(price_hkd, 2)} is {abs(raw):.1f}% "
+                 f"{'above' if raw >= 0 else 'below'} the fair price.")
     gap = r["gap_corrected_pct"] * 100
-    lines.append(f"The price of {_hk(price_hkd, 2)} is {abs(gap):.1f}% "
-                 f"{'above' if gap >= 0 else 'below'} the fair price. It is "
-                 f"{r['verdict']}.")
     if r["learned"]:
-        lines.append(f"The model learned from sales of this period, so it fits them too well. "
-                     f"We multiply the gap by {price_check.IN_SAMPLE_GAP_FACTOR:g}: "
-                     f"{r['gap_pct'] * 100:+.1f}% becomes {gap:+.1f}%.")
+        # the verdict uses the corrected gap, so say so: the raw price can sit inside the
+        # range shown while the corrected gap is outside it
+        lines.append(f"The model learned from sales of this period, so its fair price sits "
+                     f"closer to them than it should. Corrected (x "
+                     f"{price_check.IN_SAMPLE_GAP_FACTOR:g}), the gap is {gap:+.1f}%.")
+    lines.append(f"That is {r['verdict']}.")
     return lines
 
 

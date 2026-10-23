@@ -481,15 +481,17 @@ def test_price_check_lines_use_plain_words():
             "verdict": "within the normal range", "basis": "x"}
     lines = dd.price_check_lines(base, date(2026, 10, 23), 8_000_000)
     assert lines[0] == "Fair price on 23 Oct 2026: HK$7.50m."
-    assert lines[1] == "Normal range: HK$6.79m to HK$8.29m."
-    assert lines[2] == ("The price of HK$8.00m is 6.7% above the fair price. It is within "
-                        "the normal range.")
-    assert len(lines) == 3
+    assert lines[1] == "Normal range: HK$6.79m to HK$8.29m (about ±11%)."
+    assert lines[2] == "The price of HK$8.00m is 6.7% above the fair price."
+    assert lines[3] == "That is within the normal range."
+    assert len(lines) == 4
+    # learned: the raw gap is stated as it is, then the corrected gap the verdict uses
     learned = dict(base, learned=True, gap_pct=-0.0933, gap_corrected_pct=-0.1167,
                    verdict="below the normal range")
     lines = dd.price_check_lines(learned, date(2026, 3, 1), 6_800_000)
-    assert "11.7% below the fair price" in lines[2]
-    assert "multiply the gap by 1.25: -9.3% becomes -11.7%" in lines[3]
+    assert "9.3% below the fair price" in lines[2]
+    assert "Corrected (x 1.25), the gap is -11.7%" in lines[3]
+    assert lines[4] == "That is below the normal range."
     assert len(dd.price_check_lines(dict(base, verdict=None), date(2026, 3, 1), None)) == 2
     no = dict(fair_hkd=nan, basis="building not in the snapshot")
     assert dd.price_check_lines(no, date(2026, 3, 1), None) == [
