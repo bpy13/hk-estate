@@ -69,15 +69,15 @@ cache pruning.)*
   passes: every block of a house-flagged estate is now fetched (爾巒: 74 blocks, was 1
   page); a 3-storey walk-up of ordinary flats, or a tower named "... House", would be
   skipped. Estates already loaded are not affected.
-- **Live steps of the 2026-10-23 run, after geocoding ends (~17:00 on 10-23).**
-  - `python -m hkestate.geo --stations-only`: district fill and MTR distances.
-  - `python -m hkestate.sources.schools`.
-  - `hkestate train`, then `rank --from-snapshot`, then `report --settings standard
-    --from-snapshot`.
-  - The manual check of 20 shortlist URLs. (The phone-width check is dropped: no phone app,
-    owner 2026-10-23.)
-
-  The plan file's Tasks 5, 6, 7, 11 and 17 track them.
+- **Yoho estates top the shortlist (2026-10-23, after the retrain).** A manual check of the
+  top 20 found no data errors. But Grand Yoho (rank 3), Yoho Hub (5, 6) and Yoho Town (9,
+  13) in 元朗 sit 37-41% below the model's fair price. Example: Grand Yoho 5座, 789 sq ft,
+  asking HK$9.10m, fair HK$14.70m. The 72-month first-hand window (Task 8b) did not move
+  them. The snapshot's own sales agree with the model: clean 2026 sales in Grand Yoho 5座 have
+  a median HK$17,106/sq ft (16 sales), while this listing asks HK$11,534. Yoho Hub (clean,
+  since 2025-04: HK$16,930) and Yoho Town (HK$13,714) show the same kind of gap. So either
+  these asks are real bargains, or the recorded sales mix in a different phase or flat type.
+  Next step: compare a few listings with Centadata's flat-by-flat history for that block.
 - **SRPE multi-flat rows (pre-release review 2026-10-23, judgment call).** The parking cell
   is copied to every flat in a multi-flat row. A one-flat row whose block cell wraps onto two
   lines now raises and is skipped. Compare the skipped count at the next SRPE run with the

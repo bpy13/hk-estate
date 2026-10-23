@@ -251,7 +251,13 @@ building, so it finds no subsidised estate. Tasks 2-3 below follow
       reasons, flags and URL
     - the dashboard's ranked list hides excluded rows by default (a checkbox shows them)
     - a dashboard check on port 8531 shows both
-- [ ] **Task 5 (main session): real run and manual check** *(first run 2026-10-23 02:59 on
+- [x] **Task 5 (main session): real run and manual check** *(Result 2026-10-23 18:37 after
+  the Task 11 retrain: 32,787 ranked, 1,345 duplicates merged, 826 excluded, 11,098 with no
+  building match. A helper opened the top 20 URLs: 0 data errors; area, price and block
+  match the live page, all areas saleable. 御海灣 has left the top 20. Grand Yoho is still
+  rank 3, and Yoho Hub (5, 6) and Yoho Town (9, 13) join it, at 37-41% below fair. The data
+  is right, so the model's fair price for these 元朗 Yoho estates may be high; see
+  open-items.)* *(first run 2026-10-23 02:59 on
   the 10-22 snapshot and the 10-21 model: 24,983 ranked, 5,233 duplicates merged, 598
   excluded. 14,661 active sale listings have no building match, so they are not ranked.
   Shortlist ranks 2-3 are 御海灣 and rank 4 is Grand Yoho: newer estates whose fair price is
@@ -263,7 +269,10 @@ building, so it finds no subsidised estate. Tasks 2-3 below follow
 
 ## Phase 2 – Location coverage and data leftovers (sonnet; Task 8 fable)
 
-- [ ] **Task 6 (main session): geocode every master building (long job)** *(started
+- [x] **Task 6 (main session): geocode every master building (long job)** *(Done 18:29 on
+  10-23, about 17 hours: 40,406 of 40,406 ok, 0 no match, 0 errors. Coordinates for all
+  41,719 buildings; 1,893 marked mismatch (ALS district differs). Clean sales with an MTR
+  distance: 95%; without a district: 0.4%. Acceptance A2 holds.)* *(started
   2026-10-23 01:19, PID 16964, log `data\logs\geo_20261023_011933.log`; 40,406 buildings at
   ~35 a minute, so about 19 hours, ending around 20:00 on 10-23.)*
   - Run the existing resumable `geo.geocode_buildings` in the background through ALS. It
@@ -283,7 +292,8 @@ building, so it finds no subsidised estate. Tasks 2-3 below follow
     from its own district gets no MTR distance and no school net from those coordinates. It
     is still counted, as `geo_status = 'mismatch'`, set by a function the main session runs
     after geocoding. Buildings with no district of their own keep their coordinates. Green.
-- [ ] **Task 7: fill missing districts** `[parallel-ok]` *(code and tests done 570bd54,
+- [x] **Task 7: fill missing districts** `[parallel-ok]` *(live run 18:29 on 10-23: district
+  filled for 2,937 buildings; 0.4% of clean sales still lack one.)* *(code and tests done 570bd54,
   `geo.fill_districts`; live run pending: after the geocoding job, run
   `python -m hkestate.geo --stations-only`, which now calls it.)*
   - Files: modify `src/hkestate/geo.py`. Test `tests/test_geo.py`.
@@ -355,7 +365,10 @@ building, so it finds no subsidised estate. Tasks 2-3 below follow
     report line go too. Green.
   - Notes: Task 8 also edits `db.py` and `features.py`. Run Task 10 after Task 8, not in
     parallel.
-- [ ] **Task 11 (main session): retrain, rank and report on the new data**
+- [x] **Task 11 (main session): retrain, rank and report on the new data** *(Done 18:30-18:44
+  on 10-23. Out-of-time test on 22,074 recent sales: median error 6.4% (10-21 model 6.3%),
+  71% within 10%, range coverage 83%. MTR distance 95% of clean sales. Findings report
+  `data/reports/findings_20261023.md`.)*
   - After Tasks 6-10, take a fresh snapshot (`hkestate train` reads the database once).
     Then run `rank --from-snapshot` and `report --settings standard --from-snapshot`.
   - Done when: acceptance A2 and A3 hold. `model_eval.md` compares with the 2026-10-21
@@ -450,7 +463,9 @@ building, so it finds no subsidised estate. Tasks 2-3 below follow
   - Notes: if HKMA pages and press reports disagree, use HKMA and note the difference in
     open-items. Buyer types: first home vs owns another flat; salaried. Mortgage insurance
     (above the cap) appears as one line with its source, not modelled in detail.
-- [ ] **Task 17 (main session): load school nets on the live database**
+- [x] **Task 17 (main session): load school nets on the live database** *(Done 18:30 on
+  10-23: 39,826 of 41,719 buildings have a net (every building with usable coordinates);
+  445 of 697 primary schools have a net.)*
   - Done when: acceptance B1's school-net part holds (share of geocoded buildings with a net
     reported).
 
