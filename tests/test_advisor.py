@@ -577,6 +577,43 @@ def test_fair_value_uses_the_model_like_rank_does(data):
     assert np.isnan(advisor.fair_value("b-harbour", 500, data)[0])  # no model loaded
 
 
+def test_fair_value_at_a_past_date(data):
+    """`on` moves the date effect, the age and the index. The stand-in model says
+    15,000 x exp(0.01 x (month_idx - 320)); the index rises 1% a month from 2026-01. A flat of
+    Harbour Court (built 2001) on 2026-05-15 (month 316; index month 4 against the reference
+    month 7) is worth 15,000 x exp(-0.04) x 1.01^-3 x 500, aged 25. A date after the model's
+    valuation month uses that month (320), and on=None is today's answer."""
+    seen = []
+
+    def predict(X):
+        seen.append((int(X["month_idx"].iloc[0]), float(X["age_years"].iloc[0])))
+        return np.log(15_000) + 0.01 * (X["month_idx"].to_numpy(dtype=float) - 320)
+
+    fake = model.FairPrice(
+        booster=SimpleNamespace(predict=predict),
+        meta={"categories": {c: ["b-harbour"] for c in model.CAT_FEATURES},
+              "valuation_month_idx": 320, "index_reference_month": "2026-08-01"})
+    d = replace(data, fair_model=fake, price_index=_price_index())
+    value, _ = advisor.fair_value("b-harbour", 500, d, on=date(2026, 5, 15))
+    assert value == pytest.approx(15_000 * np.exp(-0.04) * 1.01 ** -3 * 500)
+    assert seen[-1] == (316, 25.0)
+    advisor.fair_value("b-harbour", 500, d, on=date(2026, 10, 1))  # later than month 320
+    assert seen[-1][0] == 320
+    today_value, _ = advisor.fair_value("b-harbour", 500, d)
+    assert today_value == pytest.approx(15_000 * 1.01 ** 2 * 500)
+    assert seen[-1] == (320, 25.0)
+    # facing and sea view reach the model
+    cap = []
+    fake2 = model.FairPrice(
+        booster=SimpleNamespace(predict=lambda X: cap.append(X.iloc[0]) or np.zeros(len(X))),
+        meta={"categories": {c: ["b-harbour", "S"] if c == "facing" else ["b-harbour"]
+                             for c in model.CAT_FEATURES},
+              "valuation_month_idx": 320})
+    advisor.fair_value("b-harbour", 500, replace(data, fair_model=fake2), facing="S",
+                       sea_view=True)
+    assert cap[0]["facing"] == "S" and bool(cap[0]["sea_view"]) is True
+
+
 def test_advise_owner_gives_both_paths(data):
     """An owner of a 500 sq ft flat in Harbour Court worth 8m (given): the rent estimate is
     the building's HK$40/sq ft = 20,000, growth is 灣仔區's range over 4 years, and the

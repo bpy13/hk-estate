@@ -977,9 +977,13 @@ def verdict_text(cases: dict, years: int, let: bool = False) -> str:
 
 
 def fair_value(building_id: str, area_sqft: float, data: AdvisorData,
-               floor_text: str | None = None, rooms: float | None = None) -> tuple[float, str]:
-    """The fair-price model's value of a flat (HK$, at today's index level), the way rank.py
-    values a listing, and the basis text; (nan, reason) when it cannot be valued."""
+               floor_text: str | None = None, rooms: float | None = None,
+               on: date | None = None, facing: str | None = None,
+               sea_view: bool = False) -> tuple[float, str]:
+    """The fair-price model's value of a flat (HK$, at today's index level, or at the index
+    level of `on`), the way rank.py values a listing, and the basis text; (nan, reason) when
+    it cannot be valued. `on` sets the date effect (never later than the model's valuation
+    month), the flat's age and the index move; None = today, as before."""
     m = data.fair_model
     if m is None:
         return np.nan, "no fair-price model loaded"
@@ -991,14 +995,17 @@ def fair_value(building_id: str, area_sqft: float, data: AdvisorData,
     top = b.get("top_floor")
     floor_num, rel, basis = features.listing_floor(floor_text, None, top)
     built = b.get("built_year")
+    when = on or data.today
+    valuation_idx = m.meta.get("valuation_month_idx", features.month_index(data.today))
+    month_idx = valuation_idx if on is None else min(features.month_index(on), valuation_idx)
     row = {
         "area_sqft": float(area_sqft), "rooms": rooms if rooms is not None else np.nan,
         "floor_num": floor_num, "rel_floor": rel, "top_floor": top,
-        "age_years": data.today.year - built if pd.notna(built) else np.nan,
+        "age_years": when.year - built if pd.notna(built) else np.nan,
         "mtr_m": b.get("mtr_m"), "lat": b.get("lat"), "lon": b.get("lon"),
         "estate_units": b.get("estate_units"),
-        "month_idx": m.meta.get("valuation_month_idx", features.month_index(data.today)),
-        "sea_view": False, "special_unit": False, "facing": "unknown",
+        "month_idx": month_idx,
+        "sea_view": bool(sea_view), "special_unit": False, "facing": facing or "unknown",
         "district": b.get("district"), "estate_key": b.get("estate_key"),
         "building_id": building_id,
     }
@@ -1007,7 +1014,7 @@ def fair_value(building_id: str, area_sqft: float, data: AdvisorData,
     logd = 0.0
     if not data.price_index.empty and "index_reference_month" in m.meta:
         cls = pd.Series([features.rvd_class(area_sqft)])
-        now = features.deflator(data.price_index, cls, pd.Series([pd.Timestamp(data.today)]))
+        now = features.deflator(data.price_index, cls, pd.Series([pd.Timestamp(when)]))
         ref = features.deflator(data.price_index, cls,
                                 pd.Series([pd.Timestamp(m.meta["index_reference_month"])]))
         logd = float(np.log(now[0]) - np.log(ref[0]))

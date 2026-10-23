@@ -29,7 +29,7 @@ personal data.
 
 ## Phase 1 – Build (sonnet)
 
-- [ ] **Task 1: value at a date, and the check**
+- [x] **Task 1: value at a date, and the check**
   - Files: modify `src/hkestate/advisor.py` (`fair_value`); create `src/hkestate/price_check.py`;
     test `tests/test_advisor.py`, create `tests/test_price_check.py`.
   - Do (failing tests first):
