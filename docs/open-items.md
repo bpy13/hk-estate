@@ -6,7 +6,8 @@ here; a limit or trap we live with goes in `known-issues.md`. Each item in one p
 ## Blockers
 
 ## Waiting on the user
-- **Which price growth should buy-vs-rent assume? (2026-10-23)** After the review fixes the
+- [x] *(Settled 2026-10-23, decisions.md: a box on the page, empty = each district's rise
+  since 1997.)* **Which price growth should buy-vs-rent assume? (2026-10-23)** After the review fixes the
   accounting is fair: both paths are cash at the same date, and the renter invests the
   monthly gap. Even so, buying wins for every listing in the middle case. The cause is the
   growth assumption.
@@ -22,10 +23,8 @@ here; a limit or trap we live with goes in `known-issues.md`. Each item in one p
 
   Proposal: (c), defaulting to the district's since-2003 median.
 
-- **Register the new tasks (2026-10-20).** `scripts\register_task.ps1` (all) or
-  `-Only 'daily listings'` (now 23 h limit) and `scripts\watchdog.ps1 -Register` (watchdog
-  every 15 min). Then check `data\logs\watchdog_<date>.log` after a day. Running jobs started
-  before this change keep the old code (no adaptive pacing, 30-min DB wait) until restarted.
+- [x] *(Done: the watchdog has logged every 15 minutes, and the daily job started on
+  schedule at 08:00 on 2026-10-23.)* **Register the new tasks (2026-10-20).**
 - **Spacious uncapped run length is unmeasured (2026-10-20).** Without the 6,000 cap the
   Spacious territory pass reads every building page in `spacious_building` at 1 s each run;
   it runs in parallel with Centanet, but if the building list is large (tens of thousands)
@@ -52,16 +51,12 @@ cache pruning.)*
   more. If it is still 403, Ricacorp is dropped like Midland and Squarefoot and Task 3.6 closes
   with the pairs already stored (Centadata `gain_pct` stays the fallback). Your call whether to
   contact them or accept the loss.
-- **Redirects are followed without a robots.txt check** (pre-release review). `fetch.py`
+- **Redirects are followed without a robots.txt check** (pre-release review). *(On hold:
+  the owner said wait, 2026-10-22, decisions.md.)* `fetch.py`
   follows redirects, so a redirect to another host or a disallowed path would be fetched
   unchecked and without that host's delay. None seen so far. Options: turn redirects off (a
   redirected page then counts as a failure), or check the final address against robots.txt and
   drop the page if disallowed. Proposal: the second.
-- **Estimated pairs lean towards "no effect"** (pre-release review). The model that values a
-  flat today was trained partly on that flat's own pre-2018 sale, so the estimated growth
-  partly echoes the start price and attribute effects shrink towards zero. The report should
-  say so in one sentence; a cleaner version would value each flat with a model that leaves
-  that flat out (slower). Your call whether that is worth it.
 
 ## Pending work
 - **Live steps of the 2026-10-23 run, after geocoding ends (~17:00 on 10-23).**
@@ -82,13 +77,6 @@ cache pruning.)*
   `fill_districts`) runs in one database session with per-row updates over ~40k buildings.
   The running process (PID 16964) uses the older tail: `assign_mtr` and
   `set_building_ages` only. Time it from its log when it ends.
-- **Your call: keep the retrained price model (2026-10-21)?** Retrained on all 1.5M clean
-  sales since 1995. On recent sales it is a touch worse than the 2026-10-18 model on the same
-  deals (6.25% vs 6.10% typical error) but it knows 99% of listings' buildings (old: 91%, the
-  rest fell back to a rough estate/district guess) and is far better on older sales (2000s
-  5.5% vs 7.8%), which the growth study uses. Kept the new one; the old one is in
-  `data\model\backup_20261018\` (copy back to restore). Training on 2010+ only would gain
-  0.2 pp on recent sales (`hkestate train --since 2010`); kept all years as decided.
 - **Asking-vs-deal gap uses the assumed 5% for every listing** (`gap_pairs: 0`): no listing
   has yet been matched to its later sale. Revisit once listings collected since 2026-10-16
   start selling.

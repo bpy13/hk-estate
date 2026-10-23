@@ -104,6 +104,8 @@ class Profile:
     rate: float = 0.035
     mortgage_years: int = 30
     allow_unknown: bool = False
+    growth: float | None = None        # yearly price rise the person typed (0.02 = 2%)
+    growth_since: str | None = None    # else the index's rise since this date (growth_range)
 
     def __post_init__(self):
         if self.intent not in INTENTS:
@@ -717,16 +719,47 @@ def window_growth(index: pd.Series, years: int) -> pd.Series:
     return pd.Series(out, index=s.index).dropna()
 
 
-def growth_range(district, years: int, data: AdvisorData) -> GrowthRange:
-    """The district's long-run growth from the growth study (median of flats sold twice,
-    `districts.csv`), with low and high cases: the median shifted by the 25th and 75th
-    percentile spread of `years`-long outcomes in the district's repeat-sales index
-    (`index.csv`; the territory index when the district has none). Without the study, a
-    stated guess."""
-    g = data.district_growth["growth"].get(district) if isinstance(district, str) \
-        and "growth" in data.district_growth else None
-    mid = float(g) if g is not None and pd.notna(g) else None
-    basis = f"{district} median, growth study" if mid is not None else None
+def growth_since(district, since: str, data: AdvisorData) -> tuple[float, str] | None:
+    """Yearly growth of the district's repeat-sales index from `since` (e.g. "2003-01-01")
+    to its last month, and the index used (the territory's, `all`, when the district has
+    too little). None without 3+ years of index after `since`."""
+    idx = data.district_index
+    if idx.empty or "district" not in idx:
+        return None
+    for name in ((district, "all") if isinstance(district, str) else ("all",)):
+        s = idx[(idx["district"] == name) & (idx["month"] >= pd.Timestamp(since))]
+        s = s.dropna(subset=["level"]).sort_values("month")
+        if s.empty:
+            continue
+        span = (s["month"].iloc[-1] - s["month"].iloc[0]).days / 365.25
+        if span >= 3:
+            rate = (s["level"].iloc[-1] / s["level"].iloc[0]) ** (1 / span) - 1
+            return float(rate), name
+    return None
+
+
+def growth_range(district, years: int, data: AdvisorData, *, mid: float | None = None,
+                 since: str | None = None) -> GrowthRange:
+    """The district's growth with low and high cases: the mid case shifted by the 25th and
+    75th percentile spread of `years`-long outcomes in the district's repeat-sales index
+    (`index.csv`; the territory index when the district has none).
+    The mid case is, in order: `mid` (a rate the person typed); the index's yearly growth
+    from `since` (growth_since; the page passes 1997, a peak, the owner's call 2026-10-23);
+    the study's long-run district median (median of flats
+    sold twice, `districts.csv`). Without the study, a stated guess."""
+    basis = None
+    if mid is not None:
+        basis = f"your figure of {mid * 100:.1f}%/yr"
+    elif since is not None:
+        found = growth_since(district, since, data)
+        if found is not None:
+            mid, name = found
+            basis = f"the {name} index since {since[:4]}"
+    if mid is None:
+        g = data.district_growth["growth"].get(district) if isinstance(district, str) \
+            and "growth" in data.district_growth else None
+        mid = float(g) if g is not None and pd.notna(g) else None
+        basis = f"{district} median, growth study" if mid is not None else None
     idx = data.district_index
     spread = None
     if not idx.empty and "district" in idx:
@@ -1004,7 +1037,8 @@ def advise_owner(building_id: str, area_sqft: float, data: AdvisorData,
                 district if isinstance(district, str) else None, on=data.today)
     district = data.buildings["district"].get(building_id) if building_id in \
         data.buildings.index else None
-    rng = growth_range(district if isinstance(district, str) else None, profile.years, data)
+    rng = growth_range(district if isinstance(district, str) else None, profile.years, data,
+                       mid=profile.growth, since=profile.growth_since)
     out = {"building_id": building_id, "area_sqft": area_sqft, "district": district,
            "value_hkd": value_hkd, "value_basis": value_basis, "rent_hkd": rent_hkd,
            "rent_basis": rent_basis, "growth": rng.as_dict(), "growth_basis": rng.basis,
@@ -1065,7 +1099,8 @@ def _vs_renting(c: pd.DataFrame, profile: Profile, data: AdvisorData) -> pd.Data
                 c.at[i, "vs_rent"] = f"vs renting: {NO_RELIABLE_RENT}"
             continue
         if d not in ranges:
-            ranges[d] = growth_range(d, profile.years, data)
+            ranges[d] = growth_range(d, profile.years, data, mid=profile.growth,
+                                     since=profile.growth_since)
         r = buy_vs_rent(float(row["price_hkd"]), est, profile.years, profile.rate,
                         ranges[d], buyer=profile.buyer, mortgage_years=profile.mortgage_years,
                         on=data.today)

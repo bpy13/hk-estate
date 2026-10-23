@@ -436,6 +436,12 @@ exit 0xC000013A (a console Ctrl+C/close); the day before, all three long jobs di
 - **Licence: MIT; README notice** that the repo holds code only and each source's terms
   apply (user, 2026-10-22). Fixtures, history and commit email stay as they are (user).
 - **Redirect robots check and the scheduled-task registration wait** (user, 2026-10-22).
+- **Price growth for buy-vs-rent and sell-vs-let** (user, 2026-10-23). The "Plan a move" page
+  has a box for the yearly price rise. Left empty, each district's index rise since 1997 is
+  used (Hong Kong as a whole 2.4%/yr). Why: the long-run median made buying win for 100% of
+  listings; the answer flips between about 0% (buying ahead for 6%) and 2% (96%). 1997 was
+  a peak, so the figure spans a full rise and fall; 2003 was the low (6.3%/yr from there)
+  and was rejected. Low and high cases keep the district's 10-year spread.
 
 ## Listing checks (2026-10-23, Claude's call)
 From `docs/ranking-diagnosis.md` (rank.py `listing_checks`). A check never changes a value;

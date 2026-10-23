@@ -485,6 +485,31 @@ def test_growth_range_from_the_study(data):
     assert (n.low, n.mid, n.high) == pytest.approx((0.0, 0.03, 0.06)) and "guess" in n.basis
 
 
+def test_growth_range_takes_a_typed_rate_or_the_rise_since_a_date(data):
+    """The page's growth box (owner's call 2026-10-23): a typed rate replaces the mid case;
+    left empty, the mid case is the index's yearly rise since 1997. Low and high keep the
+    same spread either way."""
+    base = advisor.growth_range("灣仔區", 3, data)
+    typed = advisor.growth_range("灣仔區", 3, data, mid=0.01)
+    assert typed.mid == 0.01 and "your figure of 1.0%/yr" in typed.basis
+    assert typed.high - typed.mid == pytest.approx(base.high - base.mid)
+    s = data.district_index
+    s = s[s["district"] == "灣仔區"].sort_values("month")
+    span = (s["month"].iloc[-1] - s["month"].iloc[0]).days / 365.25
+    expected = (s["level"].iloc[-1] / s["level"].iloc[0]) ** (1 / span) - 1
+    since = advisor.growth_range("灣仔區", 3, data, since="1990-01-01")
+    assert since.mid == pytest.approx(expected) and "灣仔區 index since 1990" in since.basis
+    # nothing after the date: falls back to the long-run median
+    late = advisor.growth_range("灣仔區", 3, data, since="2100-01-01")
+    assert late.mid == pytest.approx(0.05)
+    # the profile carries both into the listing cards
+    p = replace(INVESTOR, growth=-0.02)
+    l1 = advisor.recommend(p, data).listings.set_index("key").loc["L1"]
+    own = advisor.buy_vs_rent(8_000_000, 18_000, 10, 0.035,
+                              advisor.growth_range("灣仔區", 10, data, mid=-0.02), on=TODAY)
+    assert l1["vs_rent_hkd"] == pytest.approx(own["cases"]["mid"]["difference"])
+
+
 def test_buy_listings_carry_a_vs_renting_line(data):
     r = advisor.recommend(INVESTOR, data).listings.set_index("key")
     l1 = r.loc["L1"]

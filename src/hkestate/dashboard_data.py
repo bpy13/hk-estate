@@ -473,7 +473,25 @@ def plan_profile(a: dict, data: advisor.AdvisorData) -> advisor.Profile:
         else None,
         school_net=net, years=int(a.get("years") or 10), buyer=a.get("buyer", "first"),
         income_hkd=float(a["income"]) if a.get("income") else None,
-        rate=float(a["rate"]) if a.get("rate") else 0.035)
+        rate=float(a["rate"]) if a.get("rate") else 0.035,
+        growth=float(a["growth"]) if a.get("growth") is not None else None,
+        growth_since=GROWTH_SINCE)
+
+
+# Default price rise on the page: each district's index since 1997 (owner's call 2026-10-23).
+# 1997 was a peak, so the figure spans a full rise and fall; starting at the 2003 low gave
+# 6.3%/yr for Hong Kong as a whole, against 2.4% from 1997 and -2.2% from the 2021 peak.
+GROWTH_SINCE = "1997-01-01"
+
+
+def growth_hint(data: advisor.AdvisorData) -> str:
+    """One line for the growth box: the territory's yearly rise from a few start years."""
+    parts = []
+    for since in (GROWTH_SINCE, "2003-01-01", "2021-01-01"):
+        found = advisor.growth_since("all", since, data)
+        if found is not None:
+            parts.append(f"since {since[:4]}: {found[0] * 100:.1f}%/yr")
+    return ("Hong Kong as a whole, " + ", ".join(parts) + ". ") if parts else ""
 
 
 def find_buildings(data: advisor.AdvisorData, text: str, limit: int = 15) -> pd.DataFrame:
@@ -581,7 +599,8 @@ def _listing_card(row, profile: advisor.Profile, data: advisor.AdvisorData,
             facts.append(f"Renting a similar flat: about HK${est:,.0f} a month "
                          f"({how}" + (f", {note}" if note else "") + ")")
             if d not in ranges:
-                ranges[d] = advisor.growth_range(d, profile.years, data)
+                ranges[d] = advisor.growth_range(d, profile.years, data, mid=profile.growth,
+                                                 since=profile.growth_since)
             r = advisor.buy_vs_rent(float(row["price_hkd"]), est, profile.years, profile.rate,
                                     ranges[d], buyer=profile.buyer,
                                     mortgage_years=profile.mortgage_years, on=data.today)

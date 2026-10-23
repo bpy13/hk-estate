@@ -608,6 +608,13 @@ def plan_answers(pd_: dd.PlanData, intent: str) -> tuple[dict, dict | None, bool
                      "rent_hkd": rent_in or None}
             a["buyer"] = "first"
         a["years"] = st.slider("Years ahead", 3, 30, 10)
+        if intent != "rent":
+            g = st.number_input(
+                "Yearly price rise to assume (%, empty = each district's rise since 1997)",
+                -10.0, 15.0, value=None, step=0.5,
+                help=dd.growth_hint(pd_.advisor) + "Buying against renting, and letting "
+                     "against selling, turn mostly on this figure.")
+            a["growth"] = None if g is None else g / 100
         go = st.form_submit_button("Show me", type="primary", width="stretch")
     return a, owner, go
 
@@ -650,9 +657,10 @@ def page_plan() -> None:
     with st.expander("What the figures assume"):
         for k, v in advisor.assumptions().items():
             st.markdown(f"- **{k}**: {v}")
-        st.markdown("- **growth**: low and high cases are the district's 25th and 75th "
-                    "percentile outcomes over the same number of years; the middle case is "
-                    "its long-run median")
+        st.markdown("- **growth**: the middle case is the figure you typed, or else the "
+                    "district's yearly price rise since 1997; low and high cases add the "
+                    "spread of the district's 25th and 75th percentile outcomes over the "
+                    "same number of years")
     st.caption("Estimates for research, not financial advice.")
 
 
