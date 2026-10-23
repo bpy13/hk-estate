@@ -269,7 +269,8 @@ def cmd_master(args) -> int:
     # 4 s between requests: hk.centanet.com is shared with the listings and cd-history,
     # which run at the same time
     with Fetcher(min_interval=cd_master.MIN_INTERVAL_S) as f:
-        cd_master.run_master(f, db_path=args.db, log=log, limit=args.limit)
+        cd_master.run_master(f, db_path=args.db, log=log, limit=args.limit,
+                             recheck_house=args.recheck_house)
     return 0
 
 
@@ -578,6 +579,9 @@ def main(argv: list[str] | None = None) -> int:
 
     m = sub.add_parser("master", help="territory-wide estate/building list from Centadata")
     m.add_argument("--limit", type=int, default=None, help="only the next N estates (testing)")
+    m.add_argument("--recheck-house", action="store_true",
+                   help="read again only the estates skipped as 'house', loading their tower "
+                        "blocks (resumable; steps house:<code>)")
     m.set_defaults(func=cmd_master)
 
     lk = sub.add_parser("link-ids", help="link 28Hse estates/buildings to master ids")

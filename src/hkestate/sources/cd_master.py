@@ -193,8 +193,9 @@ def exclusion_reason(info: EstateInfo, overrides: dict[str, str] | None = None) 
         return "hos"
     if info.prh:
         return "tps_prh"
-    if info.is_house:
-        return "house"
+    # `info.is_house` is not used here: Centadata sets it when an estate holds any house, even
+    # one that is mostly towers (愉景灣, 爾巒). Houses are dropped block by block instead
+    # (`is_house_block`); an estate whose blocks are all houses is saved as "house".
     name = norm_name(info.name)
     if _VILLA.search(name):
         return "villa"
@@ -203,6 +204,24 @@ def exclusion_reason(info: EstateInfo, overrides: dict[str, str] | None = None) 
     if _VILLAGE_HOUSE.search(name):
         return "village_house"
     return None
+
+
+_HOUSE_WORD = re.compile(r"洋房|別墅|\bhouses?\b|\bvillas?\b", re.IGNORECASE)
+MAX_HOUSE_FLOORS = 3  # probed 2026-10-23: houses have 1-2 floors, tower blocks 13 or more
+
+
+def is_house_block(name: str, floors: int | None, own_flag: bool | None) -> bool:
+    """Is this block a house rather than a flat in a tower? (plans/2026-10-23-house-flag-estates.md)
+    - a house word in the name (洋房, 別墅, "House A"), or
+    - 1-3 floors (the page's own `isHouse` misses low-rise houses such as 錦繡花園 2座), or
+    - the block's own `isHouse` flag, for blocks other than the estate page's entry block.
+    `own_flag` is None for the entry block: its flag repeats the estate's (true when the
+    estate holds any house), so it says nothing about the block."""
+    if _HOUSE_WORD.search(norm_name(name)):
+        return True
+    if floors is not None and 1 <= floors <= MAX_HOUSE_FLOORS:
+        return True
+    return bool(own_flag)
 
 
 def load_overrides(path=None) -> dict[str, str]:
@@ -363,9 +382,11 @@ def _fetch_page(fetcher, name: str, code: str):
 
 
 def process_estate(fetcher, db_path, code: str, name: str, *, pilot: bool,
-                   overrides: dict[str, str], pause=None) -> tuple[str | None, int, int]:
-    """Read one `2-` page (and its blocks); returns (exclusion reason, blocks, deals added).
-    `pause()`, if given, is called before each page."""
+                   overrides: dict[str, str],
+                   pause=None) -> tuple[str | None, int, int, int]:
+    """Read one `2-` page (and its blocks); returns (exclusion reason, blocks loaded, deals
+    added, house blocks skipped). House blocks are not loaded; an estate whose blocks are all
+    houses is saved with reason "house". `pause()`, if given, is called before each page."""
     pause = pause or (lambda: None)
     pause()
     url, html = _fetch_page(fetcher, name, code)
@@ -376,33 +397,53 @@ def process_estate(fetcher, db_path, code: str, name: str, *, pilot: bool,
     if pilot:
         with db.session(db_path) as con:
             save_estate(con, info, excluded=None, blocks=0, pilot=True)
-        return None, 0, 0
+        return None, 0, 0, 0
     reason = exclusion_reason(info, overrides)
     if reason:
         with db.session(db_path) as con:
             save_estate(con, info, excluded=reason, blocks=0, pilot=False)
-        return reason, 0, 0
-    added = 0
+        return reason, 0, 0, 0
+    added = loaded = skipped = 0
     codes = block_codes(entry)
+    menu = dict(entry.phases)
+    menu.update(entry.blocks)
+    menu[entry.code] = entry.block
     for bcode in codes:
+        bname = menu.get(bcode) or ""
         if bcode == entry.code:
-            burl, bhtml, blk = url, html, entry
+            burl, bhtml, blk, page, own_flag = url, html, entry, info, None
         else:
+            if is_house_block(bname, None, None):  # the menu name alone tells: no request
+                skipped += 1
+                continue
             pause()
             burl, bhtml = _fetch_page(fetcher, name, bcode)
             blk = cd.parse_block_page(bhtml)
+            page = parse_estate_info(bhtml)
+            own_flag = page.is_house
+        if is_house_block(bname or blk.block, page.floors, own_flag):
+            skipped += 1
+            continue
         with db.session(db_path) as con:
-            added += load_block(con, info, blk, burl, parse_estate_info(bhtml))
+            added += load_block(con, info, blk, burl, page)
+        loaded += 1
+    if loaded == 0 and skipped:  # every block is a house: same result as the old estate flag
+        with db.session(db_path) as con:
+            save_estate(con, info, excluded="house", blocks=0, pilot=False)
+        return "house", 0, 0, skipped
     with db.session(db_path) as con:
-        save_estate(con, info, excluded=None, blocks=len(codes), pilot=False)
-    return None, len(codes), added
+        save_estate(con, info, excluded=None, blocks=loaded, pilot=False)
+    return None, loaded, added, skipped
 
 
 def run_master(fetcher, db_path=None, log=print, limit: int | None = None,
-               wait=time.sleep) -> dict:
+               wait=time.sleep, recheck_house: bool = False) -> dict:
     """Walk every estate in the sitemap; resumable through run_progress (one step per code).
     Runs alongside the Centanet listings and cd-history (same host, each at its own pace);
-    throttling is waited out (`wait` sleeps the job's own cool-downs)."""
+    throttling is waited out (`wait` sleeps the job's own cool-downs).
+    `recheck_house`: read again only the estates saved with exclude_reason 'house' (they were
+    dropped whole before blocks were judged one by one); steps are `house:<code>`, so the
+    normal steps are untouched."""
     xml = fetcher.get(SITEMAP_URL, "static")
     estates = [(c, n) for c, n in sitemap_estates(xml) if c.startswith("2-")]
     overrides = load_overrides()
@@ -412,12 +453,18 @@ def run_master(fetcher, db_path=None, log=print, limit: int | None = None,
         ensure_tables(con)
         done = {r[0] for r in con.execute(
             "SELECT step_key FROM run_progress WHERE command = ?", [COMMAND]).fetchall()}
-        run_id = db.start_run(con, COMMAND, f"limit={limit}" if limit else "")
-    todo = [(c, n) for c, n in estates if c not in done]
+        house_codes = {r[0] for r in con.execute(
+            "SELECT code FROM master_estate WHERE exclude_reason = 'house'").fetchall()}
+        args = ("recheck-house " if recheck_house else "") + (f"limit={limit}" if limit else "")
+        run_id = db.start_run(con, COMMAND, args.strip())
+    step = (lambda c: f"house:{c}") if recheck_house else (lambda c: c)
+    todo = [(c, n) for c, n in estates
+            if step(c) not in done and (not recheck_house or c in house_codes)]
     if limit:
         todo = todo[:limit]
     log(f"{len(estates)} estates in the sitemap, {len(done)} done, {len(todo)} to do")
-    stats = {"estates": 0, "excluded": 0, "blocks": 0, "deals": 0, "errors": 0}
+    stats = {"estates": 0, "excluded": 0, "blocks": 0, "deals": 0, "house_blocks": 0,
+             "errors": 0}
     streak, status, message = 0, "ok", ""
     # throttling (429/503, 5xx, timeouts): wait and try the same estate again (patience.py)
     patience = Patience(log, what="master", fetcher=fetcher, sleep=wait)
@@ -426,7 +473,7 @@ def run_master(fetcher, db_path=None, log=print, limit: int | None = None,
             skipped = False
             while True:
                 try:
-                    reason, blocks, added = process_estate(
+                    reason, blocks, added, houses = process_estate(
                         fetcher, db_path, code, name, pilot=code in pilot,
                         overrides=overrides)
                 except SourceBlocked:
@@ -452,8 +499,9 @@ def run_master(fetcher, db_path=None, log=print, limit: int | None = None,
             stats["excluded"] += reason is not None
             stats["blocks"] += blocks
             stats["deals"] += added
+            stats["house_blocks"] += houses
             with db.session(db_path) as con:
-                db.mark_step(con, COMMAND, code, run_id, reason or "ok")
+                db.mark_step(con, COMMAND, step(code), run_id, reason or "ok")
             if i % 50 == 0:
                 log(f"{i}/{len(todo)} {stats}")
     except BaseException as e:  # incl. Ctrl-C: record, then let it propagate

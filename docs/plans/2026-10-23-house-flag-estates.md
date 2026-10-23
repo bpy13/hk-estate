@@ -49,7 +49,7 @@ Monterey (83), 天賦海灣 (77), Savannah (74), 昇薈 (67), 嘉峯匯 (59), �
     a house block from a tower block (e.g. block-level `isHouse`, or floors <= 3).
   - Notes: does the `2-` page's `isHouse` describe the estate or only its first block?
 
-- [ ] **Task 2: decide per block, add `--recheck-house`** (after Task 1)
+- [x] **Task 2: decide per block, add `--recheck-house`** (after Task 1)
   - Files: modify `src/hkestate/sources/cd_master.py`, `src/hkestate/cli.py`; test
     `tests/test_cd_master.py` (or the existing master tests file).
   - Do (failing tests first, with fixture pages):
