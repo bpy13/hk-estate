@@ -817,7 +817,7 @@ def match_territory(db_path, today: date, log: Log = print) -> dict:
         rows = con.execute(
             """
             SELECT l.source, l.listing_id, l.building_text, r.estate_name, r.source_building_key,
-                   r.floor_text, r.floor_range, l.building_id
+                   r.floor_text, r.floor_range, l.building_id, l.url
             FROM listing l LEFT JOIN (
                 SELECT source, listing_id, arg_max(estate_name, fetched_at) AS estate_name,
                        arg_max(source_building_key, fetched_at) AS source_building_key,
@@ -833,10 +833,10 @@ def match_territory(db_path, today: date, log: Log = print) -> dict:
         updates = []
         with db.session(db_path) as con:
             matcher.con = con
-            for src, lid, text, estate, bkey, floor_text, floor_range, old_bid in \
+            for src, lid, text, estate, bkey, floor_text, floor_range, old_bid, url in \
                     rows[i:i + 1000]:
                 bid, how = matcher.match(text, block_key=bkey, estate=estate, source=src,
-                                         manual=manual)
+                                         manual=manual, url=url)
                 if old_bid is not None and bid == old_bid:
                     continue  # a loose match the current rules still accept: leave it
                 band = match.floor_band(floor_text, matcher.top_floor(bid),

@@ -263,7 +263,8 @@ TABLES_DDL = [
         building_text VARCHAR,
         building_id   VARCHAR,               -- master building, NULL if not matched
         match_method  VARCHAR,               -- manual, single, exact, range, block_code, contains,
-                                             -- fuzzy, ambiguous, check_match, none
+                                             -- fuzzy, ambiguous, check_match, none;
+                                             -- link_<method>: Centanet block read from the link
         floor_band    VARCHAR,               -- low, mid, high, unknown
         flat          VARCHAR,
         price_hkd     BIGINT,

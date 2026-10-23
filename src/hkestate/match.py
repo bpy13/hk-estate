@@ -383,7 +383,24 @@ class TerritoryMatcher:
 
     def match(self, text: str | None, *, block_key: str | None = None,
               estate: str | None = None, source: str | None = None,
-              manual: dict | None = None) -> tuple[str | None, str]:
+              manual: dict | None = None, url: str | None = None) -> tuple[str | None, str]:
+        bid, how = self._match(text, block_key=block_key, estate=estate, source=source,
+                               manual=manual)
+        if bid is None and source == "centanet" and url:
+            # The page title often names only the estate ('尚悅'); the link names the block
+            # ('尚悅-3座'). About 2,900 active sale listings, 2026-10-23.
+            from hkestate.sources.centanet import slug_text
+
+            alt = slug_text(url)
+            if alt and norm_key(alt) != norm_key(text):
+                bid2, how2 = self._match(alt, estate=estate, source=source)
+                if bid2 is not None:
+                    return bid2, f"link_{how2}"
+        return bid, how
+
+    def _match(self, text: str | None, *, block_key: str | None = None,
+               estate: str | None = None, source: str | None = None,
+               manual: dict | None = None) -> tuple[str | None, str]:
         if block_key and f"cd-{block_key}" in self.block_ids:
             return f"cd-{block_key}", "block_code"
         if manual and text:

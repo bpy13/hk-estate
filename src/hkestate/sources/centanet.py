@@ -75,6 +75,13 @@ def sitemap_entries(xml: str, prefixes: dict[str, str],
     return out
 
 
+def slug_text(url: str | None) -> str | None:
+    """The estate, phase and block named in a detail link, as text: '.../尚悅-3座_ABC123?...'
+    -> '尚悅 3座'. Many pages' titles give only the estate; the link still names the block."""
+    m = _DETAIL.search(unquote(url or ""))
+    return m.group("slug").replace("-", " ") if m else None
+
+
 def _to_date(text: str | None) -> date | None:
     m = _DATE.search(text or "")
     return date(int(m.group(1)), int(m.group(2)), int(m.group(3))) if m else None

@@ -46,6 +46,20 @@ def test_estate_name_then_block_name(con):
     assert m.top_floor("cd-1-A") == 30
 
 
+def test_centanet_link_names_the_block_when_the_title_does_not(con):
+    """Many Centanet titles give only the estate ('尚悅'); the detail link names the block."""
+    seed(con)
+    m = match.TerritoryMatcher(con)
+    url = ("https://hk.centanet.com/findproperty/detail/"
+           "%E6%B5%B7%E6%99%AF%E8%8B%91-%E4%B9%99%E5%BA%A7_ABC123?theme=buy")  # 海景苑-乙座
+    assert centanet.slug_text(url) == "海景苑 乙座"
+    assert m.match("海景苑", estate="海景苑")[0] is None  # two blocks, none named
+    assert m.match("海景苑", estate="海景苑", source="centanet", url=url) == (
+        "cd-1-B", "link_exact")
+    # other sites have no such link; the title decides
+    assert m.match("海景苑", estate="海景苑", source="spacious", url=url)[0] is None
+
+
 def test_dedupe_buckets_give_the_same_groups():
     rows = [
         {"source": "centanet", "listing_id": "1", "kind": "sale", "building_id": "b",
