@@ -126,8 +126,10 @@ cache pruning.)*
   clean-up after 202 of 377 files) deleted 1,285 stored SRPE rows, many of them real sales:**
   the multi-flat parser read two-language block cells (`第2座\nTower 2`) as two flats and
   rejected nearly every row. Fixed (several flats = several prices); a 20-file sample now
-  reads 3,964 sales and rejects 2. Rerunning `--reparse-cached` restores the deleted rows
-  from the saved files; needs the owner's go; their `source_id`
+  reads 3,964 sales and rejects 2. *(Rerun 14:55-16:56 with the fix, owner's go: 321
+  registers, 3,864 rows added back or corrected, 111 deleted, 121 rows rejected, no failed
+  file. SRPE rows over HK$500m: about 50 before, 6 now (not yet checked whether real); one
+  row still dated after today, flagged `excl_bad_date`.)* their `source_id`
   (`3085:3 3:2 5:A A:...`) differs from the new per-flat ids, so they would otherwise stay
   beside the corrected ones.)*
 - *(Mostly settled 2026-10-23, Task 8, fd6b00f: on the model's clean data the count is
