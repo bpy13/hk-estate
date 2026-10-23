@@ -59,6 +59,12 @@ cache pruning.)*
   drop the page if disallowed. Proposal: the second.
 
 ## Pending work
+- **House blocks are judged one by one (2026-10-23, plan house-flag-estates, 2134192).** A
+  block counts as a house when its name has 洋房/別墅/House, it has 1-3 floors, or (not the
+  entry block) its own Centadata `isHouse` is true. Side effects for future full master
+  passes: every block of a house-flagged estate is now fetched (爾巒: 74 blocks, was 1
+  page); a 3-storey walk-up of ordinary flats, or a tower named "... House", would be
+  skipped. Estates already loaded are not affected.
 - **Live steps of the 2026-10-23 run, after geocoding ends (~17:00 on 10-23).**
   - `python -m hkestate.geo --stations-only`: district fill and MTR distances.
   - `python -m hkestate.sources.schools`.
