@@ -79,6 +79,37 @@ def test_affordable_pass_and_fail():
     assert bad.passes is False
 
 
+@pytest.mark.parametrize("price, first, loan", [
+    # HKMCI MIP criteria from 16 Oct 2024 (src/hkestate/mortgage.py [HKMCI-MIP-2024-10])
+    (8 * M, True, 7.2 * M),            # up to $10m, first-time salaried: 8m x 0.90
+    (8 * M, False, 6.4 * M),           # others: 8m x 0.80
+    (10 * M, True, 9 * M),             # $10m is still in the first band: 10m x 0.90
+    (11 * M, True, 9 * M),             # $10m-$11.25m: 90% capped at $9m -> 9m (81.8%)
+    (11 * M, False, 8.8 * M),          # others 80%: 11m x 0.80
+    (11.25 * M, True, 9 * M),          # $11.25m-$15m: 80% for all: 11.25m x 0.80 = 9m
+    (15 * M, True, 12 * M),            # 15m x 0.80
+    (16 * M, False, 12 * M),           # $15m-$17.15m: min(16m x 0.80 = 12.8m, 12m cap)
+    (17.15 * M, False, 12 * M),        # at the limit: still covered, capped
+])
+def test_mip_max_loan_bands(price, first, loan):
+    got = mortgage.mip_max_loan(price, first_time_salaried=first, on=date(2026, 10, 23))
+    assert got == pytest.approx(loan)
+
+
+def test_mip_limits_and_dates():
+    on = date(2026, 10, 23)
+    # above $17.15m there is no mortgage insurance
+    assert mortgage.mip_max_loan(17.2 * M, first_time_salaried=True, on=on) is None
+    # value is the lower of price and valuation: 12m price valued at 9.5m -> 9.5m x 0.90
+    assert mortgage.mip_max_loan(12 * M, valuation=9.5 * M, first_time_salaried=True,
+                                 on=on) == pytest.approx(8.55 * M)
+    r = mortgage.mip_rules_on(on)
+    assert (r.dti_cap, r.max_years, r.max_years_plus_age) == (0.50, 30, 75)
+    # criteria before 16 Oct 2024 were not entered
+    with pytest.raises(ValueError):
+        mortgage.mip_rules_on(date(2024, 10, 15))
+
+
 def test_affordable_other_debt_counts_in_dsr():
     # 10,000 other monthly debt on 100,000 income adds 10 points: 43.4%
     r = mortgage.affordable(10 * M, 100_000, 0.04, 30, buyer="first", on=date(2025, 1, 1),

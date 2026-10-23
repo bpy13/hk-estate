@@ -20,12 +20,31 @@ Sources:
   for applicants who already have another outstanding mortgage; DSR 50% self-use, 40% with
   another mortgage; the 200-basis-point interest rate stress test suspended from that date.
 
+- [HKMCI-MIP-2024-10] HKMC Insurance Limited, Mortgage Insurance Programme (MIP), page
+  https://www.hkmc.com.hk/eng/our_business/mortgage_insurance_programme.html and its
+  "Insurance Eligibility Criteria" PDFs "80% MIP ... property value up to HK$6 million" and
+  "... up to HK$17.15 million" (both "on or after 16102024", dated October 2024), plus the MIP
+  FAQ dated 02/2026 (Q1-Q4, Q9, Q18, Q23). All read 2026-10-23 from the PDF text.
+  Effective for provisional agreements signed on or after 16 Oct 2024 (also uncompleted flats
+  agreed earlier that complete on or after it). Value = lower of price and valuation.
+  Maximum loan (`mip_max_loan`): value up to HK$10m: 90% for a buyer who holds no HK
+  residential property and whose applicants are all regular salaried, else 80%; above HK$10m
+  and below HK$11.25m: that buyer 80%-90% capped at HK$9m (so HK$9m), others 80%; HK$11.25m to
+  HK$15m: 80%; above HK$15m to HK$17.15m: 80% capped at HK$12m; above HK$17.15m: no MIP.
+  Debt-to-income (DTI) cap 50%, tenor up to 30 years, tenor + building age up to 75 years,
+  owner-occupied only. Flats under construction qualify only if the project is under the
+  Lands Department Consent Scheme and completes within 12 months of drawdown. The MIP premium
+  may be financed on top of the loan (not modelled).
+  Before 16 Oct 2024 (not entered): the same 80%/90% bands to HK$17.15m, plus 70% up to
+  HK$30m for buyers with another outstanding mortgage; DTI 40% for those buyers (FAQ Q4, Q9).
+  HOS Secondary Market (Housing Authority subsidised flats, from 1 Mar 2024, FAQ part 2): up to
+  95% (Green Form) or 90% (White Form) to HK$10m, value cap HK$15m; not entered, as the project
+  covers private flats.
+
 Not modelled (one line each):
-- Higher LTV through the HK Mortgage Corporation's Mortgage Insurance Programme (80%, 90% in
-  limited cases; for the price bands, see https://www.hkmc.com.hk/eng/our_business/mortgage_insurance_programme.html,
-  read 2026-10-23 via a summary, not confirmed against the page text).
 - A December 2024 HKMA special scheme for buyers of uncompleted first-hand flats (reported
-  80% LTV, 60% DSR); seen only in a search summary of an HKMA letter, so not entered.
+  80% LTV, 60% DSR); seen only in a search summary of an HKMA letter, and not on the HKMC MIP
+  page or its FAQ (02/2026) either, so not entered.
 
 Buyer types follow costs.py: "first" owns no other flat; "additional" already owns one with
 an outstanding mortgage (the Feb 2024 rule only cut the limits for borrowers with an
@@ -99,6 +118,52 @@ def max_loan(price: float, valuation: float | None = None, buyer: str = "first",
             loan = value * (ltv - cut)
             return min(loan, cap) if cap is not None else loan
     raise AssertionError("unreachable")
+
+
+@dataclass(frozen=True)
+class MipRules:
+    effective: date
+    source: str
+    # (upper value limit, inclusive?, LTV, loan cap or None, LTV/cap for a first-time
+    # salaried buyer); values above the last limit get no mortgage insurance
+    bands: tuple
+    dti_cap: float
+    max_years: int
+    max_years_plus_age: int
+
+
+MIP_RULES = [
+    MipRules(date(2024, 10, 16), "HKMCI-MIP-2024-10",
+             ((10 * M, True, 0.80, None, (0.90, None)),
+              (11.25 * M, False, 0.80, None, (0.90, 9 * M)),
+              (15 * M, True, 0.80, None, None),
+              (17.15 * M, True, 0.80, 12 * M, None)),
+             0.50, 30, 75),
+]
+
+
+def mip_rules_on(on: date) -> MipRules:
+    """The MIP criteria for a provisional agreement signed on `on`."""
+    found = [r for r in MIP_RULES if r.effective <= on]
+    if not found:
+        raise ValueError(f"no MIP criteria recorded before {MIP_RULES[0].effective}")
+    return found[-1]
+
+
+def mip_max_loan(price: float, valuation: float | None = None,
+                 first_time_salaried: bool = False, on: date | None = None) -> float | None:
+    """Largest loan with HKMC mortgage insurance (MIP), or None when the value is above the
+    MIP limit. `first_time_salaried`: no applicant holds a HK residential property and all are
+    regular salaried (the condition for more than 80%)."""
+    r = mip_rules_on(on or date.today())
+    value = price if valuation is None else min(price, valuation)
+    for upper, inclusive, ltv, cap, first in r.bands:
+        if value < upper or (inclusive and value == upper):
+            if first_time_salaried and first is not None:
+                ltv, cap = first
+            loan = value * ltv
+            return min(loan, cap) if cap is not None else loan
+    return None
 
 
 def monthly_payment(loan: float, annual_rate: float, years: float) -> float:

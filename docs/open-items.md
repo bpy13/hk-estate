@@ -241,7 +241,9 @@ cache pruning.)*
   to the probe allowance only those two were tested. A larger page would cut calls by up to
   a third on big buildings. *(Task 2.)*
 
-- **Subsidised-estate list is a seed only (2026-10-23, Tasks 2-3).**
+- *(2026-10-23: the list now holds 312 Housing Authority and Housing Society estates, matched
+  by name and district; 82 ranked listings marked, 40 of them 浩景台. Still open: wire in
+  `master_overrides`.)* **Subsidised-estate list is a seed only (2026-10-23, Tasks 2-3).**
   `src/hkestate/subsidised_estates.csv` holds 銀蔚苑 only. The `check_subsidised` price rule
   catches 5 more listings. Add the Housing Authority's HOS / PSPS / TPS court list. Also wire
   in the master list's exclusion and `master_overrides`; today `building_table` drops those
@@ -256,8 +258,8 @@ cache pruning.)*
 
 - **Mortgage rules (Task 16, 2026-10-23, 35733ba).** HKMA rules are entered from
   2024-02-28 (current: 70% LTV for all, DSR 50%, stress test suspended, since 2024-10-16).
-  Still to do: confirm the HK Mortgage Corporation's mortgage-insurance limits (80%/90%;
-  read only from a summary), decide on the Dec 2024 scheme for uncompleted first-hand flats
+  Mortgage-insurance limits confirmed from the HKMC pages on 2026-10-23 and entered as
+  `mortgage.mip_max_loan` (not yet used by the advisor). Still to do: decide on the Dec 2024 scheme for uncompleted first-hand flats
   (reported 80% LTV, 60% DSR, not entered), and add older rules if past purchases need them.
 - **First-hand window counts (Task 8b, 384a649).** The 72-month window removes 5,012 clean
   deals; the diagnosis counted 4,153 with a different filter, not reconciled. Price ratio to
