@@ -39,7 +39,7 @@ Monterey (83), 天賦海灣 (77), Savannah (74), 昇薈 (67), 嘉峯匯 (59), �
 
 ## Phase 1 – Probe and code (sonnet)
 
-- [ ] **Task 1: probe the house flag**
+- [x] **Task 1: probe the house flag**
   - Files: none in the repo; findings go into this plan's Notes below.
   - Do: for 愉景灣, 爾巒, 昇薈, Monterey, 錦繡花園 and 匡湖居, read the `2-` page (already
     cached by the fetcher, so no request) and up to 4 block pages each (at most ~24 requests
@@ -82,4 +82,45 @@ Monterey (83), 天賦海灣 (77), Savannah (74), 昇薈 (67), 嘉峯匯 (59), �
     Record numbers in `docs/open-items.md`.
 
 ## Notes
-*(Task 1 findings go here.)*
+**Task 1 findings (2026-10-23, 23 new requests, cached `2-` pages reused).**
+
+Does the `2-` page's `isHouse` describe the estate or the first block? Neither reliably. It
+is true when the estate holds any house (it is true for 爾巒, 昇薈 and Monterey, whose first
+block is a 20-31 floor tower). The block page of the *entry* block repeats that estate flag, so
+the entry block's own `isHouse` says nothing. On every *other* block page (those with a
+`buildingTypeCode`) `isHouse` is the block's own: False for towers, True for 洋房 / villas.
+Exception: 錦繡花園 2座 and 3座 (2 floors, 4 units) read False, so the flag alone misses
+low-rise houses.
+
+| Estate (code) | Block | Entry block? | block isHouse | estateType | floors | units | Is it a house? |
+|---|---|---|---|---|---|---|---|
+| 愉景灣 7期璧如臺 (2-LIDHTHXXDT) | 1座 | yes | True | Phase | 1 | 1 | house |
+| | 2座, 31座, 32座 | no | True | Phase | 1 | 1 | house |
+| 愉景灣 5期頤峰 (2-LIDHTHXXZT) | 靖山閣 (1座) | yes | False | Phase | 24 | 142 | tower |
+| | 韶山閣, 蔚山閣, 濤山閣 | no | False | Phase | 24 | 142-192 | tower |
+| 愉景灣 12期 海澄湖畔二段 (2-WDPPWPPJES) | 悠澄閣 | yes | True (estate flag) | Phase | 24 | 111 | tower |
+| | 閒澄閣 | no | False | Phase | 24 | 133 | tower |
+| | 洋房15, 洋房17 | no | True | Phase | 1 | 1 | house |
+| 爾巒 (2-BEPPWPPJPG) | 茵羅洛斯大道 1座 | yes | True (estate flag) | Normal | 20 | 56 | tower |
+| | 茵羅洛斯大道 2座 | no | False | Normal | 23 | 63 | tower |
+| | 迪維尼亞大道 洋房17, 洋房18 | no | True | Normal | 1 | 1 | house |
+| 昇薈 (2-WBPPWPPYPP) | 1座 | yes | True (estate flag) | Normal | 31 | 152 | tower |
+| | 2座 | no | False | Normal | 31 | 152 | tower |
+| | 洋房7, 洋房8 | no | True | Normal | 1 | 1 | house |
+| Monterey (2-YASPWPPHPY) | 1座 | yes | True (estate flag) | Normal | 13 | 90 | tower |
+| | 2A座 | no | False | Normal | 13 | 51 | tower |
+| | 洋房G, 洋房H | no | True | Normal | 1 | 1 | house |
+| 錦繡花園 (2-LMDNZHNSHH) | 1座 | yes | True (estate flag) | Normal | 2 | 4 | house |
+| | 2座, 3座 | no | False | Normal | 2 | 4 | house (flag misses it) |
+| | 4座 | no | True | Normal | 1 | 1 | house |
+| 匡湖居 1期 (2-DDDOQRUYOO) | 1, 2, 101, 102座 ("House A..K, Block n") | mixed | True | Phase | 1 | 1 | house |
+
+**Rule.** A block is a house block when any of these holds:
+1. `floors` is 1-3 (all real houses seen have 1-2; all towers 13+);
+2. its name contains 洋房, 別墅 or "House" (the existing villa words);
+3. it is not the entry block and its own page says `isHouse` true.
+The entry block's `isHouse` is never used, because it repeats the estate flag. A block with
+no floors figure falls back to rule 2 and 3 only. Pure house estates still end up with every
+block skipped, so they are saved `exclude_reason = 'house'` as before. Estates often have
+many blocks (爾巒 74, 匡湖居 1期 102). A block whose menu name already has a house word
+(rule 2) is skipped without a request; the others need their page to read the floors.
