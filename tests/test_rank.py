@@ -169,13 +169,41 @@ def test_subsidised_names_and_the_stop_gap_flag():
     d = _deals()
     assert _check(_frame(estate_name="銀蔚苑"), d, subsidised={"銀蔚苑"})[
         "exclude_reason"][0] == "subsidised"
-    assert "銀蔚苑" in rank.subsidised_estates()
+    assert "銀蔚苑|離島區" in rank.subsidised_estates()
     # estate median under 0.7x its district's, 3+ deals, name ends 苑: stop-gap flag
     cheap = _deals(psf=5_000.0).assign(estate_key="e")
     other = _deals(psf=10_000.0).assign(estate_key="f", building_id="c")
     deals = pd.concat([cheap, other])
     assert _check(_frame(), deals)["exclude_reason"][0] == "check_subsidised"
     assert pd.isna(_check(_frame(estate_name="某大廈"), deals)["exclude_reason"][0])
+
+
+def test_subsidised_list_holds_the_official_names():
+    # the real file: HA HOS courts, HA TPS estates, HKHS Flat-for-Sale and Sandwich Class
+    keys = rank.subsidised_estates()
+    assert {"銀蔚苑|離島區", "東濤苑|東區", "富景花園|東區",      # HOS, PSPS
+            "長發邨|葵青區", "翠林邨|西貢區",                   # TPS
+            "健康村|東區", "浩景台|葵青區", "疊翠軒|西貢區"} <= keys  # HKHS FFSS, SCHS
+    assert len(keys) > 300
+    # HKHS dedicated rehousing estates are rental, not subsidised sale
+    assert not any("專用安置屋邨" in k for k in keys)
+
+
+def test_subsidised_match_needs_the_same_district():
+    d = _deals()
+    keys = frozenset({"富景花園|東區", "浩景台|葵青區", "某邨"})
+
+    def reason(**cols):
+        return _check(_frame(**cols), d, subsidised=keys)["exclude_reason"][0]
+
+    assert reason(estate_name="富景花園", district="東區") == "subsidised"
+    # the private 富景花園 in 中西區 shares the name: not marked
+    assert pd.isna(reason(estate_name="富景花園", district="中西區"))
+    # 臺 and 台 are one name; no district on the listing: the name alone decides
+    assert reason(estate_name="浩景臺", district="葵青區") == "subsidised"
+    assert reason(estate_name="富景花園", district=None) == "subsidised"
+    # a list row with no district matches any district
+    assert reason(estate_name="某邨", district="北區") == "subsidised"
 
 
 def test_check_match_is_not_a_listing_check():

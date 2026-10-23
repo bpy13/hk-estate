@@ -80,11 +80,43 @@ CHECK_ORDER = ["subsidised", "check_area", "check_combined", "check_area_basis",
                "check_price", "check_model", "check_subsidised"]
 
 
+_NAME_VARIANTS = str.maketrans({"臺": "台", "叠": "疊", "悅": "悦"})
+
+
+def subsidised_name(name) -> str:
+    """Estate name in the form the subsidised list is compared in: no spaces, and one form
+    of the characters the official lists and the listing sites spell two ways (臺/台 ...)."""
+    if not isinstance(name, str):
+        return ""
+    return "".join(name.split()).translate(_NAME_VARIANTS)
+
+
 def subsidised_estates(path: Path | None = None) -> frozenset[str]:
-    """Names of Housing Authority (HOS, PSPS, TPS) courts: resale rules distort their prices
-    and the project covers private flats only."""
-    df = pd.read_csv(path or SUBSIDISED_PATH, encoding="utf-8-sig")
-    return frozenset(df["estate_name"].dropna().astype(str).str.strip())
+    """Housing Authority (HOS, PSPS, GSH, TPS) and Housing Society (Flat-for-Sale, Sandwich
+    Class, Subsidised Sale Flats) estates: resale rules distort their prices and the project
+    covers private flats only. Keys are 'name|district' (18-district name, e.g. '離島區'), or
+    just 'name' when the list gives no district. The district matters: private estates share
+    names with subsidised ones elsewhere (富景花園 is a PSPS court in 東區 and a private estate
+    in 中西區)."""
+    df = pd.read_csv(path or SUBSIDISED_PATH, encoding="utf-8-sig", dtype=str)
+    if "district" not in df:
+        df["district"] = ""
+    keys = set()
+    for name, district in zip(df["estate_name"], df["district"].fillna(""), strict=True):
+        name = subsidised_name(name)
+        if name:
+            keys.add(f"{name}|{district.strip()}" if district.strip() else name)
+    return frozenset(keys)
+
+
+def _is_subsidised(li: pd.DataFrame, subsidised) -> pd.Series:
+    """A listing's estate is on the list: same name and district, or same name when either
+    side has no district."""
+    name = li["estate_name"].map(subsidised_name)
+    district = (li["district"] if "district" in li else pd.Series("", index=li.index)).fillna("")
+    named = {k.split("|")[0] for k in subsidised}
+    return (name.isin(subsidised) | (name + "|" + district).isin(subsidised)
+            | (district.eq("") & name.isin(named))) & name.ne("")
 
 
 def _text(*values) -> str:
@@ -168,7 +200,7 @@ def listing_checks(li: pd.DataFrame, deals: pd.DataFrame, index: pd.DataFrame, t
     name = li["estate_name"].fillna("")
 
     conditions = {
-        "subsidised": name.isin(subsidised),
+        "subsidised": _is_subsidised(li, subsidised),
         "check_price": (price_ratio < PRICE_RATIO[0]) | (price_ratio > PRICE_RATIO[1]),
         "check_model": (li["comps_24m"] >= MODEL_MIN_COMPS)
                        & (li["fair_psf"] > MODEL_RATIO * li["comps_median_psf"]),
