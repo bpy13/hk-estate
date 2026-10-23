@@ -50,7 +50,7 @@ personal data.
   - Done when: the new tests pass and `conda run -n hk-estate python -m pytest -q
     tests/test_advisor.py tests/test_price_check.py` is green.
 
-- [ ] **Task 2: the page** (after Task 1)
+- [x] **Task 2: the page** (after Task 1)
   - Files: modify `app/dashboard.py` (new page and nav entry), `src/hkestate/dashboard_data.py`
     (data helpers only); test `tests/test_dashboard.py`.
   - Do: page "Check a price" (`?page=check`). Building search as on "Plan a move"

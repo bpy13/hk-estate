@@ -4,20 +4,21 @@
 
 Reads what `hkestate train` and `hkestate rank` write to data/model/ (no long database
 access; the run-status banner reads `run_log` read-only). Pages can be opened directly:
-?page=plan, ?page=market, ?page=ranked, ?page=detail&listing=<source>:<id>, ?page=model,
-?page=growth&setting=<name>
+?page=plan, ?page=check, ?page=market, ?page=ranked, ?page=detail&listing=<source>:<id>,
+?page=model, ?page=growth&setting=<name>
 (the growth page reads the CSVs under data/reports/growth/, nothing from the database).
 """
 
 from __future__ import annotations
 
 import math
+from datetime import date
 
 import altair as alt
 import pandas as pd
 import streamlit as st
 
-from hkestate import advisor, model
+from hkestate import advisor, model, price_check
 from hkestate import dashboard_data as dd
 from hkestate.report import CAVEAT as MODEL_VALUED_CAVEAT
 
@@ -26,8 +27,9 @@ st.set_page_config(page_title="HK Estate", layout="wide")
 # Reference palette (dataviz skill): blue raises the value, red lowers it; text labels carry
 # the sign too, so colour is never the only cue.
 RAISES, LOWERS, SERIES = "#2a78d6", "#e34948", "#2a78d6"
-PAGES = {"plan": "Plan a move", "market": "Market today", "ranked": "Ranked listings",
-         "detail": "Listing detail", "model": "Model", "growth": "Growth study"}
+PAGES = {"plan": "Plan a move", "check": "Check a price", "market": "Market today",
+         "ranked": "Ranked listings", "detail": "Listing detail", "model": "Model",
+         "growth": "Growth study"}
 
 
 @st.cache_data(ttl=300)
@@ -668,9 +670,85 @@ def page_plan() -> None:
     st.caption("Estimates for research, not financial advice.")
 
 
+@st.cache_data(ttl=300)
+def load_sales(building_id: str) -> pd.DataFrame:
+    return dd.building_sales(building_id)
+
+
+def _fill_from_sale() -> None:
+    """Callback of the sale picker: copy the chosen sale into the inputs."""
+    i = st.session_state.get("check_sale")
+    sales = st.session_state.get("check_sales")
+    if i is None or i < 0 or sales is None:
+        return
+    s = sales.iloc[i]
+    st.session_state["check_date"] = s["agreement_date"].date()
+    st.session_state["check_floor"] = str(s["floor_label"] or "")
+    st.session_state["check_area"] = int(round(s["area_sqft"]))
+    st.session_state["check_price"] = round(float(s["price_hkd"]) / 1e6, 3)
+
+
+def page_check() -> None:
+    st.title("Check a price")
+    st.caption("Pick a flat and a date. We show what the fair-price model says the flat is "
+               "worth then, and whether a price was low, normal or high. Estimates for "
+               "research, not financial advice.")
+    pd_ = load_plan(dd.plan_stamp())
+    if pd_ is None or pd_.advisor.fair_model is None:
+        st.info("No fair-price model yet: run `hkestate train` to save one.")
+        return
+    q = st.text_input("Estate or building (English or Chinese name)",
+                      placeholder="e.g. Mei Foo or 美孚")
+    found = dd.find_buildings(pd_.advisor, q)
+    if q.strip() and found.empty:
+        st.caption("No building found with that name.")
+    if found.empty:
+        return
+    bid = st.selectbox("Pick the building", list(found["building_id"]),
+                       format_func=dict(zip(found["building_id"], found["label"],
+                                            strict=True)).get)
+    sales = load_sales(bid)
+    st.session_state["check_sales"] = sales
+    if sales.empty:
+        st.caption("No recorded sales of this building. Type the flat's details below.")
+    else:
+        st.selectbox("Or pick a recorded sale (newest first)", list(range(len(sales))),
+                     index=None, key="check_sale", on_change=_fill_from_sale,
+                     placeholder="Choose a sale to fill the boxes below",
+                     format_func=lambda i: sales["label"].iloc[i])
+    # defaults go in session state (the sale picker also writes there), not in `value=`
+    for key, default in (("check_date", date.today()), ("check_area", 500),
+                         ("check_price", 0.0)):
+        st.session_state.setdefault(key, default)
+    on = st.date_input("Date", key="check_date")
+    area = st.number_input("Saleable area (sq ft)", 0, 10_000, step=10, key="check_area")
+    floor = st.text_input("Floor", placeholder="e.g. 18樓 or 中層 or 18/F", key="check_floor")
+    price_m = st.number_input("Price (HK$ million, optional, 0 = skip)", 0.0, 1_000.0,
+                              step=0.1, format="%.3f", key="check_price")
+    if not area > 0:
+        st.warning("Enter the saleable area.")
+        return
+    price = price_m * 1e6 or None
+    r = price_check.check(bid, float(area), on, pd_.advisor, price_hkd=price,
+                          floor_text=floor.strip() or None)
+    st.subheader("Result")
+    lines = dd.price_check_lines(r, on, price)
+    if not pd.notna(r["fair_hkd"]):
+        st.warning(lines[0])
+        return
+    for line in lines:
+        st.markdown(f"- {line}")
+    cover = int(pd_.advisor.fair_model.meta.get("coverage", 0.8) * 100)
+    st.caption(f"The normal range holds about {cover}% of sales the model has not seen. "
+               "Estimates for research, not financial advice.")
+
+
 def main() -> None:
     page = nav()
     banner()
+    if page == "check":
+        page_check()
+        return
     if page == "plan":
         page_plan()
         return

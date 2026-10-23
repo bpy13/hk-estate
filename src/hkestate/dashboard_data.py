@@ -11,12 +11,13 @@ from __future__ import annotations
 import json
 import time
 from dataclasses import dataclass, field
+from datetime import date
 from pathlib import Path
 
 import duckdb
 import pandas as pd
 
-from hkestate import advisor, db, features, market, model
+from hkestate import advisor, db, features, market, model, price_check
 from hkestate.config import get_data_dir
 from hkestate.report import plain_words  # the study's labels and notes still say "pairs"
 from hkestate.study import district_label  # noqa: F401  (one label, shared with the report)
@@ -512,6 +513,51 @@ def find_buildings(data: advisor.AdvisorData, text: str, limit: int = 15) -> pd.
              if isinstance(d, str) else (e if e == bl or not bl else f"{e}, {bl}")
              for e, bl, d in zip(hits["_e"], hits["_b"], hits["district"], strict=True)]
     return pd.DataFrame({"building_id": hits.index, "label": label}).reset_index(drop=True)
+
+
+SALES_COLUMNS = ["building_id", "exclude_reason", "agreement_date", "floor_label", "flat",
+                 "area_sqft", "price_hkd"]
+
+
+def building_sales(building_id: str, limit: int = 100) -> pd.DataFrame:
+    """Recorded sales of one building from data/model/deals.parquet (never the database),
+    newest first, without sales the model left out as not normal: agreement_date, floor_label,
+    flat, area_sqft, price_hkd and a one-line `label` for a picker. The file is read for this
+    building only."""
+    path = model.model_dir() / "deals.parquet"
+    cols = ["agreement_date", "floor_label", "flat", "area_sqft", "price_hkd", "label"]
+    if not path.exists():
+        return pd.DataFrame(columns=cols)
+    df = pd.read_parquet(path, columns=SALES_COLUMNS,
+                         filters=[("building_id", "==", building_id)])
+    df = df[df["exclude_reason"].isna() & (df["price_hkd"] > 0) & (df["area_sqft"] > 0)]
+    df = df.sort_values("agreement_date", ascending=False).head(limit).reset_index(drop=True)
+    df["label"] = [
+        f"{d:%d %b %Y}, floor {fl}, flat {fx}, {a:,.0f} sq ft, {_hk(p, 2)}"
+        for d, fl, fx, a, p in zip(df["agreement_date"], df["floor_label"].fillna("?"),
+                                   df["flat"].fillna("?"), df["area_sqft"], df["price_hkd"],
+                                   strict=True)]
+    return df[cols]
+
+
+def price_check_lines(r: dict, on: date, price_hkd: float | None) -> list[str]:
+    """A price-check result (price_check.check) in plain sentences for the page."""
+    if not pd.notna(r["fair_hkd"]):
+        return [f"We cannot value this flat: {r['basis']}."]
+    when = f"{on:%d %b %Y}"
+    lines = [f"Fair price on {when}: {_hk(r['fair_hkd'], 2)}.",
+             f"Normal range: {_hk(r['low_hkd'], 2)} to {_hk(r['high_hkd'], 2)}."]
+    if r["verdict"] is None:
+        return lines
+    gap = r["gap_corrected_pct"] * 100
+    lines.append(f"The price of {_hk(price_hkd, 2)} is {abs(gap):.1f}% "
+                 f"{'above' if gap >= 0 else 'below'} the fair price. It is "
+                 f"{r['verdict']}.")
+    if r["learned"]:
+        lines.append(f"The model learned from sales of this period, so it fits them too well. "
+                     f"We multiply the gap by {price_check.IN_SAMPLE_GAP_FACTOR:g}: "
+                     f"{r['gap_pct'] * 100:+.1f}% becomes {gap:+.1f}%.")
+    return lines
 
 
 @dataclass

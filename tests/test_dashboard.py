@@ -457,6 +457,61 @@ def test_plan_page_opens_answers_and_shows_the_assumptions(data_dir, monkeypatch
         [i.value for i in at.info]
 
 
+def test_building_sales_lists_one_buildings_clean_sales_newest_first(tmp_path, monkeypatch):
+    monkeypatch.setenv("HKESTATE_DATA_DIR", str(tmp_path))
+    (tmp_path / "model").mkdir()
+    rows = [("b1", None, "2026-03-12", "18", "B", 520.0, 8_200_000),
+            ("b1", None, "2025-01-05", "7", "A", 480.0, 6_000_000),
+            ("b1", "duplicate", "2026-05-01", "9", "A", 480.0, 6_100_000),
+            ("b2", None, "2026-06-01", "3", "C", 300.0, 3_000_000)]
+    pd.DataFrame(rows, columns=["building_id", "exclude_reason", "agreement_date",
+                                "floor_label", "flat", "area_sqft", "price_hkd"]
+                 ).assign(agreement_date=lambda d: pd.to_datetime(d["agreement_date"])
+                          ).to_parquet(tmp_path / "model" / "deals.parquet")
+    s = dd.building_sales("b1")
+    assert list(s["price_hkd"]) == [8_200_000, 6_000_000]  # newest first; the duplicate is out
+    assert s["label"][0] == "12 Mar 2026, floor 18, flat B, 520 sq ft, HK$8.20m"
+    assert dd.building_sales("nowhere").empty
+
+
+def test_price_check_lines_use_plain_words():
+    nan = float("nan")
+    base = {"fair_hkd": 7_500_000, "low_hkd": 6_786_000, "high_hkd": 8_289_000,
+            "gap_pct": 0.0667, "gap_corrected_pct": 0.0667, "learned": False,
+            "verdict": "within the normal range", "basis": "x"}
+    lines = dd.price_check_lines(base, date(2026, 10, 23), 8_000_000)
+    assert lines[0] == "Fair price on 23 Oct 2026: HK$7.50m."
+    assert lines[1] == "Normal range: HK$6.79m to HK$8.29m."
+    assert lines[2] == ("The price of HK$8.00m is 6.7% above the fair price. It is within "
+                        "the normal range.")
+    assert len(lines) == 3
+    learned = dict(base, learned=True, gap_pct=-0.0933, gap_corrected_pct=-0.1167,
+                   verdict="below the normal range")
+    lines = dd.price_check_lines(learned, date(2026, 3, 1), 6_800_000)
+    assert "11.7% below the fair price" in lines[2]
+    assert "multiply the gap by 1.25: -9.3% becomes -11.7%" in lines[3]
+    assert len(dd.price_check_lines(dict(base, verdict=None), date(2026, 3, 1), None)) == 2
+    no = dict(fair_hkd=nan, basis="building not in the snapshot")
+    assert dd.price_check_lines(no, date(2026, 3, 1), None) == [
+        "We cannot value this flat: building not in the snapshot."]
+
+
+def test_check_page_picks_a_building_and_a_recorded_sale(data_dir, monkeypatch):
+    at = _app(data_dir, monkeypatch, page="check")
+    assert not at.exception and at.title[0].value == "Check a price"
+    deals = dd.deals()
+    deals = deals[deals["exclude_reason"].isna()]
+    bid = deals["building_id"].value_counts().index[0]
+    at.text_input[0].set_value(bid).run()
+    assert not at.exception, at.exception
+    sale_box = next(s for s in at.selectbox if s.label.startswith("Or pick a recorded sale"))
+    sale_box.set_value(0).run()
+    assert not at.exception, at.exception
+    text = " ".join(m.value for m in at.markdown)
+    assert "Fair price on" in text and "Normal range:" in text
+    assert "normal range." in text  # the verdict, as the sale's own price is filled in
+
+
 def test_plan_page_sell_asks_for_the_building_first(data_dir, monkeypatch):
     at = _app(data_dir, monkeypatch, page="plan")
     at.radio[0].set_value("sell").run()
