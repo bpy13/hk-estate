@@ -565,8 +565,13 @@ def _case_lines(cases: dict, years: int, what: str, versus: str) -> list[str]:
     return lines
 
 
-def _goal_lines(row, estate_scores, used: list[str]) -> list[dict]:
-    return [{"label": advisor.GOAL_LABELS[g], "score": _num(estate_scores[f"score_{g}"]),
+# For a renter the "investment" goal scores the rent against similar flats, not growth.
+RENT_VALUE_LABEL = "Good value"
+
+
+def _goal_lines(row, estate_scores, used: list[str], intent: str = "buy") -> list[dict]:
+    return [{"label": RENT_VALUE_LABEL if intent == "rent" and g == "investment"
+             else advisor.GOAL_LABELS[g], "score": _num(estate_scores[f"score_{g}"]),
              "reason": str(row[f"why_{g}"])} for g in used]
 
 
@@ -612,7 +617,7 @@ def _listing_card(row, profile: advisor.Profile, data: advisor.AdvisorData,
     district = row["district"]
     return Card("listing", _name(row["estate_name"], row["building_name"]),
                 district_label(district) if isinstance(district, str) else "",
-                _num(row["overall"]), _goal_lines(row, row, used), facts, money,
+                _num(row["overall"]), _goal_lines(row, row, used, profile.intent), facts, money,
                 row["url"] if isinstance(row["url"], str) else None)
 
 
@@ -681,7 +686,7 @@ def plan_cards(profile: advisor.Profile, data: advisor.AdvisorData, owner: dict 
                  + ("" if profile.intent == "buy" else " a month")]
         estates.append(Card("estate", str(e["estate_name"]), district_label(e["district"])
                             if isinstance(e["district"], str) else "", _num(e["overall"]),
-                            _goal_lines(best, e, used), facts))
+                            _goal_lines(best, e, used, profile.intent), facts))
         listings += [_listing_card(r, profile, data, used, ranges)
                      for _, r in mine.head(per_estate).iterrows()]
     return PlanCards(estates, listings, None, notes, res.left_out)

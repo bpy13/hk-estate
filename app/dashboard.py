@@ -513,6 +513,8 @@ GOAL_QUESTIONS = {"investment": "Good investment: value and growth",
                   "near_place": "Near the places I go (MTR)",
                   "school": "A particular primary school net",
                   "space": "Space: bigger and newer"}
+# A renter's "investment" goal scores the rent against similar flats (advisor._score_investment)
+RENT_VALUE_QUESTION = "Good value: rent below similar flats"
 
 
 def render_card(c: dd.Card) -> None:
@@ -562,6 +564,8 @@ def plan_answers(pd_: dd.PlanData, intent: str) -> tuple[dict, dict | None, bool
             defaults = {"investment": "Important", "near_place": "A little", "school": "A little",
                         "space": "Important"}
             for goal, text in GOAL_QUESTIONS.items():
+                if intent == "rent" and goal == "investment":
+                    text = RENT_VALUE_QUESTION
                 pick = st.select_slider(text, list(dd.GOAL_CHOICES), value=defaults[goal],
                                         key=f"goal_{goal}")
                 a["goals"][goal] = dd.GOAL_CHOICES[pick]
