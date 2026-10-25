@@ -70,6 +70,9 @@ Monterey (83), 天賦海灣 (77), Savannah (74), 昇薈 (67), 嘉峯匯 (59), �
 
 - [ ] **Task 3: run the recheck** (after tonight's chain: `geo --stations-only`, schools,
   `train`, `rank`, `report`)
+  *(First run 18:44 on 10-23, log `master_20261023_184451.log`: 1,400 of 1,735 estates, 14
+  errors, then a Windows Update restart at 04:29 on 10-24 killed it. Restarted 01:14 on
+  10-26, PID 10664, log `master_20261026_011441.log`: 317 estates left.)*
   - Do: `conda run -n hk-estate hkestate master --recheck-house` in the background; log in
     `data/logs/master_<date>.log`.
   - Done when: the log ends with `done:` and its counts (estates, blocks, deals, house blocks
