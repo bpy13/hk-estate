@@ -68,7 +68,9 @@ cache pruning.)*
   entry block) its own Centadata `isHouse` is true. Side effects for future full master
   passes: every block of a house-flagged estate is now fetched (爾巒: 74 blocks, was 1
   page); a 3-storey walk-up of ordinary flats, or a tower named "... House", would be
-  skipped. Estates already loaded are not affected.
+  skipped. Estates already loaded are not affected. *(Recheck done 2026-10-26: 134 tower
+  blocks and 7,743 sales loaded; listings without a building fell from 11,098 to 9,617; a
+  sample of 20 newly matched listings was all correct. 9,617 listings are still unplaced.)*
 - **Yoho estates top the shortlist (2026-10-23, after the retrain).** A manual check of the
   top 20 found no data errors. But Grand Yoho (rank 3), Yoho Hub (5, 6) and Yoho Town (9,
   13) in 元朗 sit 37-41% below the model's fair price. Example: Grand Yoho 5座, 789 sq ft,

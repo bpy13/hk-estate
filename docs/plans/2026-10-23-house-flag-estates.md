@@ -68,17 +68,29 @@ Monterey (83), 天賦海灣 (77), Savannah (74), 昇薈 (67), 嘉峯匯 (59), �
 
 ## Phase 2 – Live run (main session)
 
-- [ ] **Task 3: run the recheck** (after tonight's chain: `geo --stations-only`, schools,
+- [x] **Task 3: run the recheck** (after tonight's chain: `geo --stations-only`, schools,
   `train`, `rank`, `report`)
   *(First run 18:44 on 10-23, log `master_20261023_184451.log`: 1,400 of 1,735 estates, 14
   errors, then a Windows Update restart at 04:29 on 10-24 killed it. Restarted 01:14 on
   10-26, PID 10664, log `master_20261026_011441.log`: 317 estates left.)*
+  *(Done 09:29 on 10-26: the second run's log ends `done: {'estates': 317, 'excluded': 302,
+  'blocks': 134, 'deals': 7743, 'house_blocks': 7442, 'errors': 7}`. Checked 2026-10-27:
+  all 1,735 house-flagged estates have a `house:` step, so the 7 timeouts were retried and
+  finished; 1,545 estates stay `exclude_reason = 'house'`. 錦繡花園 has 0 buildings (A2).
+  愉景灣 has 744 buildings up to 24 floors; 爾巒 26 (5-23 floors), 昇薈 9 (31 floors) (A1).
+  No rechecked estate holds a building of 1-3 floors. 愉景灣's 134 low-rise buildings come
+  from phases the normal master pass loaded, e.g. 1期碧濤.)*
   - Do: `conda run -n hk-estate hkestate master --recheck-house` in the background; log in
     `data/logs/master_<date>.log`.
   - Done when: the log ends with `done:` and its counts (estates, blocks, deals, house blocks
     skipped); 錦繡花園 still has 0 `master_building` rows (A2); 愉景灣 has tower blocks (A1).
 
-- [ ] **Task 4: rematch and check**
+- [x] **Task 4: rematch and check**
+  *(Done 2026-10-27. The 08:00 daily job on 10-26 ran the territory rematch after the
+  recheck. Active sale listings without a building: 11,098 on 10-23, 9,617 now (37,182 with
+  one). 1,775 active sale listings now sit in rechecked estates. A random sample of 20
+  (Monterey, 爾巒, 昇薈, 逸瓏灣, 天賦海灣, 深灣9號, 晉名峯, 海日灣 and others) all name the
+  right block (A3).)*
   - Do: run `listing_run.match_territory` (the daily job's step), then count active sale
     listings with a building before and after; open 20 random newly matched ones.
   - Done when: the count rises and the 20 sampled listings name the right building (A3).
