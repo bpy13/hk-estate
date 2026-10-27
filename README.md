@@ -44,6 +44,9 @@ conda run -n hk-estate hkestate rank      # data/reports/ranked_listings_<date>.
 conda run -n hk-estate hkestate report    # growth study, all data: data/reports/findings_<date>.md
 conda run -n hk-estate hkestate report --settings standard   # all settings below (5-15 min, up to ~9 GB)
 conda run -n hk-estate streamlit run app/dashboard.py   # dashboard at http://localhost:8501
+# or start it at every boot, headless, restarted if it stops (elevated PowerShell, once):
+#   powershell -NoProfile -ExecutionPolicy Bypass -File scripts\register_dashboard_task.ps1
+#   (task \hk-estate\dashboard, fixed port 8501; stock_advisor's dashboard uses 8502)
 
 conda run -n hk-estate python -m hkestate.geo                 # coordinates for every building (ALS; ~19 h, resumable)
 conda run -n hk-estate python -m hkestate.geo --stations-only # MTR stations, distances, district fill (minutes)
