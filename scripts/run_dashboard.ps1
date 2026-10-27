@@ -3,7 +3,7 @@
   Runs the dashboard (Streamlit) on a fixed port and starts it again whenever it stops.
 
 .DESCRIPTION
-  The scheduled task \hk-estate\dashboard (register_dashboard_task.ps1) calls this at boot.
+  The scheduled task \hk-estate\dashboard (register_dashboard_task.ps1) calls this at logon.
   The port is fixed (default 8501) so bookmarks keep working: without it Streamlit moves to
   the next free port when 8501 is taken, e.g. by stock_advisor's dashboard (8502).
   Starts and stops go to data\logs\dashboard.log; Streamlit's own output to dashboard_server.log.
