@@ -140,6 +140,19 @@ def test_a_held_lock_defers_the_step_and_its_dependants_only(dbp, monkeypatch):
     assert again.calls == ["b", "c", "e"]
 
 
+def test_a_step_the_subset_skips_does_not_hold_up_its_dependants(dbp, monkeypatch):
+    # a subset without pilot estates: backfill holds a busy lock but is skipped anyway, so
+    # cross-check and cd-history (which wait for it) still run (2-estate test run, 2026-10-28)
+    monkeypatch.setattr(locks, "held_by", lambda name: 4321 if name == "hse28" else None)
+    r = Recorder()
+    out = lambda ctx: "not in the subset"  # noqa: E731
+    plan = [r.step("backfill", locks=("hse28",), skip=out),
+            r.step("crosscheck", depends=("backfill",), skip=out),
+            r.step("cd-history", depends=("crosscheck",))]
+    assert run(dbp, plan) == rebuild.EXIT_OK
+    assert r.calls == ["cd-history"]
+
+
 def test_a_second_rebuild_is_not_started(dbp, monkeypatch):
     monkeypatch.setattr(locks, "held_by", lambda name: 99 if name == "rebuild" else None)
     r = Recorder()

@@ -379,6 +379,14 @@ def run_steps(ctx: Context, plan: list[Step], run_id: int = 0) -> int:
         if key in done:
             log(f"{step.name}: done in an earlier run")
             continue
+        # a step the subset leaves out is skipped before locks and dependencies are looked at,
+        # so its dependants don't wait for a step that would never run
+        reason = step.skip(ctx) if step.skip else None
+        if reason:
+            log(f"{step.name}: skipped, {reason}")
+            with _session(ctx) as con:
+                db.mark_step(con, COMMAND, key, run_id, f"skipped: {reason}")
+            continue
         waiting = [d for d in step.depends if d in deferred]
         if waiting:
             deferred[step.name] = f"waits for {', '.join(waiting)}"
@@ -387,12 +395,6 @@ def run_steps(ctx: Context, plan: list[Step], run_id: int = 0) -> int:
         if held := _held(step):
             deferred[step.name] = ", ".join(f"lock {n!r} held by process {p}" for n, p in held)
             log(f"{step.name}: deferred, {deferred[step.name]}")
-            continue
-        reason = step.skip(ctx) if step.skip else None
-        if reason:
-            log(f"{step.name}: skipped, {reason}")
-            with _session(ctx) as con:
-                db.mark_step(con, COMMAND, key, run_id, f"skipped: {reason}")
             continue
         ctx.current = step.name
         left, started = None, time.monotonic()

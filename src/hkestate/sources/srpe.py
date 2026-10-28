@@ -46,6 +46,9 @@ COMMAND = "srpe"
 HOST = "www.srpe.gov.hk"
 API = f"https://{HOST}/api/SrpeWebService"
 DISCLAIMER_URL = f"https://{HOST}/opip/disclaimer_index_for_all_residential"
+# On 2026-10-28 the disclaimer page took ~69 s to arrive (headers at 9 s), so the old 90 s
+# limit failed all three rebuild tries; one slow page is still one request, so wait longer.
+LOGIN_TIMEOUT_MS = 300_000
 DEFAULT_DELAY_S = 30.0
 
 DDL = [
@@ -398,7 +401,7 @@ class SrpeClient:
                 seen = {}
                 page.on("request", lambda r: seen.setdefault("a", r.headers.get("authorization"))
                         if r.headers.get("authorization") and HOST in r.url else None)
-                page.goto(DISCLAIMER_URL, wait_until="networkidle", timeout=90_000)
+                page.goto(DISCLAIMER_URL, wait_until="networkidle", timeout=LOGIN_TIMEOUT_MS)
                 page.check("input[type=checkbox]")
                 page.click("button:has-text('Continue')")
                 for _ in range(60):

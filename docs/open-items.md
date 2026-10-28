@@ -61,7 +61,8 @@ cache pruning.)*
 ## Pending work
 - **The full test suite takes 9-11 minutes (2026-10-28),** over the ~3-minute review mark;
   `tests/test_rank.py` alone takes ~108 s. Measured while the daily job and the territory
-  backfill ran, so not a clean timing. Next: `pytest --durations=25` when no job runs (verify
+  backfill ran, so not a clean timing. `test_connect_gives_up_after_the_wait_limit` failed
+  once more in a full run (2026-10-28 18:20) and passed alone; make it independent of load. Next: `pytest --durations=25` when no job runs (verify
   skill, "When the full tests and lint take too long").
 - **Today's database is behind its own code (rebuild audit, 2026-10-28).** Steps ran in a
   different order than a fresh run would. The 650 tower blocks from the house recheck have no
