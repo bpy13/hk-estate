@@ -15,6 +15,7 @@
     hkestate datacheck [--read-db] [--no-fetch]  data checks on the snapshot, datacheck_<date>.md
     hkestate check-blocked                      monthly: do blocked sites still refuse us?
     hkestate watchdog [--dry-run]              every 15 min: restart jobs that died
+    hkestate rebuild [--estates X] [--max-requests N]  every data step in order (resumable)
     hkestate status
 
 Every run is logged to data/logs/<command>_<time>.log and to `run_log` in the database.
@@ -34,7 +35,8 @@ from hkestate.config import get_cache_dir, get_data_dir
 
 # Long resumable jobs: they wait for the database file for as long as it takes (db.connect)
 # instead of giving up after 30 minutes.
-LONG_JOBS = {"backfill", "backfill-territory", "cd-history", "ricacorp", "master", "srpe"}
+LONG_JOBS = {"backfill", "backfill-territory", "cd-history", "ricacorp", "master", "srpe",
+             "rebuild"}
 
 _argv: list[str] = []  # this run's arguments, written to the log (the watchdog reuses them)
 
@@ -570,6 +572,14 @@ def cmd_status(args) -> int:
     return 0
 
 
+def cmd_rebuild(args) -> int:
+    """Every data step from an empty data folder, in order, resumable (docs/rebuild.md)."""
+    from hkestate import rebuild
+
+    log = _logger("rebuild")
+    return rebuild.rebuild(args.db, args.estates, args.max_requests, log=log)
+
+
 def cmd_watchdog(args) -> int:
     """Every 15 minutes (scheduled): restart a long job or today's daily run that died."""
     from hkestate import watchdog
@@ -713,6 +723,13 @@ def main(argv: list[str] | None = None) -> int:
     pr = sub.add_parser("prune-cache", help="delete cached listing pages older than N days")
     pr.add_argument("--days", type=int, default=7)
     pr.set_defaults(func=cmd_prune)
+
+    rb = sub.add_parser("rebuild", help="every data step from an empty data folder, in order "
+                                        "(resumable; rerun until it says complete)")
+    rb.add_argument("--estates", default=None, help=SUBSET_HELP)
+    rb.add_argument("--max-requests", type=int, default=None, metavar="N",
+                    help="test only: stop cleanly after N requests (exit code 3)")
+    rb.set_defaults(func=cmd_rebuild)
 
     wd = sub.add_parser("watchdog",
                         help="restart long jobs and today's daily run if they died (no DB)")
