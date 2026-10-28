@@ -31,7 +31,8 @@ row.
   `rebuild`). If you stop it and start it again, it skips the finished steps. A step that was
   half done carries on from its own saved progress.
 - **Done means nothing is left to do.** A step with a to-do count runs again until the count is
-  0, at most 3 tries. After 3 tries the rebuild stops and names what is left. A step without a
+  0, at most 3 tries. After 3 tries the step counts as failed. It and the steps that need it
+  wait for a rerun; the other steps go on. The log names what is left. A step without a
   to-do count is done when it exits normally.
 - **Log.** `data\logs\rebuild_<date>_<time>.log`. The same lines print to the console.
 - **Lock.** The rebuild holds `data\locks\rebuild.lock`. A second rebuild cannot start. The
@@ -47,7 +48,7 @@ row.
 |---|---|
 | 0 | Every step is done. |
 | 1 | Not started: another rebuild holds the lock. |
-| 2 | Stopped: a step still had work left after 3 tries. The log names it. |
+| 2 | A step still had work left after 3 tries. The steps that don't need it ran. The log names it. |
 | 3 | Stopped: the request cap was reached (`--max-requests`). |
 | 4 | Every step that could run is done. Some steps were deferred. |
 
@@ -156,8 +157,12 @@ python -m hkestate rebuild --estates 2-BEPPWPPJPG,2-EGPPWPPEPW --max-requests 15
 | master | done: 29 blocks, 1,603 sales, 48 house blocks skipped (pages mostly cached) | 29 s |
 | backfill-territory, link-ids | deferred: the live territory backfill held the `hse28` lock | - |
 | cd-history | done: every building | 5.6 min |
-| srpe | failed 3 tries in each of 3 runs: the SRPE site was very slow (page in ~69 s), then sent empty answers, then the disclaimer didn't render in 30 s | - |
-| ricacorp, geo, schools, daily, train, rank, report, datacheck | not reached (the run stops at a failed step) or deferred (the model steps wait for the 28Hse backfill) | - |
+| srpe | failed in the first 3 runs (the site was very slow, then sent empty answers); done in the 4th: 534 developments listed, none in these two estates | 5.2 min |
+| ricacorp | done: 2 estate pages, 18 deals, 8 placed | 9 s |
+| geo | done: 29 of 29 buildings geocoded, MTR distance set | 11 s |
+| schools | done: school net for 29 of 29 buildings | 12 s |
+| daily | skipped: a subset listing run takes only pilot estates | - |
+| train, rank, report, datacheck | deferred: they wait for the 28Hse backfill and link-ids | - |
 
 Compared with today's database (row counts for the two estates):
 
@@ -166,11 +171,17 @@ Compared with today's database (row counts for the two estates):
 | Buildings | 26 + 3 | 26 + 3 | same |
 | Centadata sales, 爾巒 | 1,083 | 724 | today's database never ran cd-history on the tower blocks the house recheck added (audit, section 2.2) |
 | Centadata sales, 凱帆軒 | 2,524 | 2,523 | one newer sale (2026-10-06) |
+| Buildings with coordinates, MTR distance, school net | 26 + 3 | 0 + 3 | today's database geocoded before the house recheck added 爾巒's towers (audit, section 2.2) |
+| Ricacorp sales | 0 + 3 | 0 + 9 | Ricacorp shows only ~90 days of deals; today's database kept older weeks (a limit above) |
 | Flats (`unit`) | 724 + 879 | 727 + 880 | not checked; probably flats known only from 28Hse or listings, steps the test didn't run |
 
-Resuming works: the second and third runs skipped the steps already done. The test found and
-fixed two faults: a step left out by the subset held up its dependants (cd-history waited for
-the pilot cross-check), and the SRPE page limit of 90 s was too short.
+Resuming works: each rerun skipped the steps already done. The test found and fixed three
+faults: a step left out by the subset held up its dependants (cd-history waited for the pilot
+cross-check); the SRPE page limit of 90 s was too short; and one failed step stopped every
+later step. Now a failed step waits like a locked one and the others go on.
+
+Not tested: the 28Hse steps (backfill, territory backfill, link-ids) and the model steps,
+because the live territory backfill held the 28Hse lock. Their times come from the logs.
 
 Time estimate: the test confirms the audit's per-step times where it ran; the full run stays at
 about 19 days run one step at a time, set by the 28Hse backfill (~12 days).

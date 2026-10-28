@@ -87,13 +87,14 @@ def test_a_step_with_to_do_left_is_rerun_until_it_is_zero(dbp):
     assert r.calls == ["a", "b", "b", "c"]
 
 
-def test_a_step_still_with_to_do_after_three_tries_stops_the_run(dbp):
+def test_a_step_still_with_to_do_after_three_tries_holds_up_only_its_dependants(dbp):
     r, logs = Recorder(todo={"b": [5, 4, 3]}), []
-    assert run(dbp, [r.step("a"), r.step("b", what="estates"), r.step("c")],
-               logs) == rebuild.EXIT_STOPPED
-    assert r.calls == ["a", "b", "b", "b"]  # c never starts
-    assert done_keys(dbp) == {"a"}
-    assert any("b still has 3 estates to do after 3 tries" in m for m in logs)
+    plan = [r.step("a"), r.step("b", what="estates"), r.step("c", depends=("b",)), r.step("d")]
+    assert run(dbp, plan, logs) == rebuild.EXIT_STOPPED
+    assert r.calls == ["a", "b", "b", "b", "d"]  # c waits for b; d goes on
+    assert done_keys(dbp) == {"a", "d"}
+    assert any("b: failed, still 3 estates to do after 3 tries" in m for m in logs)
+    assert any("c (waits for b)" in m for m in logs)
 
 
 def test_an_unknown_to_do_count_is_not_done(dbp):

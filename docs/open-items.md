@@ -59,14 +59,9 @@ cache pruning.)*
   drop the page if disallowed. Proposal: the second.
 
 ## Pending work
-- **Rebuild test unfinished (plan rebuild-from-scratch Task 9, 2026-10-28).** SRPE, Ricacorp,
-  geo and schools are untested in a rebuild; the model steps wait for the 28Hse backfill.
-  Rerun with `scratchpad`-style env vars (docs/rebuild.md "Test run") when SRPE answers
-  normally and memory allows; then delete `data\rebuild_test\`.
-- **A failed step stops the whole rebuild (design question).** One slow site (SRPE on
-  10-28) stopped every later step, even ones on other sites. Option: treat a step that
-  fails 3 tries like a held lock: defer it and its dependants, run the rest, exit 2 at the
-  end. On a ~19-day run that keeps other sites moving. Owner's call.
+- **Rebuild: 28Hse and model steps untested (2026-10-28).** The 2-estate test ran every
+  other step. backfill, backfill-territory, link-ids, train, rank, report and datacheck wait
+  for the live territory backfill to finish; test them then (docs/rebuild.md "Test run").
 - **The full test suite takes 9-11 minutes (2026-10-28),** over the ~3-minute review mark;
   `tests/test_rank.py` alone takes ~108 s. Measured while the daily job and the territory
   backfill ran, so not a clean timing. `test_connect_gives_up_after_the_wait_limit` failed

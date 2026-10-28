@@ -629,6 +629,17 @@ weighted average by the profile's goal weights.
   `assumptions` dict the page can print, so a reader can change one number and see the
   effect. Tests work each function by hand (tests/test_advisor.py).
 
+## Rebuild from scratch (2026-10-28, owner's answers)
+- **Same steps, same result for everyone**: `hkestate rebuild` has no choices about what to
+  scrape; `--estates` and `--max-requests` are for tests only. No data snapshot is shared.
+- **Accepted limit**: listing history and Ricacorp deals can't be rebuilt (docs/rebuild.md).
+- **Test small and extrapolate**: a 2-estate test, not a full-territory run.
+- **A failed step waits, the rest go on**: after 3 tries a step and its dependants are deferred
+  like a held lock; the run ends with exit code 2.
+- **Yoho fixes built** (`check_peer_ask`, the shortlist flag, `repeat_price`).
+- Claude's call: `repeat_price` uses 0.1%, not the 0.5% first proposed (the Grand Yoho repeats
+  differ by under 0.01%).
+
 ## Repository
 - **Public GitHub repo `hk-estate` on account `bpy13`** (2026-10-16). Because it is public:
   scraped data, the database and raw-page cache are never committed (`data/` ignored), and no

@@ -6,7 +6,8 @@ writes its own log and run_log row as when run by hand. Steps run one at a time.
 
 - **Done means its to-do count is 0**, not that it exited (audit 4, "Done is not the exit
   code"): a step with a `todo` is run again until the count is 0, at most `MAX_TRIES` times;
-  then the rebuild stops and names what is left. Steps with no to-do notion (rvd, cross-check,
+  then it counts as failed: it and its dependants wait for a rerun, like a held lock, while
+  the other steps go on, and the run ends with exit code 2 naming what is left. Steps with no to-do notion (rvd, cross-check,
   link-ids, schools, train, rank, report, datacheck) are done when they exit normally.
 - **Progress** is in `run_progress` (command `rebuild`, one step key per step), so a rerun skips
   the steps already done. A test subset has its own keys (`<step>|<estates>`).
@@ -24,8 +25,8 @@ writes its own log and run_log row as when run by hand. Steps run one at a time.
   subset" without one. `--max-requests N` caps the requests of the whole process
   (`fetch.set_request_cap`); when it is used up the rebuild stops cleanly.
 
-Exit codes: 0 every step done; 1 not started (another rebuild holds `rebuild.lock`); 2 stopped,
-a step still had to-do after `MAX_TRIES` tries; 3 the request cap was reached; 4 the steps that
+Exit codes: 0 every step done; 1 not started (another rebuild holds `rebuild.lock`); 2 a step
+still had to-do after `MAX_TRIES` tries (the steps not needing it ran); 3 the request cap was reached; 4 the steps that
 could run are done, some were deferred.
 """
 
@@ -374,6 +375,7 @@ def run_steps(ctx: Context, plan: list[Step], run_id: int = 0) -> int:
         done = {r[0] for r in con.execute(
             "SELECT step_key FROM run_progress WHERE command = ?", [COMMAND]).fetchall()}
     deferred: dict[str, str] = {}
+    failed: dict[str, str] = {}  # steps with to-do left after MAX_TRIES (also in `deferred`)
     for step in plan:
         key = step_key(ctx, step.name)
         if key in done:
@@ -415,10 +417,13 @@ def run_steps(ctx: Context, plan: list[Step], run_id: int = 0) -> int:
             if left == 0:
                 break
         if left != 0:
+            # treated like a held lock: this step and its dependants wait for a rerun, the
+            # other steps go on (one slow site stopped every later step on 2026-10-28)
             what = f"{left} {step.what}".strip() if left is not None else "an unknown amount"
-            log(f"stopped: {step.name} still has {what} to do after {MAX_TRIES} tries; "
-                "rerun `hkestate rebuild` once the cause is fixed")
-            return EXIT_STOPPED
+            failed[step.name] = f"still {what} to do after {MAX_TRIES} tries"
+            deferred[step.name] = failed[step.name]
+            log(f"{step.name}: failed, {failed[step.name]}; the steps that need it wait")
+            continue
         if step.after:
             step.after(ctx)
         with _session(ctx) as con:
@@ -429,6 +434,10 @@ def run_steps(ctx: Context, plan: list[Step], run_id: int = 0) -> int:
     if deferred:
         log(f"deferred ({len(deferred)}): "
             + "; ".join(f"{n} ({why})" for n, why in deferred.items()))
+        if failed:
+            log(f"stopped: {', '.join(failed)} failed; rerun `hkestate rebuild` once the "
+                "cause is fixed")
+            return EXIT_STOPPED
         log("rerun `hkestate rebuild` once those locks are free")
         return EXIT_DEFERRED
     log("rebuild complete: every step done")
