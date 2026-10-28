@@ -19,6 +19,7 @@ Read these before substantial changes:
 - Install: `conda env create -f environment.yml`, then
   `conda run -n hk-estate python -m pip install -e ".[dev]"` (conda env `hk-estate`, Python 3.12)
 - Run: `conda run -n hk-estate hkestate <command>`: `backfill --estates pilot` (resumable),
+  `rebuild` (every data step in order from an empty data folder; resumable; docs/rebuild.md),
   `rvd`, `crosscheck --estates pilot`, `cd-history` (every sale per flat from Centadata; resumable;
   `--estates`, `--limit`, `--max-hours`), `listings`, `daily`, `update`, `prune-cache`,
   `status`, `datacheck` (checks on the snapshot; `--read-db`, `--no-fetch`),

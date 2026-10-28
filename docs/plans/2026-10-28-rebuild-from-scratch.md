@@ -149,7 +149,7 @@ Tasks run in order (5, then 6, then 7); they share `cli.py` and `fetch.py`.
     rerun skips done steps; a step with to-do left is rerun, then stops the run; a held lock
     defers a step and its dependants only; `--estates` reaches every step.
 
-- [ ] **Task 7: `docs/rebuild.md` and doc fixes** (after Task 6)
+- [x] **Task 7: `docs/rebuild.md` and doc fixes** (after Task 6)
   - Files: create `docs/rebuild.md`; modify `README.md` (pointer, `playwright install
     chromium` in setup), `docs/operations.md` (cd-history gap is 2 s, not 6 s; Ricacorp pass
     ~30 h, not ~7 h; the rebuild lock), `docs/architecture.md` (new module).

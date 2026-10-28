@@ -24,7 +24,11 @@ saved pages in `tests/fixtures/` are kept only to test the parsers. Licence: MIT
 ```powershell
 conda env create -f environment.yml
 conda run -n hk-estate python -m pip install -e ".[dev]"
+conda run -n hk-estate python -m playwright install chromium   # headless browser for the SRPE source
 ```
+
+To build the whole database from an empty data folder, run `conda run -n hk-estate hkestate
+rebuild` (about 19 days, resumable). See `docs/rebuild.md`.
 
 ## Commands
 
@@ -173,4 +177,5 @@ never committed. To keep it elsewhere, set `HKESTATE_DATA_DIR` to another folder
 - `docs/sources.md` – each data source: what it allows, what it holds, keep or drop
 - `docs/known-issues.md` – limits of the data and traps
 - `docs/operations.md` – scheduled jobs and locks
+- `docs/rebuild.md` – rebuild the whole database from an empty data folder
 - `docs/plans/` – build plan

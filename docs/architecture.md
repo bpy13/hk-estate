@@ -90,8 +90,8 @@ hkestate report                              (growth study, Phase 5)
 
 | Module | Role |
 |---|---|
-| `config.py` | data folder (`HKESTATE_DATA_DIR`), user agent |
-| `fetch.py` | polite HTTP: robots.txt (protego), ≥1 s per host + jitter, Crawl-delay, cache, back-off, block detection |
+| `config.py` | data folder (`HKESTATE_DATA_DIR`), page cache folder (`HKESTATE_CACHE_DIR`), lock folder (`HKESTATE_LOCK_DIR`), user agent |
+| `fetch.py` | polite HTTP: robots.txt (protego), ≥1 s per host + jitter, Crawl-delay, cache, back-off, block detection; a process-wide request cap (`set_request_cap`, used by `rebuild --max-requests`) counts every `Fetcher` and SRPE's own client, skips cached pages, and raises `RequestCapReached` |
 | `db.py` | DuckDB DDL, `init_db()`, `insert_txn_raw()`, run bookkeeping |
 | `normalise.py` | floor labels, TC/SC names, areas and prices from Chinese text |
 | `sources/hse28.py` | 28Hse parsers (deal lists, block grids, per-flat pages) and URLs |
@@ -107,7 +107,8 @@ hkestate report                              (growth study, Phase 5)
 | `sources/ricacorp.py` | Ricacorp estate pages (robots-allowed, never `/api/`): parsed deals in `ricacorp_deal`, placement in buildings, `txn_raw` rows (source `ricacorp`) and `deal_pair` previous-deal links; cached pages deleted after parsing |
 | `link.py` | links 28Hse estates/buildings (`h28-`) to master ones (`cd-`) in `source_map` and `hse28_estate`; `txn_all` reads it so both sources' deals share one unit |
 | `hse28_territory.py` | territory 28Hse backfill: estate list (sitemap, CSV, listing cards), largest-first order, resumable run |
-| `locks.py` | job lock files (`hse28`, `listings`, `centanet`, `cd-history`, `model`) |
+| `locks.py` | job lock files (`hse28`, `listings`, `centanet`, `cd-history`, `ricacorp`, `rebuild`, `model`); folder set by `HKESTATE_LOCK_DIR` |
+| `rebuild.py` | `hkestate rebuild`: steps 1-16 of the rebuild (docs/rebuild.md) run in order from an empty data folder; each step calls the existing command; done = its to-do count is 0 (3 tries); progress in `run_progress`; host locks defer a step and its dependants; holds `rebuild.lock` |
 | `maintenance.py` | deletes cached listing pages 7+ days old |
 | `features.py` | Phase 4 feature table: database extract/snapshot, one row per deal and per listing, model exclusions (parking, first-hand rule, houses, price check), 28Hse agreement dates, RVD deflator |
 | `model.py` | fair-price LightGBM: time split, index-adjusted target, conformal intervals, comparables check, TreeSHAP reasons, `model_eval.md` |

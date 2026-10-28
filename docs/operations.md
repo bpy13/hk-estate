@@ -12,7 +12,7 @@ Registered for the current user by `scripts\register_task.ps1` (rerun it to upda
 | `daily listings` | every day 08:00 | `scripts\daily.ps1` → `hkestate daily` (may run up to 23 h: every due Centanet page is read) |
 | `watchdog` | every 15 minutes | `scripts\watchdog.ps1` → `hkestate watchdog` (restarts jobs that died; see Watchdog) |
 | `weekly deals` | Sundays 07:00 | `scripts\daily.ps1 -Command update` → `hkestate update` |
-| `weekly ricacorp` | Sundays 10:00 | `scripts\daily.ps1 -Command ricacorp` → `hkestate ricacorp` (a pass is about 7 hours; the task may run 14) |
+| `weekly ricacorp` | Sundays 10:00 | `scripts\daily.ps1 -Command ricacorp` → `hkestate ricacorp` (a pass is about 30 hours with restarts; the task may run 14 and the watchdog resumes it) |
 | `daily rank` | every day 14:00 | `scripts\daily.ps1 -Command rank` → `hkestate rank` (after the 08:00 listings, ~4.5 h; about 1-3 minutes, of which the database read is about 1 minute) |
 | `weekly train` | Sundays 12:00 | `scripts\daily.ps1 -Command train` → `hkestate train` (after the deal update; about 5 minutes) |
 | `monthly blocked-check` | 1st of each month 09:00 | `scripts\daily.ps1 -Command check-blocked` → `hkestate check-blocked` (see below; a few seconds) |
@@ -112,11 +112,18 @@ whose process has ended is ignored.
   started meanwhile records `skipped` and exits.
 - `centanet.lock`: held by the listing job only while it reads Centanet; a second Centanet
   listing run skips Centanet while it is held. Since 2026-10-20 it is only a marker for the
-  other hk.centanet.com jobs: `hkestate cd-history` (6 s) and `hkestate master` (4 s) no
+  other hk.centanet.com jobs: `hkestate cd-history` (2 s) and `hkestate master` (4 s) no
   longer pause for it and run alongside the listings (2 s), together about 0.67 requests a
   second (0.92 with the rare master pass), below the ~1 a second that ran for days.
 - `cd-history.lock`: held by `hkestate cd-history`, so two copies cannot run.
 - `ricacorp.lock`: held by `hkestate ricacorp` (from 2026-10-20), likewise.
+- `rebuild.lock`: held by `hkestate rebuild` (docs/rebuild.md), so two rebuilds cannot run.
+  While a live process holds it, the watchdog logs one line and restarts nothing, because the
+  rebuild runs the long jobs itself. If a rebuild dies, the lock goes with its process, and
+  the watchdog resumes its normal work.
+- Two environment variables move these folders for a test run: `HKESTATE_LOCK_DIR` (default
+  `<data dir>\locks`) and `HKESTATE_CACHE_DIR` (default `<data dir>\cache`). A test rebuild
+  can then write its own database but see the live jobs' locks and share the live page cache.
 
 The watchdog uses these locks to tell a live job from a dead one (a job sleeping through a
 cool-down holds its lock, so it counts as running).
@@ -171,9 +178,9 @@ conda run -n hk-estate hkestate cd-history --max-hours 8         # stop after 8 
   master pass (`hkestate master`) must have covered an estate first. A flat whose latest deal
   matched 28Hse in the pilot cross-check was not stored as a Centadata row, so it has no
   code yet (open item).
-- One call carries up to 40 flats and returns 100 rows a page; 6 s between calls (4 s drew
-  429s on 2026-10-20; the master pass and the Centanet listings share this host and run at
-  the same time). Every answer is cached.
+- One call carries up to 40 flats and returns 100 rows a page; 2 s between calls (the code's
+  `MIN_INTERVAL_S`; the fetcher slows down by itself after a 429). The master pass and the
+  Centanet listings share this host and run at the same time. Every answer is cached.
 - Progress is kept per building (`run_progress`, command `cd-history`): a restart skips
   finished buildings, and a rerun adds nothing that is already stored. A building whose batch
   failed is tried again on the next run.
