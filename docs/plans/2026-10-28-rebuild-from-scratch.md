@@ -165,7 +165,11 @@ Tasks run in order (5, then 6, then 7); they share `cli.py` and `fetch.py`.
 
 ## Phase 4 – Small test (main session)
 
-- [ ] **Task 9: 2-estate rebuild, 28Hse lane deferred**
+- [ ] **Task 9: 2-estate rebuild, 28Hse lane deferred** *(Partly done 2026-10-28: rvd,
+  master, cd-history ran and match today's database (docs/rebuild.md, "Test run"); SRPE
+  failed on a slow site three times; ricacorp, geo, schools not reached; the last run was
+  stopped by Claude Code's low-memory clean-up. Test folder `data\rebuild_test\` kept for
+  the rerun.)*
   - Do: `HKESTATE_DATA_DIR` = `data\rebuild_test\`, `HKESTATE_CACHE_DIR` = `data\cache`,
     `HKESTATE_LOCK_DIR` = `data\locks`; run `hkestate rebuild --estates 爾巒,<one ordinary
     territory estate> --max-requests 1500`. The live territory backfill holds the 28Hse lock,

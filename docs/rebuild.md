@@ -139,4 +139,38 @@ with it for the same websites. See docs/operations.md for what each task does.
 
 ## Test run (2026-10-28)
 
-Results go here (Task 9).
+Two estates, 爾巒 (`2-BEPPWPPJPG`, house-flagged, 26 tower blocks) and 凱帆軒 (`2-EGPPWPPEPW`,
+3 blocks), rebuilt into an empty test data folder that shared the live page cache and locks:
+
+```powershell
+$env:HKESTATE_DATA_DIR = "<repo>\data\rebuild_test"
+$env:HKESTATE_CACHE_DIR = "<repo>\data\cache"
+$env:HKESTATE_LOCK_DIR = "<repo>\data\locks"
+python -m hkestate rebuild --estates 2-BEPPWPPJPG,2-EGPPWPPEPW --max-requests 1500
+```
+
+| Step | Result | Time |
+|---|---|---|
+| rvd | done | 8 s |
+| backfill, crosscheck | skipped: no pilot estate in the subset | - |
+| master | done: 29 blocks, 1,603 sales, 48 house blocks skipped (pages mostly cached) | 29 s |
+| backfill-territory, link-ids | deferred: the live territory backfill held the `hse28` lock | - |
+| cd-history | done: every building | 5.6 min |
+| srpe | failed 3 tries in each of 3 runs: the SRPE site was very slow (page in ~69 s), then sent empty answers, then the disclaimer didn't render in 30 s | - |
+| ricacorp, geo, schools, daily, train, rank, report, datacheck | not reached (the run stops at a failed step) or deferred (the model steps wait for the 28Hse backfill) | - |
+
+Compared with today's database (row counts for the two estates):
+
+| | Test rebuild | Today's database | Why they differ |
+|---|---|---|---|
+| Buildings | 26 + 3 | 26 + 3 | same |
+| Centadata sales, 爾巒 | 1,083 | 724 | today's database never ran cd-history on the tower blocks the house recheck added (audit, section 2.2) |
+| Centadata sales, 凱帆軒 | 2,524 | 2,523 | one newer sale (2026-10-06) |
+| Flats (`unit`) | 724 + 879 | 727 + 880 | not checked; probably flats known only from 28Hse or listings, steps the test didn't run |
+
+Resuming works: the second and third runs skipped the steps already done. The test found and
+fixed two faults: a step left out by the subset held up its dependants (cd-history waited for
+the pilot cross-check), and the SRPE page limit of 90 s was too short.
+
+Time estimate: the test confirms the audit's per-step times where it ran; the full run stays at
+about 19 days run one step at a time, set by the 28Hse backfill (~12 days).
