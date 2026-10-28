@@ -50,7 +50,7 @@ scrape. First, three small ranking fixes found by the Yoho check on 2026-10-28.
 
 ## Phase 1 – Yoho fixes (sonnet)
 
-- [ ] **Task 1: peer-ask check and shortlist flag**
+- [x] **Task 1: peer-ask check and shortlist flag**
   - Files: modify `src/hkestate/rank.py` (`listing_checks`, `shortlist_markdown`, README's
     `exclude_reason` table); test `tests/test_rank.py`.
   - Do (failing tests first): new `exclude_reason` `check_peer_ask`: asking per sq ft under

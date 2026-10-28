@@ -165,6 +165,33 @@ def test_area_band_and_nearest_area_rules():
     assert pd.isna(_check(_frame(area_sqft=1050.0, features="天台"), d)["exclude_reason"][0])
     assert pd.isna(_check(_frame(area_sqft=1050.0), _deals(n_areas=2))["exclude_reason"][0])
 
+def _peer_frame(own_psf, peer_areas, peer_psf=10_000.0, own_area=500.0):
+    rows = [_frame(area_sqft=own_area, asking_psf=own_psf)]
+    rows += [_frame(area_sqft=a, asking_psf=peer_psf) for a in peer_areas]
+    return pd.concat(rows, ignore_index=True)
+
+
+def test_check_peer_ask_needs_three_peers_of_similar_area():
+    d = _deals()
+    three = _check(_peer_frame(7_000.0, [500, 505, 495]), d)["exclude_reason"]
+    assert three[0] == "check_peer_ask"
+    assert three[1:].isna().all()  # the peers ask the going rate
+    assert pd.isna(_check(_peer_frame(7_000.0, [500, 505]), d)["exclude_reason"][0])
+    # peers more than 3% away in area do not count
+    assert pd.isna(_check(_peer_frame(7_000.0, [500, 530, 470]), d)["exclude_reason"][0])
+    # 0.8x is not under the ratio
+    assert pd.isna(_check(_peer_frame(8_000.0, [500, 505, 495]), d)["exclude_reason"][0])
+
+
+def test_check_peer_ask_ignores_other_buildings_and_yields_to_earlier_reasons():
+    d = _deals()
+    li = _peer_frame(7_000.0, [500, 505, 495])
+    li.loc[1:, "building_id"] = "other"
+    assert pd.isna(_check(li, d)["exclude_reason"][0])
+    li = _peer_frame(7_000.0, [1050, 1050, 1050], own_area=1050.0)  # check_area comes first
+    assert _check(li, d)["exclude_reason"][0] == "check_area"
+
+
 def test_subsidised_names_and_the_stop_gap_flag():
     d = _deals()
     assert _check(_frame(estate_name="銀蔚苑"), d, subsidised={"銀蔚苑"})[
@@ -299,15 +326,28 @@ def test_shortlist_file_is_plain_english_with_every_field(ranked):
     text = rank.shortlist_markdown(ranked.table, TODAY)
     assert text.startswith("# Shortlist 2026-10-17")
     head = text.split("## 1.")[0]
-    for word in ("Discount", "Fair range", "Reasons", "Below all recent", "Also listed",
+    for word in ("Discount", "Fair range", "Reasons", "Below every recent sale", "Also listed",
                  "Left out"):
         assert word in head, word
     entry = text.split("## 1.")[1].split("## 2.")[0]
     for part in ("Flat:", "Asking HK$", "fair HK$", "Discount:", "Reasons:", "Flags:",
-                 "below all recent:", "also listed:", "http"):
+                 "also listed:", "http"):
         assert part in entry, part
+    assert "below all recent:" not in text  # now a flag, shown only when true
     assert "spacious:CHEAP-DUP" in text  # CHEAP's also_listed
     assert "TYPO" not in text
+
+
+def test_shortlist_shows_below_every_recent_sale_as_a_flag(ranked):
+    top, _ = rank.shortlist(ranked.table)
+    assert top["below_all_recent"].any() and not top["below_all_recent"].all()
+    text = rank.shortlist_markdown(ranked.table, TODAY)
+    flag_lines = [ln for ln in text.splitlines() if ln.startswith("- Flags:")]
+    assert len(flag_lines) == len(top)
+    marked = [ln for ln in flag_lines if "below every recent sale" in ln]
+    assert len(marked) == int(top["below_all_recent"].sum())
+    # a row without the flag keeps the plain "none"
+    assert any(ln.startswith("- Flags: none") for ln in flag_lines)
 
 
 def test_write_makes_the_dated_shortlist(tmp_path, ranked):

@@ -117,6 +117,7 @@ the box) and stays in the CSV:
 | `check_combined` | the text says two adjacent flats are sold as one |
 | `check_price` | asking per sq ft under 0.6x or over 2.5x the building's usual level |
 | `check_model` | the model's fair price is over 1.25x what 5+ recent deals show |
+| `check_peer_ask` | asking per sq ft under 0.8x the median ask of 3+ other active sale listings in the building with area within 3%: probably a bait ask |
 
 `below_all_recent` is only a note: asking per sq ft is under every recent deal in the
 building. The same flat listed twice (any site) is shown once, at the lowest price, with the

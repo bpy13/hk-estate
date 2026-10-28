@@ -69,7 +69,10 @@ PRICE_RATIO = (0.6, 2.5)       # asking vs the building's index-adjusted median:
 MODEL_MIN_COMPS, MODEL_RATIO = 5, 1.25
 SUBSIDISED_RATIO, SUBSIDISED_MIN_DEALS = 0.7, 3
 BELOW_ALL_MIN_COMPS = 3        # below_all_recent needs this many deals in the window
-DUP_TOLERANCE = 0.02           # same-flat duplicates: area and price within 2%
+PEER_ASK_RATIO = 0.8           # check_peer_ask: asking psf under this x the peers' median
+PEER_ASK_MIN = 3               # ... needs this many other active sale asks in the building
+PEER_AREA_TOL = 0.03           # ... whose area is within 3%
+DUP_TOLERANCE = 0.02         # same-flat duplicates: area and price within 2%
 BLANK_FLAT_TOLERANCE = 0.01    # flat missing on a side: area and price must agree to 1%
 MAX_BLANK_FLAT_MERGES = 3      # and one kept row absorbs at most this many such rows
 _NOT_ONE_FLAT_WORDS = re.compile(r"複式|天台")
@@ -77,7 +80,7 @@ _NOT_ONE_FLAT_WORDS = re.compile(r"複式|天台")
 # listing never gets here (it is counted as "no building match"). Giving it a building id
 # would make gap.py, the facing/age tables and the dashboard treat it as a confirmed match.
 CHECK_ORDER = ["subsidised", "check_area", "check_combined", "check_area_basis",
-               "check_price", "check_model", "check_subsidised"]
+               "check_price", "check_model", "check_subsidised", "check_peer_ask"]
 
 
 _NAME_VARIANTS = str.maketrans({"臺": "台", "叠": "疊", "悅": "悦"})
@@ -166,6 +169,28 @@ def _area_reasons(li: pd.DataFrame, deals: pd.DataFrame) -> pd.Series:
     return pd.Series(out, index=li.index, dtype=object)
 
 
+def _peer_ask_low(li: pd.DataFrame) -> pd.Series:
+    """True where a listing asks under PEER_ASK_RATIO x the median asking psf of at least
+    PEER_ASK_MIN *other* listings in `li` (active sale listings) of its building whose area
+    is within PEER_AREA_TOL. Catches bait asks the deal history cannot (a building with few
+    or old deals). Cross-site copies of one flat count as peers; they only pull the median
+    towards the listing's own ask, so the check errs towards not flagging."""
+    out = pd.Series(False, index=li.index)
+    for rows in li.groupby("building_id").indices.values():
+        if len(rows) <= PEER_ASK_MIN:
+            continue
+        area = li["area_sqft"].to_numpy(dtype=float)[rows]
+        ask = li["asking_psf"].to_numpy(dtype=float)[rows]
+        near = np.abs(area[:, None] - area[None, :]) <= PEER_AREA_TOL * area[:, None]
+        np.fill_diagonal(near, False)  # a listing is not its own peer
+        near &= ~np.isnan(ask)[None, :]
+        for n, i in enumerate(rows):
+            peers = ask[near[n]]
+            if len(peers) >= PEER_ASK_MIN and ask[n] < PEER_ASK_RATIO * np.median(peers):
+                out.iloc[i] = True
+    return out
+
+
 def listing_checks(li: pd.DataFrame, deals: pd.DataFrame, index: pd.DataFrame, today: date,
                    subsidised=None) -> pd.DataFrame:
     """`exclude_reason` (first of CHECK_ORDER that applies, else None) and the information
@@ -205,6 +230,7 @@ def listing_checks(li: pd.DataFrame, deals: pd.DataFrame, index: pd.DataFrame, t
         "check_model": (li["comps_24m"] >= MODEL_MIN_COMPS)
                        & (li["fair_psf"] > MODEL_RATIO * li["comps_median_psf"]),
         "check_subsidised": name.str.endswith(("苑", "邨")) & li["estate_key"].isin(cheap_estate),
+        "check_peer_ask": _peer_ask_low(li),
     }
     area = _area_reasons(li, deals)
     for k in ("check_area", "check_combined", "check_area_basis"):
@@ -411,8 +437,8 @@ def shortlist_markdown(table: pd.DataFrame, today: date, n: int = SHORTLIST_SIZE
         "asking-vs-deal gap) sits below fair price.",
         "- **Fair range**: the model's 80% range for the fair price (HK$).",
         "- **Reasons**: the three features that moved the fair price most.",
-        "- **Below all recent**: asking per sq ft is under every recent clean deal in the "
-        "building (information only).",
+        "- **Below every recent sale** (a flag): asking per sq ft is under every recent clean "
+        "deal in the building (information only).",
         "- **Also listed**: the same flat on other sites or listings.", "",
     ]
     if len(left_out):
@@ -423,7 +449,10 @@ def shortlist_markdown(table: pd.DataFrame, today: date, n: int = SHORTLIST_SIZE
                         and x != "not given") or "floor and flat not given"
         reasons = "; ".join(x for x in (row.reason_1, row.reason_2, row.reason_3)
                             if isinstance(x, str))
-        flags = row.flags if isinstance(row.flags, str) and row.flags else "none"
+        flag_list = [row.flags] if isinstance(row.flags, str) and row.flags else []
+        if row.below_all_recent:
+            flag_list.append("below every recent sale")
+        flags = "; ".join(flag_list) or "none"
         also = row.also_listed if isinstance(row.also_listed, str) and row.also_listed else "no"
         lines += [
             f"## {i}. {row.estate_name or '(no estate)'} - {row.building_name or ''}".rstrip(" -"),
@@ -432,8 +461,7 @@ def shortlist_markdown(table: pd.DataFrame, today: date, n: int = SHORTLIST_SIZE
             f"{_hk(row.fair_high_hkd)} (mid {_hk(row.fair_price_hkd)})",
             f"- Discount: {row.discount_pct * 100:.1f}%",
             f"- Reasons: {reasons or 'none'}",
-            f"- Flags: {flags}; below all recent: {'yes' if row.below_all_recent else 'no'}; "
-            f"also listed: {also}",
+            f"- Flags: {flags}; also listed: {also}",
             f"- {row.url}", "",
         ]
     if top.empty:
