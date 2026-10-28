@@ -124,7 +124,7 @@ Tasks run in order (5, then 6, then 7); they share `cli.py` and `fetch.py`.
     - Tests no longer write `schools_*.log` into the real `data/logs` (audit, smaller errors).
   - Done when: the affected test files and the full suite pass, with a test per bullet.
 
-- [ ] **Task 6: `hkestate rebuild`** (after Task 5)
+- [x] **Task 6: `hkestate rebuild`** (after Task 5)
   - Files: create `src/hkestate/rebuild.py`; modify `src/hkestate/cli.py` and the step
     modules that need an estate filter (`sources/cd_master.py`, `hse28_territory.py`,
     `sources/centadata_history.py`, `geo.py`, `sources/schools.py`, `link.py`,
