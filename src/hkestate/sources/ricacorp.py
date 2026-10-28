@@ -427,10 +427,12 @@ def week_key(today: date) -> str:
 
 def run_ricacorp(fetcher, db_path=None, log=print, *, limit: int | None = None,
                  max_hours: float | None = None, clock=None, today: date | None = None,
-                 sleep=None) -> dict:
+                 sleep=None, names: set[str] | None = None) -> dict:
     """One pass over the estate pages, resumable within an ISO week (a new week starts a new
     pass). Each page is parsed, its rows stored and its cached copy deleted. Placement runs
-    at the end (and can be rerun with `place_deals`)."""
+    at the end (and can be rerun with `place_deals`). `names`: a test subset, as
+    `link.subset_name_keys`; only the pages of those estates. `stats["left"]`: pages of this
+    run's to-do list not read (errors, a stop)."""
     import time
 
     clock = clock or time.monotonic
@@ -438,6 +440,11 @@ def run_ricacorp(fetcher, db_path=None, log=print, *, limit: int | None = None,
     wk = week_key(today)
     xml = fetcher.get(SITEMAP_URL, "static")
     pages = estate_pages(xml)
+    if names is not None:
+        from hkestate.link import names_match
+
+        pages = [p for p in pages if names_match(p.name, names)]
+        log(f"{len(pages)} estate pages in the estates subset")
     with db.session(db_path) as con:
         db.init_db(con)
         ensure_tables(con)
@@ -450,7 +457,7 @@ def run_ricacorp(fetcher, db_path=None, log=print, *, limit: int | None = None,
         todo = todo[:limit]
     log(f"{len(pages)} estate pages in the sitemap, {len(done)} done this week, "
         f"{len(todo)} to do")
-    stats = {"pages": 0, "deals": 0, "new": 0, "errors": 0}
+    stats = {"pages": 0, "deals": 0, "new": 0, "errors": 0, "left": len(todo)}
     status, message, streak = "ok", "", 0
     started = clock()
     # throttling (429/503, 5xx, timeouts): wait and try the same page again (patience.py)
@@ -499,6 +506,7 @@ def run_ricacorp(fetcher, db_path=None, log=print, *, limit: int | None = None,
         log(message)
         raise
     finally:
+        stats["left"] = len(todo) - stats["pages"]
         placed = {}
         try:
             with db.session(db_path) as con:

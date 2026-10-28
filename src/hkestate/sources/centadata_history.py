@@ -132,19 +132,28 @@ def sale_row(item: dict, flat: Flat | None, url: str, fetched_at: datetime) -> d
 # ---- which flats ----------------------------------------------------------------------------
 
 
-def load_flats(con, estates: list[str] | None = None) -> list[Estate]:
+def load_flats(con, estates: list[str] | set[str] | None = None) -> list[Estate]:
     """Flat codes from the stored Centadata latest deals, grouped estate -> building.
 
     `estates`: None for all, else estate group names (`estate.group_name`, e.g.
-    'taikoo-shing') or 'pilot' (every group). Largest estates (most flats) first, and the
-    largest buildings first within an estate."""
-    where = ""
-    if estates:
-        if "pilot" in estates:
-            where = "AND estate_id IN (SELECT estate_id FROM estate WHERE group_name IS NOT NULL)"
-        else:
-            names = ", ".join("'" + n.replace("'", "''") + "'" for n in estates)
-            where = f"AND estate_id IN (SELECT estate_id FROM estate WHERE group_name IN ({names}))"
+    'taikoo-shing'), 'pilot' (every group) and master `2-` codes (territory estates, stored
+    as `cd-<code>`; test rebuilds). An empty list selects nothing. Largest estates (most
+    flats) first, and the largest buildings first within an estate."""
+    where, params = "", []
+    if estates is not None:
+        groups = [e for e in estates if not e.startswith("2-")]
+        eids = [f"cd-{e}" for e in estates if e.startswith("2-")]
+        parts = ["false"]
+        if "pilot" in groups:
+            parts.append("estate_id IN (SELECT estate_id FROM estate WHERE group_name IS NOT NULL)")
+        elif groups:
+            parts.append("estate_id IN (SELECT estate_id FROM estate WHERE group_name IN "
+                         f"({','.join('?' for _ in groups)}))")
+            params += groups
+        if eids:
+            parts.append(f"estate_id IN ({','.join('?' for _ in eids)})")
+            params += eids
+        where = f"AND ({' OR '.join(parts)})"
     rows = con.execute(
         f"""
         SELECT code, estate_id, building_id, estate_name, phase_name, building_name,
@@ -163,7 +172,7 @@ def load_flats(con, estates: list[str] | None = None) -> list[Estate]:
               {where}
         ) WHERE rn = 1 AND code IS NOT NULL
         ORDER BY estate_id, building_id, floor_label, flat
-        """
+        """, params
     ).fetchall()
     by_estate: dict[str, dict[str, Building]] = {}
     for code, eid, bid, en, pn, bn, fl, fl_flat in rows:
@@ -226,6 +235,14 @@ def _batches(estate: Estate, todo: list[Building], size: int):
                {bid for bid, _ in chunk})
 
 
+def todo_count(con, estates: list[str] | set[str] | None = None) -> int:
+    """Buildings still to do (`hkestate rebuild`): every building with a stored flat code
+    and no finished step."""
+    done = {r[0] for r in con.execute(
+        "SELECT step_key FROM run_progress WHERE command = ?", [COMMAND]).fetchall()}
+    return sum(b.building_id not in done for e in load_flats(con, estates) for b in e.buildings)
+
+
 def run_history(fetcher, db_path=None, log=print, estates: list[str] | None = None,
                 limit: int | None = None, max_hours: float | None = None,
                 wait=time.sleep, clock=time.monotonic) -> dict:
@@ -242,7 +259,8 @@ def run_history(fetcher, db_path=None, log=print, estates: list[str] | None = No
         done = {r[0] for r in con.execute(
             "SELECT step_key FROM run_progress WHERE command = ?", [COMMAND]).fetchall()}
         run_id = db.start_run(
-            con, COMMAND, ",".join(estates or ["all"]) + (f" limit={limit}" if limit else ""))
+            con, COMMAND, ("all" if estates is None else ",".join(sorted(estates)))
+            + (f" limit={limit}" if limit else ""))
     # the buildings still to do, in order, cut to the limit
     plan: list[tuple[Estate, list[Building]]] = []
     left = limit if limit else None

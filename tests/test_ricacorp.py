@@ -236,6 +236,19 @@ def test_crawl_stores_rows_prunes_cache_resumes_and_never_calls_api(tmp_path):
                            "ORDER BY run_id LIMIT 1").fetchone() == ("ok",)
 
 
+def test_a_subset_reads_only_its_estate_pages_and_counts_what_is_left(tmp_path):
+    from hkestate import link
+
+    path = tmp_path / "t.duckdb"
+    with db.session(path) as con:
+        db.init_db(con)
+    f, seen = make_fetcher(tmp_path)
+    stats = rc.run_ricacorp(f, path, log=lambda *a: None, today=date(2026, 10, 16),
+                            names={link.est_key("測試苑")})
+    assert stats["pages"] == 1 and stats["left"] == 0
+    assert not any("%E7%A9%BA" in s or "空苑" in s for s in seen)  # 空苑 is not in the subset
+
+
 def test_crawl_stops_after_max_hours(tmp_path):
     path = tmp_path / "t.duckdb"
     with db.session(path) as con:

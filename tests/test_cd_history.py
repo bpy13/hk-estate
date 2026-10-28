@@ -138,6 +138,16 @@ def test_only_named_groups_are_loaded(db_path):
         assert [e.estate_id for e in ch.load_flats(con, ["pilot"])] == ["h28-1"]
 
 
+def test_a_subset_of_master_codes_and_groups_and_its_to_do_count(db_path):
+    with db.session(db_path) as con:
+        assert [e.estate_id for e in ch.load_flats(con, {"2-SMALL", "alpha"})] == [
+            "h28-1", "cd-2-SMALL"]
+        assert ch.load_flats(con, set()) == []  # an empty subset is nothing, never everything
+        before = ch.todo_count(con, {"2-BIG"})
+        db.mark_step(con, ch.COMMAND, "cd-1-B1", 1)
+        assert (before, ch.todo_count(con, {"2-BIG"})) == (2, 1)
+
+
 # ---- the run ---------------------------------------------------------------------------------
 
 

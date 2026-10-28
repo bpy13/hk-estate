@@ -123,15 +123,39 @@ def lookup(fetcher, query: str) -> AlsResult | None:
     return parse_als(fetcher.get(ALS_URL.format(q=quote(query)), "static"))
 
 
-def geocode_buildings(fetcher, db_path=None, log=print, limit: int | None = None) -> dict:
-    """Geocode every master building not yet tried. Resumable: geo_status marks the done ones."""
+def _untried(con, estates: set[str] | None) -> list[tuple]:
+    """(building id, query, district) of buildings not yet tried; `estates`: a test subset
+    (`link.resolve_estates` keys)."""
+    todo = con.execute(
+        "SELECT building_id, geo_query, district FROM master_building "
+        "WHERE geo_status IS NULL AND geo_query IS NOT NULL ORDER BY building_id"
+    ).fetchall()
+    if estates is not None:
+        from hkestate import link
+
+        keep = link.subset_building_ids(con, estates)
+        todo = [r for r in todo if r[0] in keep]
+    return todo
+
+
+def todo_count(con, estates: set[str] | None = None) -> int:
+    """Buildings still to geocode (`hkestate rebuild`). A building whose lookup failed stays
+    untried, so it counts until a later run reads it."""
+    from hkestate.sources import cd_master
+
+    cd_master.ensure_tables(con)
+    ensure_tables(con)
+    return len(_untried(con, estates))
+
+
+def geocode_buildings(fetcher, db_path=None, log=print, limit: int | None = None,
+                      estates: set[str] | None = None) -> dict:
+    """Geocode every master building not yet tried. Resumable: geo_status marks the done ones.
+    `estates`: only the buildings of a test subset."""
     with db.session(db_path) as con:
         ensure_tables(con)
         seed_queries(con)
-        todo = con.execute(
-            "SELECT building_id, geo_query, district FROM master_building "
-            "WHERE geo_status IS NULL AND geo_query IS NOT NULL ORDER BY building_id"
-        ).fetchall()
+        todo = _untried(con, estates)
     if limit:
         todo = todo[:limit]
     log(f"geocoding {len(todo)} buildings")
@@ -463,6 +487,8 @@ def main(argv=None) -> int:
     p.add_argument("--limit", type=int, default=None)
     p.add_argument("--stations-only", action="store_true",
                    help="only load MTR stations and set distances (no building geocoding)")
+    p.add_argument("--estates", default=None,
+                   help="test subset: comma-separated estate names or Centadata 2- codes")
     args = p.parse_args(argv)
     log = _logger("geo")
     with db.session(args.db) as con:
@@ -470,12 +496,17 @@ def main(argv=None) -> int:
         from hkestate.sources import cd_master
         cd_master.ensure_tables(con)
         ensure_tables(con)
-        run_id = db.start_run(con, "geo")
+        run_id = db.start_run(con, "geo", f"estates={args.estates}" if args.estates else "")
+        estates = None
+        if args.estates:
+            from hkestate import link
+            estates = link.resolve_estates(con, args.estates.split(","))
     status, message, stats = "failed", "", {}
     try:
         with Fetcher() as f:
             load_stations(f, args.db, log)
-            stats = {} if args.stations_only else geocode_buildings(f, args.db, log, args.limit)
+            stats = {} if args.stations_only else geocode_buildings(
+                f, args.db, log, args.limit, estates=estates)
         # one short session per step, so other jobs waiting for the database file get a turn
         def step(name, fn):
             t = time.perf_counter()

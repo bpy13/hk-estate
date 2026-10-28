@@ -59,6 +59,33 @@ def con(tmp_path):
     c.close()
 
 
+class AlsPages:
+    """Answers every ALS lookup with the fixture; records the queries."""
+
+    def __init__(self):
+        self.asked = []
+
+    def get(self, url, page_type):
+        self.asked.append(url)
+        return ALS
+
+
+def test_a_subset_geocodes_only_its_buildings_and_counts_the_rest(tmp_path):
+    path = tmp_path / "t.duckdb"
+    with db.session(path) as c:
+        db.init_db(c)
+        cm.ensure_tables(c)
+        for bid, code in [("cd-1-A", "2-IN"), ("cd-1-B", "2-OUT")]:
+            c.execute("INSERT INTO master_building (building_id, estate_code, address) "
+                      "VALUES (?, ?, '中西區/西摩道2號')", [bid, code])
+    f = AlsPages()
+    stats = geo.geocode_buildings(f, path, lambda m: None, estates={"2-IN"})
+    assert stats["ok"] == 1 and len(f.asked) == 1
+    with db.session(path) as c:
+        assert geo.todo_count(c, {"2-IN"}) == 0
+        assert geo.todo_count(c) == 1  # cd-1-B, outside the subset
+
+
 def test_building_age_from_completion_else_first_deal(con):
     con.execute("INSERT INTO master_building (building_id, completion_date) VALUES "
                 "('a', DATE '1994-07-04'), ('b', NULL), ('c', DATE '1900-01-01')")

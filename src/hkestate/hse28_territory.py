@@ -148,9 +148,11 @@ def finished_ids(con, skip_flats: bool = False) -> set[int]:
     return done
 
 def plan(con, *, order: str = "flats", mapped_only: bool = False, skip_flats: bool = False,
-         skip_ids: set[int] | None = None) -> list[EstateRef]:
+         skip_ids: set[int] | None = None, estates: set[str] | None = None) -> list[EstateRef]:
     """Unfinished estates in run order: matched estates first (largest first), then
-    unmatched ones by id, unless `mapped_only`. Excluded estates are never run."""
+    unmatched ones by id, unless `mapped_only`. Excluded estates are never run.
+    `estates` (subset keys, `link.resolve_estates`): only estates matched to one of its
+    master codes (test rebuilds)."""
     if order not in ORDERS:
         raise ValueError(f"order must be one of {sorted(ORDERS)}")
     skip = (pilot_ids() if skip_ids is None else skip_ids) | finished_ids(con, skip_flats)
@@ -158,9 +160,20 @@ def plan(con, *, order: str = "flats", mapped_only: bool = False, skip_flats: bo
     if mapped_only:
         where += " AND match_status IN ('exact', 'prefix')"
     rows = con.execute(
-        f"SELECT id, name FROM hse28_estate WHERE {where} ORDER BY "
+        f"SELECT id, name, master_codes FROM hse28_estate WHERE {where} ORDER BY "
         f"(match_status IN ('exact', 'prefix')) DESC NULLS LAST, {ORDERS[order]}").fetchall()
-    return [EstateRef(n, i) for i, n in rows if i not in skip]
+    codes = link.subset_codes(estates)
+    return [EstateRef(n, i) for i, n, mc in rows if i not in skip
+            and (codes is None or (mc is not None and set(mc.split(",")) & codes))]
+
+
+def todo_count(con, estates: set[str] | None = None) -> int | None:
+    """Estates a full run still has to do (`hkestate rebuild`); None while the estate index is
+    empty (nothing discovered yet, so nothing is known)."""
+    link.ensure_tables(con)
+    if con.execute("SELECT count(*) FROM hse28_estate").fetchone()[0] == 0:
+        return None
+    return len(plan(con, estates=estates))
 
 
 # ---- the run ------------------------------------------------------------
@@ -177,19 +190,22 @@ def run_territory(
     max_estates: int | None = None,
     max_hours: float | None = None,
     skip_ids: set[int] | None = None,
+    estates: set[str] | None = None,
     pause=time.sleep,
     clock=time.monotonic,
 ) -> dict:
     """Backfill the unfinished estates in order. Stops after `max_estates` / `max_hours`
     (checked between estates) or on a block (403/challenge); 429s, 5xx and network errors
-    are waited out (`_Loader.get`). Rerun to resume."""
+    are waited out (`_Loader.get`). Rerun to resume. `estates`: a test subset (`plan`)."""
     with db.session(db_path) as con:
         db.init_db(con)
         link.ensure_tables(con)
         counts = link.map_estates(con, skip_ids)
         todo = plan(con, order=order, mapped_only=mapped_only, skip_flats=skip_flats,
-                    skip_ids=skip_ids)
-        run_id = db.start_run(con, RUN_COMMAND, f"order={order} mapped_only={mapped_only}")
+                    skip_ids=skip_ids, estates=estates)
+        subset = f" estates={','.join(sorted(estates))}" if estates is not None else ""
+        run_id = db.start_run(con, RUN_COMMAND,
+                              f"order={order} mapped_only={mapped_only}{subset}")
     log(f"{len(todo)} estates to do; name matching {counts}")
     own = fetcher is None
     fetcher = fetcher or Fetcher(min_interval=BACKFILL_MIN_INTERVAL_S)

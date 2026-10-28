@@ -106,6 +106,16 @@ def test_finished_estates_are_not_planned_again(dbpath):
         assert [e.id for e in ht.plan(con)] == [1]
 
 
+def test_a_subset_plans_only_estates_matched_to_its_codes(dbpath):
+    with db.session(dbpath) as con:
+        assert ht.todo_count(con) is None  # nothing discovered yet: unknown, not "done"
+        seed_sized(con)
+        assert [e.id for e in ht.plan(con, estates={"2-S"})] == [1]
+        assert ht.plan(con, estates=set()) == []
+        assert ht.todo_count(con, {"2-S", "2-L"}) == 2
+        assert ht.todo_count(con) == 3
+
+
 # ---- a run on the fixture site -------------------------------------------------------------------
 
 

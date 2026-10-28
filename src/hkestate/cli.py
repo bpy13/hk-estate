@@ -38,6 +38,9 @@ LONG_JOBS = {"backfill", "backfill-territory", "cd-history", "ricacorp", "master
 
 _argv: list[str] = []  # this run's arguments, written to the log (the watchdog reuses them)
 
+SUBSET_HELP = ("test subset (`hkestate rebuild --estates`): comma-separated estate names, "
+               "Centadata 2-/3- codes or pilot group names")
+
 
 class _FetchLogHandler(logging.Handler):
     """Puts the fetcher's pacing messages (slowing down, cool-downs) in the job's log."""
@@ -268,8 +271,31 @@ def cmd_master(args) -> int:
     # which run at the same time
     with Fetcher(min_interval=cd_master.MIN_INTERVAL_S) as f:
         cd_master.run_master(f, db_path=args.db, log=log, limit=args.limit,
-                             recheck_house=args.recheck_house)
+                             recheck_house=args.recheck_house,
+                             estates=_tokens(args.estates))
     return 0
+
+
+def _tokens(text: str | None) -> list[str] | None:
+    """`--estates` as a list of names/codes; None when not given (no subset)."""
+    if not text:
+        return None
+    return [t.strip() for t in text.split(",") if t.strip()]
+
+
+def _subset(args, log=None) -> set[str] | None:
+    """`--estates` resolved to subset keys (`link.resolve_estates`); None when not given."""
+    tokens = _tokens(getattr(args, "estates", None))
+    if tokens is None:
+        return None
+    from hkestate import link
+
+    with db.session(args.db) as con:
+        db.init_db(con)
+        keys = link.resolve_estates(con, tokens)
+    if log is not None:
+        log(f"estates subset {','.join(tokens)}: {','.join(sorted(keys)) or 'nothing known yet'}")
+    return keys
 
 
 def cmd_link_ids(args) -> int:
@@ -277,8 +303,9 @@ def cmd_link_ids(args) -> int:
     from hkestate import link
 
     log = _logger("link")
+    estates = _subset(args, log)
     with db.session(args.db) as con:
-        res = link.link_all(con)
+        res = link.link_all(con, estates)
     log(f"linked: {res}")
     return 0
 
@@ -311,7 +338,8 @@ def cmd_backfill_territory(args) -> int:
                 return 1
             ht.run_territory(db_path=args.db, log=log, order=args.order,
                              mapped_only=args.mapped_only, skip_flats=args.skip_flats,
-                             max_estates=args.max_estates, max_hours=args.max_hours)
+                             max_estates=args.max_estates, max_hours=args.max_hours,
+                             estates=_subset(args, log))
     except locks.LockBusy as e:
         log(f"not started: {e}")
         return 1
@@ -323,7 +351,8 @@ def cmd_cd_history(args) -> int:
     from hkestate.sources import centadata_history as ch
 
     log = _logger("cd-history")
-    estates = None if args.estates == "all" else args.estates.split(",")
+    # group names and `pilot` as before; estate names and 2- codes too (link.resolve_estates)
+    estates = None if args.estates == "all" else _subset(args, log)
     try:
         with locks.hold("cd-history"):
             with Fetcher(min_interval=ch.MIN_INTERVAL_S) as f:
@@ -346,10 +375,17 @@ def cmd_ricacorp(args) -> int:
             db.init_db(con)
             ricacorp.place_deals(con, log=log)
         return 0
+    names = None
+    estates = _subset(args, log)
+    if estates is not None:
+        from hkestate import link
+
+        with db.session(args.db) as con:
+            names = link.subset_name_keys(con, estates)
     try:
         with locks.hold("ricacorp"), Fetcher(min_interval=ricacorp.MIN_INTERVAL_S) as f:
             ricacorp.run_ricacorp(f, db_path=args.db, log=log, limit=args.limit,
-                                  max_hours=args.max_hours)
+                                  max_hours=args.max_hours, names=names)
     except locks.LockBusy as e:
         log(f"not started: {e}")
         return 1
@@ -580,9 +616,11 @@ def main(argv: list[str] | None = None) -> int:
     m.add_argument("--recheck-house", action="store_true",
                    help="read again only the estates skipped as 'house', loading their tower "
                         "blocks (resumable; steps house:<code>)")
+    m.add_argument("--estates", default=None, help=SUBSET_HELP)
     m.set_defaults(func=cmd_master)
 
     lk = sub.add_parser("link-ids", help="link 28Hse estates/buildings to master ids")
+    lk.add_argument("--estates", default=None, help=SUBSET_HELP)
     lk.set_defaults(func=cmd_link_ids)
 
     bt = sub.add_parser("backfill-territory",
@@ -596,9 +634,11 @@ def main(argv: list[str] | None = None) -> int:
     bt.add_argument("--skip-flats", action="store_true", help="skip the 2018-2021 per-flat pass")
     bt.add_argument("--max-estates", type=int, default=None, help="stop after N estates")
     bt.add_argument("--max-hours", type=float, default=None, help="stop after N hours")
+    bt.add_argument("--estates", default=None, help=SUBSET_HELP)
     bt.set_defaults(func=cmd_backfill_territory)
     rp = sub.add_parser("ricacorp", help="Ricacorp estate pages: previous-deal pairs (weekly)")
     rp.add_argument("--limit", type=int, default=None, help="only the next N estate pages")
+    rp.add_argument("--estates", default=None, help=SUBSET_HELP)
     rp.add_argument("--max-hours", type=float, default=None, help="stop after N hours")
     rp.add_argument("--place-only", action="store_true",
                     help="no requests: place stored deals in buildings and write pairs")
@@ -606,7 +646,8 @@ def main(argv: list[str] | None = None) -> int:
     ch = sub.add_parser("cd-history",
                         help="Centadata full per-flat sale history, largest estates first")
     ch.add_argument("--estates", default="all",
-                    help="comma-separated estate groups (e.g. taikoo-shing), pilot, or all")
+                    help="comma-separated estate groups (e.g. taikoo-shing), pilot, or all; "
+                         "estate names and Centadata 2- codes also work (test subsets)")
     ch.add_argument("--limit", type=int, default=None, help="only the next N buildings")
     ch.add_argument("--max-hours", type=float, default=None, help="stop after N hours")
     ch.set_defaults(func=cmd_cd_history)
