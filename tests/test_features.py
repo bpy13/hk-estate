@@ -219,6 +219,41 @@ def test_low_psf_reason_on_deals(tmp_path):
     assert "low_psf" in features.EXCLUDE_ORDER
 
 
+def test_repeat_price_excludes_a_later_record_of_the_same_price_on_the_same_flat(tmp_path):
+    """Open item (Yoho check): Grand Yoho 5 10/C sold HK$20,565,750 in 2021 and is recorded
+    again at HK$20,566,000 in 2026 (a late re-registration). The later record is excluded, the
+    earlier stays; a 1% different price is kept; a flat with no floor number is untouched."""
+    path = make_db(tmp_path / "t.duckdb", n_deals=120)
+    con = db.connect(path)
+    c = dict(source="centadata")
+    add_deal(con, "r-first", "cd-1-AAA", 24, "D", date(2021, 1, 29), 20_565_750, **c)
+    add_deal(con, "r-late", "cd-1-AAA", 24, "D", date(2026, 2, 24), 20_566_000, **c)
+    add_deal(con, "k-first", "cd-1-AAA", 25, "D", date(2021, 1, 29), 20_000_000, **c)
+    add_deal(con, "k-later", "cd-1-AAA", 25, "D", date(2026, 2, 24), 20_200_000, **c)
+    add_deal(con, "n-first", "cd-1-AAA", "?", "D", date(2021, 1, 29), 20_000_000, **c)
+    add_deal(con, "n-later", "cd-1-AAA", "?", "D", date(2026, 2, 24), 20_000_000, **c)
+    raw = features.extract(con)
+    con.close()
+    reasons = features.deal_features(raw).set_index("source_id")["exclude_reason"]
+    assert reasons["r-late"] == "repeat_price"
+    assert reasons["r-first"] != "repeat_price"
+    assert reasons["k-later"] != "repeat_price" and reasons["k-first"] != "repeat_price"
+    assert reasons["n-later"] != "repeat_price" and reasons["n-first"] != "repeat_price"
+    order = features.EXCLUDE_ORDER
+    assert order.index("repeat_price") == order.index("duplicate") + 1
+
+
+def test_repeat_price_ignores_earlier_deals_that_are_duplicates():
+    d = pd.DataFrame({
+        "building_id": ["b"] * 3, "floor_num": [5.0] * 3, "flat": ["A"] * 3,
+        "agreement_date": pd.to_datetime(["2020-01-01", "2021-01-01", "2024-01-01"]),
+        "price_hkd": [10_000_000.0, 10_005_000.0, 10_005_000.0],
+        "usable": [False, True, True]})  # the 2020 copy is a duplicate/derived row
+    got = features.repeat_price_check(d, d["usable"])
+    # 2021 stands (its only earlier match is unusable); 2024 repeats 2021
+    assert got.tolist() == [False, False, True]
+
+
 # ---- the feature tables from a database ----------------------------------------------------
 
 

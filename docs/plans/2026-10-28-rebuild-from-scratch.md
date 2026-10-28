@@ -62,7 +62,7 @@ scrape. First, three small ranking fixes found by the Yoho check on 2026-10-28.
     tests for: flagged at 0.7x with 3 peers; not flagged with 2 peers; not flagged when peers
     differ in area by more than 3%; shortlist text shows the flag.
 
-- [ ] **Task 2: repeat-price rule** `[parallel-ok]`
+- [x] **Task 2: repeat-price rule** `[parallel-ok]`
   - Files: modify `src/hkestate/features.py` (`deal_features`, `EXCLUDE_ORDER`); test
     `tests/test_features.py`.
   - Do (failing tests first): new condition `repeat_price`: a deal whose same flat (same

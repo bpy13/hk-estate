@@ -181,7 +181,9 @@ need building-level logic and the master tables, so they live in `features.deal_
 (`exclude_reason`), which both the fair-price model and the growth study use. So does
 `low_psf` (2026-10-23, `features.low_psf_check`): index-adjusted price per sq ft under 0.15×
 the district's clean median, or under 0.5× the same flat's other clean sales within 5 years
-(part shares the price check missed).
+(part shares the price check missed). And `repeat_price` (`features.repeat_price_check`): the
+same flat has an earlier non-duplicate deal within 0.1% of the price, any gap (a late
+re-registration of the same sale); the earlier deal stays.
 
 The first-hand window is 24 months after completion, or 72 months for buildings completed in
 2010 or later (decisions.md "Cheap-sale rule").

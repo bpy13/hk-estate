@@ -541,7 +541,7 @@ def _attach(df: pd.DataFrame, raw: dict, buildings: pd.DataFrame) -> pd.DataFram
 # ---- the two tables ----------------------------------------------------------------------------
 
 EXCLUDE_ORDER = [
-    "no_building", "house", "duplicate", "first_hand", "first_hand_rule", "parking",
+    "no_building", "house", "duplicate", "repeat_price", "first_hand", "first_hand_rule", "parking",
     "non_market", "low_price", "bulk", "outlier", "derived", "no_area", "too_old", "in_future",
     "price_check",  # applied last, against the deals left (see price_check)
     "low_psf",  # after price_check, against the deals it left (see low_psf_check)
@@ -554,6 +554,32 @@ def snapshot_cutoff(raw: dict) -> pd.Timestamp:
     SRPE register typo dated one sale 2055-09-26; pre-release review 2026-10-21)."""
     at = raw.get("meta", {}).get("extracted_at")
     return (pd.Timestamp(at) if at else pd.Timestamp(date.today())).normalize()
+
+
+REPEAT_PRICE_TOLERANCE = 0.001  # 0.1%
+
+
+def repeat_price_check(d: pd.DataFrame, usable: pd.Series) -> pd.Series:
+    """True for a deal whose flat (building, floor number, flat letter; all present) has an
+    earlier `usable` deal at a price within 0.1%, however long ago. A flat rarely sells twice at
+    the same price, so the later record is a late re-registration of the first sale (Grand Yoho
+    5 10/C: HK$20,565,750 in 2021, HK$20,566,000 in 2026). The earlier deal stays. `usable`
+    marks deals that may count as the earlier one (not duplicate or derived, with a price)."""
+    key = ["building_id", "floor_num", "flat"]
+    price = pd.to_numeric(d["price_hkd"], errors="coerce")
+    ok = d[key].notna().all(axis=1) & d["agreement_date"].notna() & (price > 0)
+    flagged = pd.Series(False, index=d.index)
+    if not ok.any():
+        return flagged
+    cols = d.loc[ok, [*key, "agreement_date"]].assign(price=price[ok], pos=np.flatnonzero(ok))
+    earlier = cols[usable[ok].to_numpy(dtype=bool)]
+    # flats have few deals each, so joining a flat to itself stays small
+    pairs = cols.merge(earlier, on=key, suffixes=("", "_e"))
+    older = (pairs["agreement_date_e"] < pairs["agreement_date"]) | (
+        (pairs["agreement_date_e"] == pairs["agreement_date"]) & (pairs["pos_e"] < pairs["pos"]))
+    close = (pairs["price"] - pairs["price_e"]).abs() <= REPEAT_PRICE_TOLERANCE * pairs["price_e"]
+    flagged.iloc[np.unique(pairs.loc[older & close, "pos"].to_numpy())] = True
+    return flagged
 
 
 def deal_features(raw: dict) -> pd.DataFrame:
@@ -602,10 +628,13 @@ def deal_features(raw: dict) -> pd.DataFrame:
     d["first_hand"] = d["excl_first_hand"].astype(bool) | rule
 
     house = d["excluded_estate"].notna() | ((d["source"] == "srpe") & d["floor_label"].eq("H"))
+    derived = (d["source"] == "ricacorp") & d["source_id"].str.endswith(":prev")
+    repeat = repeat_price_check(d, ~d["excl_duplicate"].astype(bool) & ~derived)
     conditions = {
         "no_building": d["building_id"].isna(),
         "house": house,
         "duplicate": d["excl_duplicate"].astype(bool),
+        "repeat_price": repeat,
         "first_hand": d["excl_first_hand"].astype(bool),
         "first_hand_rule": rule,
         "parking": d["parking"].astype(bool),
@@ -613,7 +642,7 @@ def deal_features(raw: dict) -> pd.DataFrame:
         "low_price": d["excl_low_price"].astype(bool),
         "bulk": d["excl_bulk"].astype(bool),
         "outlier": d["excl_outlier"].astype(bool),
-        "derived": (d["source"] == "ricacorp") & d["source_id"].str.endswith(":prev"),
+        "derived": derived,
         "no_area": ~d["area_basis"].isin(["saleable", "converted"]) | d["log_psf"].isna(),
         "too_old": d["agreement_date"].isna() | (d["agreement_date"] < MIN_DEAL_DATE),
         "in_future": d["agreement_date"] > snapshot_cutoff(raw),
