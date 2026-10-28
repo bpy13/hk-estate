@@ -117,6 +117,20 @@ def sitemap_estates(xml: str) -> list[tuple[str, str]]:
     return out
 
 
+def select_estates(estates: list[tuple[str, str]], tokens: list[str]) -> list[tuple[str, str]]:
+    """The sitemap's (code, name) entries a `--estates` subset names, before the master list
+    exists: a `2-` code itself; a name (Traditional or Simplified) its estate and phases; a
+    `3-` code the entries named like it. Pilot group names match nothing here."""
+    from hkestate.link import est_key, name_matches
+
+    names = dict(estates)
+    codes = {t for t in tokens if t.startswith("2-")}
+    keys = [est_key(names.get(t, "") if t.startswith("3-") else t)
+            for t in tokens if not t.startswith("2-")]
+    return [(c, n) for c, n in estates if c.startswith("2-")
+            and (c in codes or any(name_matches(k, est_key(n)) for k in keys))]
+
+
 # ---- estate facts ----------------------------------------------------------------------------
 
 
@@ -437,15 +451,22 @@ def process_estate(fetcher, db_path, code: str, name: str, *, pilot: bool,
 
 
 def run_master(fetcher, db_path=None, log=print, limit: int | None = None,
-               wait=time.sleep, recheck_house: bool = False) -> dict:
+               wait=time.sleep, recheck_house: bool = False,
+               estates: list[str] | None = None) -> dict:
     """Walk every estate in the sitemap; resumable through run_progress (one step per code).
     Runs alongside the Centanet listings and cd-history (same host, each at its own pace);
     throttling is waited out (`wait` sleeps the job's own cool-downs).
     `recheck_house`: read again only the estates saved with exclude_reason 'house' (they were
     dropped whole before blocks were judged one by one); steps are `house:<code>`, so the
-    normal steps are untouched."""
+    normal steps are untouched. `estates`: a test subset (names or codes, `select_estates`).
+    `stats["left"]`: estates of this run's to-do list still not done (errors, a stop)."""
     xml = fetcher.get(SITEMAP_URL, "static")
-    estates = [(c, n) for c, n in sitemap_estates(xml) if c.startswith("2-")]
+    listed = sitemap_estates(xml)
+    estates_all = [(c, n) for c, n in listed if c.startswith("2-")]
+    if estates is not None:
+        estates_all = select_estates(listed, estates)
+        log(f"estates subset {','.join(estates)}: {len(estates_all)} sitemap entries")
+    estates = estates_all
     overrides = load_overrides()
     pilot = pilot_codes(fetcher, log)
     with db.session(db_path) as con:
@@ -464,7 +485,7 @@ def run_master(fetcher, db_path=None, log=print, limit: int | None = None,
         todo = todo[:limit]
     log(f"{len(estates)} estates in the sitemap, {len(done)} done, {len(todo)} to do")
     stats = {"estates": 0, "excluded": 0, "blocks": 0, "deals": 0, "house_blocks": 0,
-             "errors": 0}
+             "errors": 0, "left": len(todo)}
     streak, status, message = 0, "ok", ""
     # throttling (429/503, 5xx, timeouts): wait and try the same estate again (patience.py)
     patience = Patience(log, what="master", fetcher=fetcher, sleep=wait)
@@ -510,6 +531,7 @@ def run_master(fetcher, db_path=None, log=print, limit: int | None = None,
         log(message)
         raise
     finally:
+        stats["left"] = len(todo) - stats["estates"]  # errored or not reached: the next run
         with db.session(db_path) as con:
             backfill_gain_pct(con)
             db.finish_run(con, run_id, status, stats["deals"], message or json.dumps(stats))

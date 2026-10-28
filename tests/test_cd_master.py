@@ -408,3 +408,31 @@ def test_previous_deal_change_is_stored_with_the_latest_deal(con):
     assert con.execute("SELECT gain_pct FROM txn_raw").fetchone()[0] == 10.0
     assert cm.prev_price(5_500_000, 10.0) == 5_000_000
     assert cm.prev_price(5_500_000, None) is None
+
+
+# ---- estate subsets (`--estates`, test rebuilds) ----------------------------------------------
+
+
+def test_select_estates_by_traditional_name_or_code():
+    listed = cm.sitemap_estates(SITEMAP)
+    assert cm.select_estates(listed, ["桂園"]) == [("2-AABKWPYAPE", "桂园")]  # sitemap: Simplified
+    assert cm.select_estates(listed, ["2-AABKWPYAPE"]) == [("2-AABKWPYAPE", "桂园")]
+    assert cm.select_estates(listed, ["不存在"]) == []
+    assert cm.select_estates(listed, ["taikoo-shing"]) == []  # a pilot group: not a sitemap name
+
+
+def test_master_pass_takes_only_the_subset_and_counts_what_is_left(tmp_path, monkeypatch):
+    monkeypatch.setattr(cm, "pilot_codes", lambda f, log: set())
+    monkeypatch.setattr(cm, "load_overrides", lambda: {})
+    f = Pages()
+    stats = cm.run_master(f, db_path=tmp_path / "t.duckdb", log=lambda m: None,
+                          estates=["不存在"])
+    assert stats["estates"] == 0 and stats["left"] == 0
+    assert f.asked == [cm.SITEMAP_URL]  # nothing outside the subset is read
+    stats = cm.run_master(f, db_path=tmp_path / "t.duckdb", log=lambda m: None,
+                          estates=["桂園"])
+    assert stats["estates"] == 1 and stats["left"] == 0
+    with db.session(tmp_path / "t.duckdb") as con:
+        msg = con.execute("SELECT message FROM run_log WHERE command = 'master' "
+                          "ORDER BY run_id DESC LIMIT 1").fetchone()[0]
+    assert json.loads(msg)["left"] == 0

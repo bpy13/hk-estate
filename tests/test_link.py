@@ -200,3 +200,42 @@ def test_pilot_link_and_shared_unit_report(con):
                        ).fetchone() == (bid,)
     report = link.shared_unit_report(con)
     assert report == [("1140", 1, 2, 1)]  # one flat has both sources, one is Centadata-only
+
+
+# ---- estate subsets (`--estates`, test rebuilds) -------------------------------------------------
+
+
+def test_resolve_estates_names_codes_big_estates_and_pilot_groups(con):
+    add_master(con, "2-P1", "美孚新邨第一期", parent="3-MF")
+    add_master(con, "2-P2", "美孚新邨第二期", parent="3-MF")
+    add_master(con, "2-YY", "爾巒")
+    add_master(con, "2-ZZ", "爾巒軒")  # another estate whose name starts the same: not a phase
+    assert link.resolve_estates(con, ["爾巒"]) == {"2-YY"}
+    assert link.resolve_estates(con, ["美孚新邨第一期"]) == {"2-P1"}
+    assert link.resolve_estates(con, ["3-MF"]) == {"2-P1", "2-P2"}
+    assert link.resolve_estates(con, ["2-ZZ", " "]) == {"2-ZZ"}
+    assert link.resolve_estates(con, ["太古城", "taikoo-shing"]) == {"taikoo-shing"}
+    assert link.resolve_estates(con, ["不存在"]) == set()
+    assert "lohas-park" in link.resolve_estates(con, ["pilot"])
+
+
+def test_subset_building_ids_cover_master_28hse_and_pilot_buildings(con):
+    add_master(con, "2-AAA", "測試苑", blocks=[("1-B1", "", "1座")])
+    add_master(con, "2-BBB", "別處", blocks=[("1-C1", "", "1座")])
+    add_hse(con, 5, "測試苑", blocks=[("", "1座")])
+    link.map_estates(con)
+    con.execute("INSERT INTO estate VALUES ('h28-1140', '太古城', NULL, NULL, 'taikoo-shing', "
+                "'hse28', '1140', now())")
+    con.execute("INSERT INTO building (building_id, estate_id, name_zh) "
+                "VALUES ('h28-1140-b1', 'h28-1140', '某閣')")
+    assert link.subset_building_ids(con, {"2-AAA"}) == {"cd-1-B1", "h28-5-b1"}
+    assert link.subset_building_ids(con, {"taikoo-shing"}) == {"h28-1140-b1"}
+    assert link.subset_building_ids(con, set()) == set()
+
+
+def test_subset_names_match_phases_and_whole_estates(con):
+    add_master(con, "2-P1", "日出康城第1期", parent="3-LP")
+    keys = link.subset_name_keys(con, {"2-P1", "mei-foo"})
+    assert link.names_match("日出康城", keys)  # the whole estate of a subset phase
+    assert link.names_match("美孚新邨", keys)
+    assert not link.names_match("太古城", keys)

@@ -386,36 +386,89 @@ class CountingClient:
         return {"resultData": {"devId": payload["devId"], "transactions": []}}
 
 
-def _run_srpe(dbp, client):
-    return srpe.run_srpe(client, dbp, lambda m: None)
+def _run_srpe(dbp, client, **kw):
+    return srpe.run_srpe(client, dbp, lambda m: None, **kw)
 
 
-def test_finished_details_are_skipped_on_a_later_day(tmp_path, monkeypatch):
+def _a_week_later(dbp):
+    """Make the saved progress look a week old (the key must not depend on the day)."""
+    with db.session(dbp) as con:
+        con.execute("UPDATE run_progress SET finished_at = finished_at - INTERVAL 7 DAY")
+
+
+class StopsAtSecondDetail(CountingClient):
+    """Reads the first development's detail, then the run dies (e.g. the PC restarts)."""
+
+    def post(self, endpoint, payload):
+        if not endpoint.startswith("DistrictAreaSearch") and self.details == 1:
+            raise RuntimeError("killed")
+        return super().post(endpoint, payload)
+
+
+def _empty_db(tmp_path):
     dbp = tmp_path / "t.duckdb"
     with db.session(dbp) as con:
         db.init_db(con)
+    return dbp
+
+
+def test_an_unfinished_run_resumed_on_a_later_day_skips_finished_details(tmp_path):
+    dbp = _empty_db(tmp_path)
+    with pytest.raises(RuntimeError):
+        _run_srpe(dbp, StopsAtSecondDetail())
+    _a_week_later(dbp)
+    later = CountingClient()
+    stats = _run_srpe(dbp, later)  # the same SRPE run, resumed
+    assert later.details == 1  # only development 10 was left
+    assert stats["left"] == 0
+    with db.session(dbp) as con:
+        keys = [r[0] for r in con.execute(
+            "SELECT step_key FROM run_progress WHERE command = 'srpe' "
+            "AND step_key LIKE 'detail:%'").fetchall()]
+    # both details carry the tag of the one run they belong to
+    assert sorted(k.split(":")[1] for k in keys) == ["10", "2947"]
+    assert len({k.split(":")[2] for k in keys}) == 1
+
+
+def test_a_new_run_after_a_completed_one_reads_every_detail_again(tmp_path):
+    dbp = _empty_db(tmp_path)
     first = CountingClient()
     _run_srpe(dbp, first)
     assert first.details == 2
-    with db.session(dbp) as con:  # the step key holds no date
-        keys = [r[0] for r in con.execute(
-            "SELECT step_key FROM run_progress WHERE command = 'srpe'").fetchall()]
-    assert "detail:2947" in keys and "detail:10" in keys
-    with db.session(dbp) as con:  # make the saved progress look a week old
-        con.execute("UPDATE run_progress SET finished_at = finished_at - INTERVAL 7 DAY")
-    later = CountingClient()
-    _run_srpe(dbp, later)  # a run on a later day
-    assert later.details == 0
+    again = CountingClient()
+    _run_srpe(dbp, again)  # even on the same day
+    assert again.details == 2  # newly published registers are seen
 
 
-def test_a_date_keyed_detail_step_from_an_older_run_still_counts_as_done(tmp_path, monkeypatch):
-    dbp = tmp_path / "t.duckdb"
+def test_a_limited_run_stays_open(tmp_path):
+    dbp = _empty_db(tmp_path)
+    first = CountingClient()
+    _run_srpe(dbp, first, limit=1)
+    assert first.details == 1
+    rest = CountingClient()
+    _run_srpe(dbp, rest)
+    assert rest.details == 1  # the run resumes with development 10
+
+
+def test_older_detail_keys_are_harmless(tmp_path):
+    dbp = _empty_db(tmp_path)
     with db.session(dbp) as con:
-        db.init_db(con)
-        db.mark_step(con, "srpe", "detail:2947:2026-10-19", 1, "ok")  # the old key form
+        db.mark_step(con, "srpe", "detail:2947:2026-10-19", 1, "ok")  # per-day key (before 10-28)
+        db.mark_step(con, "srpe", "detail:10", 1, "ok")  # undated key (Task 5)
     client = CountingClient()
     _run_srpe(dbp, client)
-    assert client.details == 1  # only development 10 is read
+    assert client.details == 2  # a new run reads both; nothing fails on the old rows
+
+
+def test_srpe_estates_filter_keeps_developments_in_the_subset(tmp_path):
+    dbp = _empty_db(tmp_path)
+    with db.session(dbp) as con:
+        cm.ensure_tables(con)
+        con.execute("INSERT INTO master_building (building_id, estate_code, address) "
+                    "VALUES ('cd-1-A', '2-AAA', '九龍城/木翠街3號')")
+    client = CountingClient()
+    stats = _run_srpe(dbp, client, estates={"2-AAA"})
+    assert client.details == 1 and stats["left"] == 0  # only 2947 (木翠街3號) is in 2-AAA
 
 
 def test_srpe_requests_count_towards_the_process_wide_cap(monkeypatch):

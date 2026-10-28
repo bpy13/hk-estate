@@ -125,6 +125,121 @@ def map_estates(con, skip_ids: set[int] | None = None) -> dict:
     return dict(counts)
 
 
+# ---- estate subsets (`--estates`, test rebuilds) -------------------------------------------------
+#
+# A subset is a set of keys: pilot group names (`taikoo-shing`, ...: their data sits under 28Hse
+# ids) and Centadata `2-` codes of master estates. Commands with `--estates` turn what the user
+# typed (names, `2-`/`3-` codes, pilot group names, or `pilot`) into these keys once.
+
+_CODE = re.compile(r"^[23]-[A-Z]+$")
+
+
+def name_matches(key: str, candidate: str) -> bool:
+    """`candidate` (an est_key) is the estate `key` names: the same name, or the name followed
+    by a phase or block (e.g. 'xx' and 'xx第2期'). The same rule as `match_estate`."""
+    if len(key) < 2 or not candidate.startswith(key):
+        return False
+    return candidate == key or bool(_PHASE_TAIL.match(candidate[len(key):]))
+
+
+def pilot_group(token: str) -> str | None:
+    """The pilot group a token names (its group name, Chinese name or Centadata entry code)."""
+    from hkestate.sources.centadata import PILOT_ENTRIES
+
+    for group, (name, code) in PILOT_ENTRIES.items():
+        if token in (group, code) or est_key(token) == est_key(name):
+            return group
+    return None
+
+
+def resolve_estates(con, tokens: list[str]) -> set[str]:
+    """Subset keys for `--estates` tokens: pilot group names and master `2-` codes. A `3-`
+    code (a big estate) gives its phases; a name gives the master estates it names. A token
+    that matches nothing adds nothing (the caller says so)."""
+    from hkestate.sources.centadata import PILOT_ENTRIES
+
+    ensure_tables(con)
+    masters = con.execute(
+        "SELECT code, parent_code, name_zh FROM master_estate "
+        "WHERE NOT coalesce(pilot, false)").fetchall()
+    keys: set[str] = set()
+    for raw in tokens:
+        token = raw.strip()
+        if not token:
+            continue
+        if token == "pilot":
+            keys.update(PILOT_ENTRIES)
+        elif group := pilot_group(token):
+            keys.add(group)
+        elif token.startswith("2-") and _CODE.match(token):
+            keys.add(token)
+        elif _CODE.match(token):  # 3-: the phases of the big estate
+            keys.update(c for c, p, _ in masters if p == token)
+        else:
+            k = est_key(token)
+            keys.update(c for c, _, n in masters if name_matches(k, est_key(n)))
+    return keys
+
+
+def subset_codes(keys: set[str] | None) -> set[str] | None:
+    """The master `2-` codes of a subset (None stays None: no subset)."""
+    return None if keys is None else {k for k in keys if k.startswith("2-")}
+
+
+def subset_groups(keys: set[str] | None) -> set[str] | None:
+    """The pilot group names of a subset (None stays None: no subset)."""
+    return None if keys is None else {k for k in keys if not k.startswith("2-")}
+
+
+def subset_building_ids(con, keys: set[str]) -> set[str]:
+    """Every building id of a subset, in `master_building` and `building`: the master
+    buildings of its `2-` codes, the 28Hse buildings of estates matched to those codes, and
+    the buildings of its pilot groups."""
+    ensure_tables(con)
+    codes, groups = sorted(subset_codes(keys)), sorted(subset_groups(keys))
+    out: set[str] = set()
+    if codes:
+        marks = ",".join("?" for _ in codes)
+        out |= {r[0] for r in con.execute(
+            f"SELECT building_id FROM master_building WHERE estate_code IN ({marks})",
+            codes).fetchall()}
+        h28 = [f"h28-{hid}" for hid, mc in con.execute(
+            "SELECT id, master_codes FROM hse28_estate WHERE master_codes IS NOT NULL").fetchall()
+            if set(mc.split(",")) & set(codes)]
+        eids = [f"cd-{c}" for c in codes] + h28
+        marks = ",".join("?" for _ in eids)
+        out |= {r[0] for r in con.execute(
+            f"SELECT building_id FROM building WHERE estate_id IN ({marks})", eids).fetchall()}
+    if groups:
+        marks = ",".join("?" for _ in groups)
+        out |= {r[0] for r in con.execute(
+            f"SELECT b.building_id FROM building b JOIN estate e USING (estate_id) "
+            f"WHERE e.group_name IN ({marks})", groups).fetchall()}
+    return out
+
+
+def subset_name_keys(con, keys: set[str]) -> set[str]:
+    """Comparable names (`est_key`) of a subset's estates: the master names of its codes and
+    the pilot groups' names. For sources that know estates only by name (Ricacorp)."""
+    from hkestate.sources.centadata import PILOT_ENTRIES
+
+    ensure_tables(con)
+    codes = sorted(subset_codes(keys))
+    names = {PILOT_ENTRIES[g][0] for g in subset_groups(keys) if g in PILOT_ENTRIES}
+    if codes:
+        marks = ",".join("?" for _ in codes)
+        names |= {r[0] for r in con.execute(
+            f"SELECT name_zh FROM master_estate WHERE code IN ({marks})", codes).fetchall()}
+    return {k for n in names if (k := est_key(n))}
+
+
+def names_match(name: str, name_keys: set[str]) -> bool:
+    """`name` is one of the subset's estates, the whole estate one of them is a phase of, or
+    a phase of one of them."""
+    k = est_key(name)
+    return any(name_matches(k, s) or name_matches(s, k) for s in name_keys)
+
+
 # ---- source_map ---------------------------------------------------------------------------------
 
 
@@ -212,12 +327,15 @@ def copy_units(con, h28_building_ids: list[str]) -> None:
     )
 
 
-def link_loaded(con) -> dict:
-    """Re-map the buildings of every indexed estate whose grid is loaded. Returns totals."""
+def link_loaded(con, estates: set[str] | None = None) -> dict:
+    """Re-map the buildings of every indexed estate whose grid is loaded. Returns totals.
+    `estates` (subset keys): only 28Hse estates matched to one of these master codes."""
     total: dict[str, int] = defaultdict(int)
-    ids = [r[0] for r in con.execute(
-        "SELECT h.id FROM hse28_estate h WHERE h.master_codes IS NOT NULL AND EXISTS "
-        "(SELECT 1 FROM building b WHERE b.estate_id = 'h28-' || h.id)").fetchall()]
+    rows = con.execute(
+        "SELECT h.id, h.master_codes FROM hse28_estate h WHERE h.master_codes IS NOT NULL "
+        "AND EXISTS (SELECT 1 FROM building b WHERE b.estate_id = 'h28-' || h.id)").fetchall()
+    codes = subset_codes(estates)
+    ids = [hid for hid, mc in rows if codes is None or set(mc.split(",")) & codes]
     for hid in ids:
         for k, v in link_buildings(con, hid).items():
             total[k] += v
@@ -273,9 +391,11 @@ def shared_unit_report(con) -> list[tuple]:
         """).fetchall()
 
 
-def link_all(con) -> dict:
-    """Everything: pilot, estate matching, building matching."""
+def link_all(con, estates: set[str] | None = None) -> dict:
+    """Everything: pilot, estate matching, building matching. `estates` (subset keys) limits
+    the building matching; the pilot link and the name matching are quick and run whole."""
     db.init_db(con)
     ensure_tables(con)
-    return {"pilot": link_pilot(con), "estates": map_estates(con), "buildings": link_loaded(con)}
+    return {"pilot": link_pilot(con), "estates": map_estates(con),
+            "buildings": link_loaded(con, estates)}
 

@@ -449,20 +449,51 @@ LIST_PAYLOAD = {
 }
 
 
-def _detail_done(con, dev_id: str) -> bool:
-    """A development's detail was read. Older runs stored the step as `detail:<id>:<date>`;
-    any such row still counts as done, so progress already saved is not repeated."""
-    if db.step_done(con, COMMAND, f"detail:{dev_id}"):
-        return True
-    return con.execute(
-        "SELECT 1 FROM run_progress WHERE command = ? AND starts_with(step_key, ?) LIMIT 1",
-        [COMMAND, f"detail:{dev_id}:"]).fetchone() is not None
+# One SRPE *run* reads every development's detail once. Its tag is stored once in
+# run_progress (command `srpe`, step `run`, detail "open <tag>" or "done <tag>") and is part
+# of each detail step key (`detail:<dev id>:<tag>`). While the run is open, a resume on any
+# later day reuses the tag and skips the details already read. Once a run has read every
+# development, the next run gets a new tag, so it reads every detail again and sees registers
+# published since. The tag is the run_log id of the run's first invocation. Older keys
+# (`detail:<id>:<date>` and `detail:<id>`) never carry an `r` tag, so they are left alone.
+RUN_STEP = "run"
 
 
-def run_srpe(client: SrpeClient, db_path=None, log=print, limit: int | None = None) -> dict:
+def _run_tag(con, run_id: int) -> str:
+    """The open SRPE run's tag, or a new one (stored) if none is open."""
+    row = con.execute("SELECT detail FROM run_progress WHERE command = ? AND step_key = ?",
+                      [COMMAND, RUN_STEP]).fetchone()
+    if row and (row[0] or "").startswith("open "):
+        return row[0].split()[1]
+    tag = f"r{run_id}"
+    db.mark_step(con, COMMAND, RUN_STEP, run_id, f"open {tag} {date.today().isoformat()}")
+    return tag
+
+
+def _detail_key(dev_id: str, tag: str) -> str:
+    return f"detail:{dev_id}:{tag}"
+
+
+def in_subset(con, dev: Dev, estates: set[str]) -> bool:
+    """The development's buildings (by street address) include one of the subset's master
+    estates (`2-` codes). DB only: used by `--estates` before any detail is read."""
+    bids = match_development(con, dev)
+    if not bids:
+        return False
+    marks = ",".join("?" for _ in bids)
+    codes = {r[0] for r in con.execute(
+        f"SELECT estate_code FROM master_building WHERE building_id IN ({marks})",
+        bids).fetchall()}
+    return bool(codes & estates)
+
+
+def run_srpe(client: SrpeClient, db_path=None, log=print, limit: int | None = None,
+             estates: set[str] | None = None) -> dict:
     """List developments, then read each one's newest register. Resumable: a development's
-    detail is read once (its step key holds no date, so a resume on a later day skips it)
-    and a register is parsed once per issue."""
+    detail is read once per SRPE run (see RUN_STEP; a resume on a later day skips it) and a
+    register is parsed once per issue. `estates`: only developments at buildings of these
+    master estates (`2-` codes; test rebuilds). `stats["left"]` counts the developments of
+    this run's list still unread at the end; the run is closed when none is left."""
     import pdfplumber
 
     from hkestate.fetch import RobotsDisallowed
@@ -471,9 +502,13 @@ def run_srpe(client: SrpeClient, db_path=None, log=print, limit: int | None = No
         db.init_db(con)
         cd_master.ensure_tables(con)
         ensure_tables(con)
-        run_id = db.start_run(con, COMMAND, f"limit={limit}" if limit else "")
+        args = " ".join(filter(None, [f"limit={limit}" if limit else "",
+                                      f"estates={','.join(sorted(estates))}"
+                                      if estates is not None else ""]))
+        run_id = db.start_run(con, COMMAND, args)
+        tag = _run_tag(con, run_id)
     stats = {"developments": 0, "registers": 0, "deals": 0, "unmatched": 0,
-             "skipped_rows": 0, "failed_registers": 0}
+             "skipped_rows": 0, "failed_registers": 0, "left": 0}
     status, message = "ok", ""
     pdf_dir = get_cache_dir() / HOST / "pdf"
     pdf_dir.mkdir(parents=True, exist_ok=True)
@@ -481,12 +516,16 @@ def run_srpe(client: SrpeClient, db_path=None, log=print, limit: int | None = No
         client.login()
         devs = parse_dev_list(client.post("DistrictAreaSearch/getDistrictAreaSearchResult",
                                           LIST_PAYLOAD))
-        log(f"{len(devs)} developments listed")
+        log(f"{len(devs)} developments listed (run {tag})")
+        if estates is not None:  # an empty subset keeps nothing (never the whole list)
+            with db.session(db_path) as con:
+                devs = [d for d in devs if in_subset(con, d, estates)]
+            log(f"{len(devs)} developments in the estates subset")
         if limit:
             devs = devs[:limit]
         for i, dev in enumerate(devs, 1):
             with db.session(db_path) as con:
-                if _detail_done(con, dev.dev_id):
+                if db.step_done(con, COMMAND, _detail_key(dev.dev_id, tag)):
                     continue
             detail = parse_dev_detail(client.post("Map/getMapDevResultById", {
                 "devId": dev.dev_id, "actionType": "developments details",
@@ -533,9 +572,15 @@ def run_srpe(client: SrpeClient, db_path=None, log=print, limit: int | None = No
                     [dev.dev_id, dev.name, dev.phase, ";".join(dev.addresses), dev.district,
                      detail.lat, detail.lon, detail.register_id, detail.register_date,
                      ",".join(bids), added, datetime.now()])
-                db.mark_step(con, COMMAND, f"detail:{dev.dev_id}", run_id, "ok")
+                db.mark_step(con, COMMAND, _detail_key(dev.dev_id, tag), run_id, "ok")
             if i % 10 == 0:
                 log(f"{i}/{len(devs)} {stats}")
+        with db.session(db_path) as con:
+            stats["left"] = sum(not db.step_done(con, COMMAND, _detail_key(d.dev_id, tag))
+                                for d in devs)
+            if stats["left"] == 0 and not limit:  # every development read: close the run
+                db.mark_step(con, COMMAND, RUN_STEP, run_id,
+                             f"done {tag} {date.today().isoformat()}")
     except BaseException as e:
         status = "interrupted" if isinstance(e, KeyboardInterrupt) else "failed"
         message = f"{type(e).__name__}: {e}"
@@ -616,12 +661,19 @@ def main(argv=None) -> int:
                    help="re-read the saved register PDFs (no web requests) and replace each "
                         "development's rows with the new parse")
     p.add_argument("--dry-run", action="store_true", help="with --reparse-cached: count only")
+    p.add_argument("--estates", default=None,
+                   help="test subset: comma-separated estate names or Centadata 2- codes")
     args = p.parse_args(argv)
     if args.reparse_cached:
         reparse_cached(args.db, _logger("srpe"), args.dry_run)
         return 0
+    from hkestate import link
     from hkestate.fetch import Fetcher
 
+    estates = None
+    if args.estates:
+        with db.session(args.db) as con:
+            estates = link.resolve_estates(con, args.estates.split(","))
     log = _logger("srpe")
     with Fetcher() as f:
         if not f.allowed(f"{API}/Map/getMapDevResultById"):
@@ -630,7 +682,7 @@ def main(argv=None) -> int:
         # every URL (disclaimer page, list, detail, register download) is checked before use
         client = SrpeClient(delay_s=delay, allowed=f.allowed)
         try:
-            run_srpe(client, args.db, log, args.limit)
+            run_srpe(client, args.db, log, args.limit, estates=estates)
         finally:
             client.close()
     return 0
