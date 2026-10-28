@@ -59,6 +59,21 @@ cache pruning.)*
   drop the page if disallowed. Proposal: the second.
 
 ## Pending work
+- **Today's database is behind its own code (rebuild audit, 2026-10-28).** Steps ran in a
+  different order than a fresh run would. The 650 tower blocks from the house recheck have no
+  coordinates, MTR distance, school net or full Centadata history: geocoding and cd-history
+  ended before them. SRPE ran with the master list 75% done (20.8% of rows placed).
+  `link-ids` never ran. RVD ran once, on 10-16. The 10-25 model and 10-23 findings predate
+  the recheck. Catch-up, if wanted: `geo`, `schools --assign-only`, `cd-history`, `srpe`,
+  `link-ids`, `rvd`, then `train`, `rank`, `report`. Owner's call (adds requests).
+- **The daily prune deletes every page on three hosts after 7 days (rebuild audit).**
+  `maintenance.LISTING_HOSTS` covers hk.centanet.com, www.28hse.com and www.spacious.hk, so
+  master-pass, backfill and cd-history pages go too, not only listing pages with agents'
+  details. No rebuild can be replayed from saved pages. Keeping non-listing pages would cost
+  disk (the cache is 11.8 GB with pruning). Owner's call.
+- **Rebuild audit "unclear" items.** R1: Mei Foo Centadata rows from the 10-16 07:09 run may
+  sit on a wrong block; compare with the later run. R15: check whether `features.py`
+  re-parses stored floor labels, or `unit.floor_num` keeps its load-day parse.
 - **"Check a price" page (2026-10-23, plan check-a-price).** Built and checked on real data.
   Left: the 1.25 correction for sales the model learned from was measured on recent sales
   only (untested for 1990s-2010s); the page has no facing or sea-view inputs (`fair_value`
