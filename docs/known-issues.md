@@ -5,6 +5,11 @@ Bugs that will be fixed go in `open-items.md` instead.
 
 ## Data coverage
 
+- **Some data can't be rebuilt from scratch** (docs/rebuild.md, "Limits"). Listing history
+  (daily asking prices, listings since gone) and Ricacorp deals (the site shows ~90 days) exist
+  only in the database that collected them. The daily prune deletes saved pages on Centanet,
+  28Hse and Spacious after 7 days, so a rebuild can't be replayed from the page cache.
+
 - **Full deal history only from 2018.** 28Hse gives free full histories from 2018 on. Before
   that, Centadata shows only each flat's latest deal (back to 1995). The full Centaline
   history sits behind `/centanetapi/api/`, which robots.txt disallows, so we never call it.

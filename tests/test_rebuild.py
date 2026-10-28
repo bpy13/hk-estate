@@ -154,6 +154,19 @@ def test_a_step_the_subset_skips_does_not_hold_up_its_dependants(dbp, monkeypatc
     assert r.calls == ["cd-history"]
 
 
+def test_a_subset_that_matches_no_estate_is_not_done(dbp, monkeypatch):
+    # a mistyped --estates must not end in "rebuild complete" with nothing built
+    with db.session(dbp) as con:
+        con.execute("INSERT INTO run_log (run_id, command, started_at, status, message) "
+                    "VALUES (1, 'master', now(), 'ok', ?)", [json.dumps({"left": 0})])
+    monkeypatch.setattr(Context, "keys", lambda self, con: set())
+    logs = []
+    ctx = Context(db=str(dbp), tokens=["爾峦"], log=logs.append)
+    assert rebuild.todo_master(ctx) is None
+    assert any("matches no estate" in m for m in logs)
+    assert rebuild.todo_master(Context(db=str(dbp))) == 0  # the whole territory: unchanged
+
+
 def test_a_second_rebuild_is_not_started(dbp, monkeypatch):
     monkeypatch.setattr(locks, "held_by", lambda name: 99 if name == "rebuild" else None)
     r = Recorder()

@@ -7,8 +7,9 @@ writes its own log and run_log row as when run by hand. Steps run one at a time.
 - **Done means its to-do count is 0**, not that it exited (audit 4, "Done is not the exit
   code"): a step with a `todo` is run again until the count is 0, at most `MAX_TRIES` times;
   then it counts as failed: it and its dependants wait for a rerun, like a held lock, while
-  the other steps go on, and the run ends with exit code 2 naming what is left. Steps with no to-do notion (rvd, cross-check,
-  link-ids, schools, train, rank, report, datacheck) are done when they exit normally.
+  the other steps go on, and the run ends with exit code 2 naming what is left. Steps with no
+  to-do notion (rvd, cross-check, link-ids, schools, train, rank, report, datacheck) are done
+  when they exit normally.
 - **Progress** is in `run_progress` (command `rebuild`, one step key per step), so a rerun skips
   the steps already done. A test subset has its own keys (`<step>|<estates>`).
 - **Host locks**: a step whose host lock (`hse28`, `cd-history`, `ricacorp`, `listings`) is held
@@ -26,8 +27,8 @@ writes its own log and run_log row as when run by hand. Steps run one at a time.
   (`fetch.set_request_cap`); when it is used up the rebuild stops cleanly.
 
 Exit codes: 0 every step done; 1 not started (another rebuild holds `rebuild.lock`); 2 a step
-still had to-do after `MAX_TRIES` tries (the steps not needing it ran); 3 the request cap was reached; 4 the steps that
-could run are done, some were deferred.
+still had to-do after `MAX_TRIES` tries (the steps not needing it ran); 3 the request cap was
+reached; 4 the steps that could run are done, some were deferred.
 """
 
 from __future__ import annotations
@@ -211,7 +212,15 @@ def run_master(ctx):
 
 
 def todo_master(ctx):
-    return last_left(ctx, "master")
+    left = last_left(ctx, "master")
+    if left == 0 and ctx.subset:
+        # a mistyped `--estates` resolves to nothing and every later step would count as
+        # done with nothing built: unknown, so the master step fails and names the subset
+        with _session(ctx) as con:
+            if not ctx.keys(con):
+                ctx.log(f"master: --estates {','.join(ctx.tokens)} matches no estate")
+                return None
+    return left
 
 
 def _hse28_index_empty(ctx) -> bool:

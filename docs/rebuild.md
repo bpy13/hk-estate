@@ -147,7 +147,7 @@ Two estates, 爾巒 (`2-BEPPWPPJPG`, house-flagged, 26 tower blocks) and 凱帆�
 $env:HKESTATE_DATA_DIR = "<repo>\data\rebuild_test"
 $env:HKESTATE_CACHE_DIR = "<repo>\data\cache"
 $env:HKESTATE_LOCK_DIR = "<repo>\data\locks"
-python -m hkestate rebuild --estates 2-BEPPWPPJPG,2-EGPPWPPEPW --max-requests 1500
+conda run -n hk-estate hkestate rebuild --estates 2-BEPPWPPJPG,2-EGPPWPPEPW --max-requests 1500
 ```
 
 | Step | Result | Time |

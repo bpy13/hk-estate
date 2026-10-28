@@ -581,7 +581,8 @@ def run_srpe(client: SrpeClient, db_path=None, log=print, limit: int | None = No
         with db.session(db_path) as con:
             stats["left"] = sum(not db.step_done(con, COMMAND, _detail_key(d.dev_id, tag))
                                 for d in devs)
-            if stats["left"] == 0 and not limit:  # every development read: close the run
+            # every development read: close the run (not after a subset, which reads only some)
+            if stats["left"] == 0 and not limit and estates is None:
                 db.mark_step(con, COMMAND, RUN_STEP, run_id,
                              f"done {tag} {date.today().isoformat()}")
     except BaseException as e:

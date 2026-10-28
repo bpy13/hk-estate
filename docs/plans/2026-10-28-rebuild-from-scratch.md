@@ -160,7 +160,7 @@ Tasks run in order (5, then 6, then 7); they share `cli.py` and `fetch.py`.
     listings, so the model differs slightly.
   - Done when: every step 0-17 of the audit appears in order with a run time.
 
-- [ ] **Task 8: hand repairs** *(Folded into Tasks 5-7 after the audit. 14 of 20 repairs are
+- [x] **Task 8: hand repairs** *(Folded into Tasks 5-7 after the audit. 14 of 20 repairs are
   already in code; R8, R9, R14 go into Task 6; R1, R15 stay "unclear" and go to open items.)*
 
 ## Phase 4 – Small test (main session)

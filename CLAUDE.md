@@ -41,7 +41,9 @@ Read these before substantial changes:
   `data/reports/`.
 - Tests: `conda run -n hk-estate python -m pytest -q`
 - Lint: `conda run -n hk-estate ruff check .`
-- Data folder: `data/` (git-ignored), override with env var `HKESTATE_DATA_DIR`.
+- Data folder: `data/` (git-ignored), override with env var `HKESTATE_DATA_DIR`; the page
+  cache and lock folders follow it unless `HKESTATE_CACHE_DIR` / `HKESTATE_LOCK_DIR` are set
+  (a test rebuild shares the live cache and locks this way: docs/rebuild.md "Test run").
 
 ## Project rules
 - Scrape politely: obey robots.txt, at least 1 request/second per site, identify a cache so

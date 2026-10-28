@@ -450,6 +450,17 @@ def test_a_limited_run_stays_open(tmp_path):
     assert rest.details == 1  # the run resumes with development 10
 
 
+def test_a_subset_run_leaves_the_run_open(tmp_path):
+    # a test rebuild's subset reads only some developments; closing the run would make the
+    # next full run read every detail again (pre-release review 2026-10-28)
+    dbp = _empty_db(tmp_path)
+    _run_srpe(dbp, CountingClient(), estates=set())
+    with db.session(dbp) as con:
+        msg = con.execute("SELECT detail FROM run_progress WHERE command = 'srpe' "
+                          "AND step_key = ?", [srpe.RUN_STEP]).fetchone()[0]
+    assert msg.startswith("open ")
+
+
 def test_older_detail_keys_are_harmless(tmp_path):
     dbp = _empty_db(tmp_path)
     with db.session(dbp) as con:

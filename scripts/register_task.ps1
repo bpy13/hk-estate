@@ -7,7 +7,8 @@
                               (may run up to 23 hours: every due Centanet page is read)
   \hk-estate\weekly deals     every Sunday at 07:00       scripts\daily.ps1 -Command update
   \hk-estate\weekly ricacorp  every Sunday at 10:00       scripts\daily.ps1 -Command ricacorp
-                              (a pass takes about 7 hours; the task may run up to 14)
+                              (a pass takes about 30 hours with restarts; the task may run
+                               up to 14, then the watchdog resumes the week's pass)
   \hk-estate\daily rank       every day at 14:00          scripts\daily.ps1 -Command rank
                               (after the 08:00 listings, which take about 4.5 hours)
   \hk-estate\weekly train     every Sunday at 12:00       scripts\daily.ps1 -Command train
