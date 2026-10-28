@@ -186,6 +186,26 @@ def test_run_logs_decisions_starts_detached_and_keeps_state(data):
     assert state["cd-history"]["restarts"] == 1
 
 
+def test_a_live_rebuild_lock_means_nothing_is_restarted(data, monkeypatch):
+    write_log(data, "cd-history", NOW - timedelta(hours=3), CRASHED_CD)  # a dead job
+    hold_lock("rebuild", 777, True, monkeypatch)
+    started = []
+    decisions = watchdog.run(now=NOW, start=lambda *a: started.append(a) or 1)
+    assert started == []
+    assert all(d.action == "none" for d in decisions)
+    text = (data / "logs" / f"watchdog_{NOW:%Y%m%d}.log").read_text(encoding="utf-8")
+    assert len(text.strip().splitlines()) == 1 and "rebuild" in text and "777" in text
+    assert not (data / "watchdog_state.json").exists()
+
+
+def test_a_stale_rebuild_lock_does_not_stop_the_watchdog(data, monkeypatch):
+    write_log(data, "cd-history", NOW - timedelta(hours=3), CRASHED_CD)
+    hold_lock("rebuild", 777, False, monkeypatch)
+    started = []
+    watchdog.run(now=NOW, start=lambda *a: started.append(a) or 1)
+    assert len(started) == 1
+
+
 def test_dry_run_starts_nothing_and_saves_no_state(data):
     write_log(data, "cd-history", NOW - timedelta(hours=3), CRASHED_CD)
     started = []

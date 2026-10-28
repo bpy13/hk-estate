@@ -363,3 +363,72 @@ def test_one_bad_register_does_not_end_the_run(tmp_path, monkeypatch):
     stats = srpe.run_srpe(Client(), dbp, logs.append)
     assert stats["failed_registers"] == 1 and stats["registers"] == 1
     assert any("boom" in m for m in logs)
+
+
+class CountingClient:
+    """Answers the list and the detail of each development; counts the detail calls."""
+
+    requests = 0
+
+    def __init__(self):
+        self.details = 0
+
+    def login(self):
+        pass
+
+    def download(self, path):
+        return b"%PDF"
+
+    def post(self, endpoint, payload):
+        if endpoint.startswith("DistrictAreaSearch"):
+            return LIST_JSON
+        self.details += 1
+        return {"resultData": {"devId": payload["devId"], "transactions": []}}
+
+
+def _run_srpe(dbp, client):
+    return srpe.run_srpe(client, dbp, lambda m: None)
+
+
+def test_finished_details_are_skipped_on_a_later_day(tmp_path, monkeypatch):
+    dbp = tmp_path / "t.duckdb"
+    with db.session(dbp) as con:
+        db.init_db(con)
+    first = CountingClient()
+    _run_srpe(dbp, first)
+    assert first.details == 2
+    with db.session(dbp) as con:  # the step key holds no date
+        keys = [r[0] for r in con.execute(
+            "SELECT step_key FROM run_progress WHERE command = 'srpe'").fetchall()]
+    assert "detail:2947" in keys and "detail:10" in keys
+    with db.session(dbp) as con:  # make the saved progress look a week old
+        con.execute("UPDATE run_progress SET finished_at = finished_at - INTERVAL 7 DAY")
+    later = CountingClient()
+    _run_srpe(dbp, later)  # a run on a later day
+    assert later.details == 0
+
+
+def test_a_date_keyed_detail_step_from_an_older_run_still_counts_as_done(tmp_path, monkeypatch):
+    dbp = tmp_path / "t.duckdb"
+    with db.session(dbp) as con:
+        db.init_db(con)
+        db.mark_step(con, "srpe", "detail:2947:2026-10-19", 1, "ok")  # the old key form
+    client = CountingClient()
+    _run_srpe(dbp, client)
+    assert client.details == 1  # only development 10 is read
+
+
+def test_srpe_requests_count_towards_the_process_wide_cap(monkeypatch):
+    import httpx
+
+    import hkestate.fetch as fetch_mod
+
+    c = srpe.SrpeClient(delay_s=0, sleep=lambda s: None)
+    c._http = httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(200, json={})))
+    fetch_mod.set_request_cap(1)
+    c._token = "t"
+    c.post("x", {})
+    assert fetch_mod.requests_counted() == 1
+    with pytest.raises(fetch_mod.RequestCapReached):
+        c.post("x", {})
+    c.close()

@@ -67,6 +67,52 @@ def ok(request):
     return httpx.Response(200, text="<html>ok</html>")
 
 
+def test_cache_folder_defaults_to_data_dir_and_can_be_moved(tmp_path, monkeypatch):
+    monkeypatch.setenv("HKESTATE_DATA_DIR", str(tmp_path / "data"))
+    assert Fetcher().cache_dir == tmp_path / "data" / "cache"
+    monkeypatch.setenv("HKESTATE_CACHE_DIR", str(tmp_path / "live_cache"))
+    assert Fetcher().cache_dir == tmp_path / "live_cache"
+
+
+def test_request_cap_is_shared_by_every_fetcher_and_skips_cached_pages(tmp_path):
+    import hkestate.fetch as fetch_mod
+
+    a, a_requests, _ = make_fetcher(tmp_path, ok)
+    b, b_requests, _ = make_fetcher(tmp_path, ok)  # same cache folder, own counters
+    fetch_mod.set_request_cap(3)  # robots.txt + page on a, then robots.txt on b
+    a.get("https://example.com/one", "static")
+    assert fetch_mod.requests_counted() == 2
+    a.get("https://example.com/one", "static")  # cached: not counted
+    assert fetch_mod.requests_counted() == 2
+    b.get("https://example.com/one", "static")  # cached on disk: not counted
+    assert fetch_mod.requests_counted() == 2
+    with pytest.raises(fetch_mod.RequestCapReached):
+        b.get("https://other.example.org/two", "static")  # robots.txt (3rd), then the page
+    assert len(page_requests(b_requests)) == 0
+    assert fetch_mod.requests_counted() == 3
+
+
+def test_request_cap_can_be_cleared(tmp_path):
+    import hkestate.fetch as fetch_mod
+
+    f, _, _ = make_fetcher(tmp_path, ok)
+    fetch_mod.set_request_cap(1)
+    with pytest.raises(fetch_mod.RequestCapReached):
+        f.get("https://example.com/one", "static")  # robots.txt is the 1st, page the 2nd
+    fetch_mod.set_request_cap(None)
+    assert f.get("https://example.com/one", "static") == "<html>ok</html>"
+
+
+def test_request_cap_reached_is_not_swallowed_by_ordinary_handlers():
+    import hkestate.fetch as fetch_mod
+    from hkestate import patience
+
+    e = fetch_mod.RequestCapReached("cap")
+    assert patience.kind(e) is None  # not a throttle, server or network error
+    assert not isinstance(e, Exception)  # `except Exception` in the long jobs lets it through
+    assert not isinstance(e, (FetchError, SourceBlocked))
+
+
 def test_robots_disallowed_path_is_refused_without_request(tmp_path):
     fetcher, requests, _ = make_fetcher(tmp_path, ok)
     with pytest.raises(RobotsDisallowed):

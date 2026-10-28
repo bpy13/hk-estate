@@ -19,6 +19,9 @@ Jobs watched:
 - `daily` (lock listings; ends "daily: ok|partial|skipped"): only today's (HK date) run, and
   only between 08:00 and midnight. A rerun doesn't read again what today's run already read.
 
+While a live process holds `rebuild.lock` (`hkestate rebuild`), the watchdog logs one line
+and restarts nothing: the rebuild runs these jobs itself.
+
 Limits: at most 3 watchdog restarts per job per day; a job that died within 10 minutes of
 its last watchdog restart 3 times in a row is left alone ("GIVING UP" in the log) until its
 entry is removed from the state file or it is seen running or finished again.
@@ -280,6 +283,14 @@ def run(*, dry_run: bool = False, now: datetime | None = None, jobs: list[Job] |
         def log(msg: str) -> None:
             fh.write(f"{datetime.now():%H:%M:%S} {msg}\n")
 
+        rebuild_pid = locks.held_by("rebuild")
+        if rebuild_pid is not None:
+            # a rebuild runs the long jobs itself, in its own order; restarting one beside it
+            # would double the request rate on a site
+            log(f"rebuild is running (process {rebuild_pid} holds rebuild.lock); "
+                "restarting nothing")
+            return [Decision(j.name, "none", f"rebuild running (process {rebuild_pid})")
+                    for j in jobs or JOBS]
         for job in jobs or JOBS:
             entry = state.setdefault(job.name, {})
             d = decide(job, now=now, holder=lock_holder(job),

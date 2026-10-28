@@ -36,8 +36,8 @@ from datetime import date, datetime
 
 import httpx
 
-from hkestate import db
-from hkestate.config import USER_AGENT, get_data_dir
+from hkestate import db, fetch
+from hkestate.config import USER_AGENT, get_cache_dir
 from hkestate.normalise import norm_name, parse_floor
 from hkestate.sources import cd_master
 
@@ -389,6 +389,7 @@ class SrpeClient:
         from playwright.sync_api import sync_playwright
 
         self._check(DISCLAIMER_URL)
+        fetch.spend_request()  # the browser visit is one page load for the cap
 
         with sync_playwright() as p:
             browser = p.chromium.launch()
@@ -422,6 +423,7 @@ class SrpeClient:
         self._check(url)
         for attempt in (0, 1):
             self._wait()
+            fetch.spend_request()  # the process-wide cap; raises RequestCapReached
             self.requests += 1
             r = self._http.request(method, url, headers={"Authorization": self._token}, **kw)
             if r.status_code == 401 and attempt == 0:
@@ -447,14 +449,24 @@ LIST_PAYLOAD = {
 }
 
 
+def _detail_done(con, dev_id: str) -> bool:
+    """A development's detail was read. Older runs stored the step as `detail:<id>:<date>`;
+    any such row still counts as done, so progress already saved is not repeated."""
+    if db.step_done(con, COMMAND, f"detail:{dev_id}"):
+        return True
+    return con.execute(
+        "SELECT 1 FROM run_progress WHERE command = ? AND starts_with(step_key, ?) LIMIT 1",
+        [COMMAND, f"detail:{dev_id}:"]).fetchone() is not None
+
+
 def run_srpe(client: SrpeClient, db_path=None, log=print, limit: int | None = None) -> dict:
     """List developments, then read each one's newest register. Resumable: a development's
-    detail is checked once a day and a register is parsed once per issue."""
+    detail is read once (its step key holds no date, so a resume on a later day skips it)
+    and a register is parsed once per issue."""
     import pdfplumber
 
     from hkestate.fetch import RobotsDisallowed
 
-    today = date.today().isoformat()
     with db.session(db_path) as con:
         db.init_db(con)
         cd_master.ensure_tables(con)
@@ -463,7 +475,7 @@ def run_srpe(client: SrpeClient, db_path=None, log=print, limit: int | None = No
     stats = {"developments": 0, "registers": 0, "deals": 0, "unmatched": 0,
              "skipped_rows": 0, "failed_registers": 0}
     status, message = "ok", ""
-    pdf_dir = get_data_dir() / "cache" / HOST / "pdf"
+    pdf_dir = get_cache_dir() / HOST / "pdf"
     pdf_dir.mkdir(parents=True, exist_ok=True)
     try:
         client.login()
@@ -474,7 +486,7 @@ def run_srpe(client: SrpeClient, db_path=None, log=print, limit: int | None = No
             devs = devs[:limit]
         for i, dev in enumerate(devs, 1):
             with db.session(db_path) as con:
-                if db.step_done(con, COMMAND, f"detail:{dev.dev_id}:{today}"):
+                if _detail_done(con, dev.dev_id):
                     continue
             detail = parse_dev_detail(client.post("Map/getMapDevResultById", {
                 "devId": dev.dev_id, "actionType": "developments details",
@@ -521,7 +533,7 @@ def run_srpe(client: SrpeClient, db_path=None, log=print, limit: int | None = No
                     [dev.dev_id, dev.name, dev.phase, ";".join(dev.addresses), dev.district,
                      detail.lat, detail.lon, detail.register_id, detail.register_date,
                      ",".join(bids), added, datetime.now()])
-                db.mark_step(con, COMMAND, f"detail:{dev.dev_id}:{today}", run_id, "ok")
+                db.mark_step(con, COMMAND, f"detail:{dev.dev_id}", run_id, "ok")
             if i % 10 == 0:
                 log(f"{i}/{len(devs)} {stats}")
     except BaseException as e:
@@ -544,7 +556,7 @@ def reparse_cached(db_path=None, log=print, dry_run: bool = False) -> dict:
     deals at all is left untouched, so a PDF that fails to open never wipes its rows."""
     import pdfplumber
 
-    pdf_dir = get_data_dir() / "cache" / HOST / "pdf"
+    pdf_dir = get_cache_dir() / HOST / "pdf"
     newest: dict[str, object] = {}  # dev_id -> its newest saved register
     for path in sorted(pdf_dir.glob("*_*"), key=lambda p: p.stat().st_mtime):
         newest[path.name.split("_", 1)[0]] = path

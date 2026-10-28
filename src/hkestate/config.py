@@ -20,4 +20,20 @@ def get_data_dir() -> Path:
     return Path(override) if override else REPO_ROOT / "data"
 
 
+def get_cache_dir() -> Path:
+    """The saved-page folder: HKESTATE_CACHE_DIR when set, else `<data dir>/cache`.
+
+    A test rebuild can write its own database but read the live page cache."""
+    override = os.environ.get("HKESTATE_CACHE_DIR")
+    return Path(override) if override else get_data_dir() / "cache"
+
+
+def get_lock_dir() -> Path:
+    """The job-lock folder: HKESTATE_LOCK_DIR when set, else `<data dir>/locks`.
+
+    A test rebuild with its own data folder can still see the live jobs' locks."""
+    override = os.environ.get("HKESTATE_LOCK_DIR")
+    return Path(override) if override else get_data_dir() / "locks"
+
+
 DATA_DIR = get_data_dir()

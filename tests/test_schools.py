@@ -157,7 +157,10 @@ def test_main_loads_assigns_and_records_run(tmp_path, pages, csv_bytes, monkeypa
         cm.ensure_tables(c)
         c.execute("INSERT INTO master_building (building_id, lat, lon) VALUES "
                   "('kt', 22.2845, 114.13), ('none', NULL, NULL)")
+    monkeypatch.setenv("HKESTATE_DATA_DIR", str(tmp_path / "data"))
     assert schools.main(["--db", str(path)]) == 0
+    # the run's log goes to the test's own folder, never the real data/logs
+    assert list((tmp_path / "data" / "logs").glob("schools_*.log"))
     with db.session(path) as c:
         assert c.execute("SELECT school_net FROM master_building "
                          "WHERE building_id = 'kt'").fetchone()[0] == "11"

@@ -19,6 +19,15 @@ def test_free_lock_is_taken_and_released():
     assert not locks.lock_path("hse28").exists()
 
 
+def test_lock_folder_can_be_moved_apart_from_the_data_folder(tmp_path, monkeypatch):
+    live = tmp_path / "live_locks"
+    monkeypatch.setenv("HKESTATE_LOCK_DIR", str(live))
+    assert locks.lock_path("hse28") == live / "hse28.lock"
+    live.mkdir()
+    (live / "hse28.lock").write_text(str(os.getppid()))
+    assert locks.held_by("hse28") == os.getppid()  # a test rebuild sees the live job's lock
+
+
 def test_lock_held_by_a_live_process_is_busy():
     path = locks.lock_path("hse28")
     path.parent.mkdir(parents=True)

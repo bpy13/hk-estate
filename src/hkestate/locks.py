@@ -20,7 +20,7 @@ from collections.abc import Callable
 from contextlib import contextmanager
 from pathlib import Path
 
-from hkestate.config import get_data_dir
+from hkestate.config import get_lock_dir
 
 
 class LockBusy(Exception):
@@ -28,7 +28,7 @@ class LockBusy(Exception):
 
 
 def lock_path(name: str) -> Path:
-    return get_data_dir() / "locks" / f"{name}.lock"
+    return get_lock_dir() / f"{name}.lock"
 
 
 def pid_alive(pid: int) -> bool:

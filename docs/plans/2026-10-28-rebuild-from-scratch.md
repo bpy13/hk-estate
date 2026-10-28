@@ -107,7 +107,7 @@ see the live jobs' locks.)*
 
 Tasks run in order (5, then 6, then 7); they share `cli.py` and `fetch.py`.
 
-- [ ] **Task 5: folder overrides, request cap and small fixes**
+- [x] **Task 5: folder overrides, request cap and small fixes**
   - Files: modify `src/hkestate/config.py`, `src/hkestate/fetch.py`, `src/hkestate/locks.py`,
     `src/hkestate/sources/srpe.py`, `src/hkestate/watchdog.py`, `src/hkestate/sources/schools.py`
     (logger only); tests in the matching `tests/test_*.py`.

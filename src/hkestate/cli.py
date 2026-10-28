@@ -30,7 +30,7 @@ from datetime import datetime
 from pathlib import Path
 
 from hkestate import db, locks
-from hkestate.config import get_data_dir
+from hkestate.config import get_cache_dir, get_data_dir
 
 # Long resumable jobs: they wait for the database file for as long as it takes (db.connect)
 # instead of giving up after 30 minutes.
@@ -162,9 +162,7 @@ def _listings(args, command: str, sources: list[str], prune: bool) -> int:
             rate = mres["matched"] / mres["listings"] if mres["listings"] else 0
             log(f"match {g}: {mres['matched']}/{mres['listings']} ({rate:.0%}) {mres['methods']}")
         if prune:
-            removed = maintenance.prune_listing_cache(
-                get_data_dir() / "cache", today=_hk_today()
-            )
+            removed = maintenance.prune_listing_cache(get_cache_dir(), today=_hk_today())
             log(f"cache: {removed} listing pages older than "
                 f"{maintenance.KEEP_DAYS} days deleted")
         rows = sum(s["new"] for pg in summary["sources"].values() for s in pg.values())
@@ -202,7 +200,7 @@ def cmd_prune(args) -> int:
     from hkestate import maintenance
     from hkestate.fetch import _hk_today
 
-    removed = maintenance.prune_listing_cache(get_data_dir() / "cache", today=_hk_today(),
+    removed = maintenance.prune_listing_cache(get_cache_dir(), today=_hk_today(),
                                               keep_days=args.days)
     print(f"{removed} cached listing pages deleted")
     return 0

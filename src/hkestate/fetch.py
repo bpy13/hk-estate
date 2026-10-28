@@ -45,15 +45,19 @@ from zoneinfo import ZoneInfo
 import httpx
 from protego import Protego
 
-from hkestate.config import USER_AGENT, get_data_dir
+from hkestate.config import USER_AGENT, get_cache_dir
 
 __all__ = [
     "USER_AGENT",
     "PAGE_LIFETIME_DAYS",
     "Fetcher",
     "FetchError",
+    "RequestCapReached",
     "RobotsDisallowed",
     "SourceBlocked",
+    "requests_counted",
+    "set_request_cap",
+    "spend_request",
 ]
 
 # How long a cached page is reused before it is fetched again, by page type.
@@ -102,6 +106,43 @@ class FetchError(Exception):
         self.url = url
         self.status = status
         super().__init__(message or f"{status} for {url}")
+
+
+class RequestCapReached(BaseException):  # noqa: N818 - named for what happened, not "Error"
+    """The process-wide request cap (`set_request_cap`) is used up.
+
+    Deliberately a BaseException, like KeyboardInterrupt: the long jobs catch `Exception` to
+    skip one bad item and `patience.kind()` retries only throttle/server/network errors, so
+    neither may swallow this. It ends the whole run, and the job's own `except BaseException`
+    handlers record the stop and re-raise."""
+
+
+# ---- process-wide request cap ---------------------------------------------------------------
+# Counts requests actually sent (cached pages never reach here) by every Fetcher and by SRPE's
+# own client. Used by `hkestate rebuild --max-requests` so a test run cannot hammer a site.
+
+_cap: int | None = None
+_counted = 0
+
+
+def set_request_cap(n: int | None) -> None:
+    """Allow at most `n` more requests in this process; `None` removes the cap. Restarts the
+    count from zero."""
+    global _cap, _counted
+    _cap, _counted = n, 0
+
+
+def requests_counted() -> int:
+    """Requests sent since the cap was last set."""
+    return _counted
+
+
+def spend_request() -> None:
+    """Count one request about to be sent; raise RequestCapReached instead if the cap is full."""
+    global _counted
+    if _cap is not None and _counted >= _cap:
+        raise RequestCapReached(f"request cap of {_cap} reached")
+    _counted += 1
 
 
 class SourceBlocked(Exception):
@@ -170,7 +211,7 @@ class Fetcher:
         self._timeouts: dict[str, int] = {}  # per host: timeouts in a row
         self._cooldowns: dict[str, int] = {}  # per host: cool-downs since the last good run
         self._cooldown_until: dict[str, float] = {}
-        self.cache_dir = Path(cache_dir) if cache_dir else get_data_dir() / "cache"
+        self.cache_dir = Path(cache_dir) if cache_dir else get_cache_dir()
         self._client = httpx.Client(
             transport=transport,
             timeout=timeout,
@@ -315,6 +356,7 @@ class Fetcher:
             if attempt:
                 self._sleep(BACKOFF_BASE_S * (2 ** (attempt - 1)))
             self._wait_for_host(host)
+            spend_request()
             self.requests_made += 1
             try:
                 response = self._client.get(origin + "/robots.txt", follow_redirects=True)
@@ -427,6 +469,7 @@ class Fetcher:
         retries = probes = 0
         while True:
             self._wait_for_host(host)
+            spend_request()
             try:
                 if body is None:
                     response = self._client.get(url)
