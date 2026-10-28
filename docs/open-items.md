@@ -59,6 +59,10 @@ cache pruning.)*
   drop the page if disallowed. Proposal: the second.
 
 ## Pending work
+- **The full test suite takes 9-11 minutes (2026-10-28),** over the ~3-minute review mark;
+  `tests/test_rank.py` alone takes ~108 s. Measured while the daily job and the territory
+  backfill ran, so not a clean timing. Next: `pytest --durations=25` when no job runs (verify
+  skill, "When the full tests and lint take too long").
 - **Today's database is behind its own code (rebuild audit, 2026-10-28).** Steps ran in a
   different order than a fresh run would. The 650 tower blocks from the house recheck have no
   coordinates, MTR distance, school net or full Centadata history: geocoding and cd-history
@@ -106,6 +110,15 @@ cache pruning.)*
   5座 sales repeat a 2020-21 sale's price exactly, e.g. 10/C HK$20.57m. They look like late
   re-registrations. `excl_duplicate` only joins sales within 90 days. Proposed: drop a
   same-unit, same-price (within 0.5%) repeat at any gap.)*
+  *(Built 2026-10-28, a6b5e80 and eaa2f1c, plan rebuild-from-scratch Tasks 1-3. On the
+  10-27 snapshot, `rank --from-snapshot` excludes 394 listings as `check_peer_ask`, all 9
+  Yoho ones among them. `repeat_price` (within 0.1%) drops 28,570 sales; 1,529,992 stay
+  clean. Of the 28,157 matched to their earlier sale: 8,512 are under 90 days apart and from
+  another site (copies `excl_duplicate` missed); 11,050 repeat a developer sale; 81% repeat
+  the price exactly. **Judgment call, open:** 15,835 are over a year apart, and 3,143 of
+  those are both multiples of HK$100,000 (e.g. HK$2.2m in 2001 and 2006). Some may be real
+  resales at an unchanged round price; dropping them nudges the growth study up slightly.
+  Option: keep round-price repeats over a year apart.)*
 - **SRPE multi-flat rows (pre-release review 2026-10-23, judgment call).** The parking cell
   is copied to every flat in a multi-flat row. A one-flat row whose block cell wraps onto two
   lines now raises and is skipped. Compare the skipped count at the next SRPE run with the

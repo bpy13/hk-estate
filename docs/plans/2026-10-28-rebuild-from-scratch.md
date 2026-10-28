@@ -73,7 +73,9 @@ scrape. First, three small ranking fixes found by the Yoho check on 2026-10-28.
     tests for: 20,565,750 then 20,566,000 five years later excludes the second; a 1% different
     price is kept; a flat with null floor is untouched.
 
-- [ ] **Task 3: check on real data** (main session, after Tasks 1-2)
+- [x] **Task 3: check on real data** (main session, after Tasks 1-2) *(Done 2026-10-28: all
+  9 Yoho listings `check_peer_ask` (394 in all); 28,570 `repeat_price`, including Grand Yoho
+  5座 10/C, 8/C, 12/C, 13/D, 27/B. Numbers in open-items.)*
   - Do: `conda run -n hk-estate hkestate rank --from-snapshot`; read the CSV for the 9 Yoho
     ids (CVY014, GAN573, GAN591, CPJ448, CQA348, CQA401, CQS644, CQT017, CQS970) and count
     `repeat_price` rows in the snapshot, including Grand Yoho 5座 10/C.
