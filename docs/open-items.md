@@ -80,6 +80,17 @@ cache pruning.)*
   since 2025-04: HK$16,930) and Yoho Town (HK$13,714) show the same kind of gap. So either
   these asks are real bargains, or the recorded sales mix in a different phase or flat type.
   Next step: compare a few listings with Centadata's flat-by-flat history for that block.
+  *(Checked 2026-10-28, 8 listings, 0 web requests. The sales data and model hold up: every
+  page says saleable area (實用), blocks map to the right phase, and the comparable 2026 sales
+  are resales. Each ask is the lowest or second lowest for its flat size in its block. Each
+  is also 20-30% below the cheapest 2026 resale of that size. Likely bait asks or a hidden
+  catch (unconfirmed). `check_price` misses them: they sit at about 0.65-0.7x the building
+  median, and the rule needs under 0.6x. Proposed, not built: (1) `check_peer_ask`, an ask
+  under 0.8x the median of 3+ other active asks in the block within 3% of its area;
+  (2) show `below_all_recent` on the shortlist. Side find: 5 of 18 clean 2026 Grand Yoho
+  5座 sales repeat a 2020-21 sale's price exactly, e.g. 10/C HK$20.57m. They look like late
+  re-registrations. `excl_duplicate` only joins sales within 90 days. Proposed: drop a
+  same-unit, same-price (within 0.5%) repeat at any gap.)*
 - **SRPE multi-flat rows (pre-release review 2026-10-23, judgment call).** The parking cell
   is copied to every flat in a multi-flat row. A one-flat row whose block cell wraps onto two
   lines now raises and is skipped. Compare the skipped count at the next SRPE run with the
