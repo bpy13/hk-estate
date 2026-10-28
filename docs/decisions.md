@@ -639,6 +639,14 @@ weighted average by the profile's goal weights.
 - **Yoho fixes built** (`check_peer_ask`, the shortlist flag, `repeat_price`).
 - Claude's call: `repeat_price` uses 0.1%, not the 0.5% first proposed (the Grand Yoho repeats
   differ by under 0.01%).
+- **28Hse 403 on 2026-10-28 21:57** (owner's OK): one restart of `backfill-territory` at the same
+  4 s pace, by the one-off task `\hk-estate\one-off 28hse restart` (2026-10-29 13:00, after the
+  daily job's 28Hse pass). A new 403 stops it for good and is discussed, not worked around.
+- **Catch-up run** (owner's OK): after the 28Hse backfill finishes, run `geo`, `cd-history`,
+  `srpe`, `link-ids`, `rvd`, then `train`, `rank`, `report`, so today's database matches what a
+  fresh rebuild would hold.
+- **Page-cache prune unchanged** (owner): the daily prune keeps deleting all pages on the three
+  listing hosts after 7 days; rebuilds fetch again.
 
 ## Repository
 - **Public GitHub repo `hk-estate` on account `bpy13`** (2026-10-16). Because it is public:
