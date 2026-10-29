@@ -9,6 +9,8 @@ DuckDB database, and analyses them to:
 3. help one person think through a move (buy, rent, sell or let) with a questionnaire and a
    "market today" page.
 
+![Dashboard: 36-month trend of the typical price per sq ft, all of Hong Kong](docs/img/dashboard.png)
+
 Single user, non-commercial. Scraping is slow and polite (robots.txt obeyed, at most one request
 per second per site, every page cached). No personal data is stored.
 
