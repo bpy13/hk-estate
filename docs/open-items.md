@@ -80,6 +80,11 @@ cache pruning.)*
   2026-10-29 13:00 (task `\hk-estate\one-off 28hse restart`). Check
   `data\logs\backfill_territory_*.log`; if 403 again, stop and ask the owner. Delete the
   one-off task afterwards.
+  *(2026-11-16: the 10-29 restart never ran: the old backfill, process 37048, still held the
+  `hse28` lock at 13:23. The owner OK'd a second try. Started 20:21 via the same task; 28Hse
+  answers again (first estate 21:07). It counts 3,349 estates to do, not ~990. The task still
+  hosts the backfill (14-day limit), so delete it only after the backfill ends. Then the
+  catch-up run starts.)*
 - **Rebuild audit "unclear" items.** R1: Mei Foo Centadata rows from the 10-16 07:09 run may
   sit on a wrong block; compare with the later run. R15: check whether `features.py`
   re-parses stored floor labels, or `unit.floor_num` keeps its load-day parse.
