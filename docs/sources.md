@@ -13,12 +13,12 @@ time), one host at a time. Different hosts can run in parallel. All counts are r
 
 | Source | Role | robots.txt | Page structure | History depth | Pages / time | Verdict |
 |---|---|---|---|---|---|---|
-| Centadata | building master, latest deal per flat | no robots.txt on hk.centadata.com (404); pages on hk.centanet.com (allowed) | server-rendered block pages (Nuxt) | latest deal per flat only, back to 1995 | ~27k blocks / ~10.5 h | **Keep**, not as transaction master |
+| Centadata | building master, latest deal per flat | no robots.txt on hk.centadata.com (404); pages on hk.centanet.com (allowed) | server-rendered block pages (Nuxt) | latest deal per flat only, back to 1995 | ~27k blocks / ~10.5 h | **Keep**, not as transaction master; weekly re-read built (2026-11-17) |
 | Centanet listings | sale + rent listings | allowed except `/centanetapi/api/`, `/home`, `/icms`, `/*Test` …; crawl-delay 1 | listing sitemap + server-rendered detail pages | current only | 43.7k first pass / ~17 h; daily new only ~0.5–0.8 h | **Keep** |
 | 28Hse transactions | **transaction master** | allowed except `*search_words_thing=`, `*sortBy_by_text=` | server-rendered lists, block grids, per-flat pages | **2018 on** (lists to 2021-03) | ~195k / ~3 days | **Keep** |
 | 28Hse listings and rents | sale + rent listings, rental deals | as above | server-rendered, 15 per page | current; rental deals as above | ~3,800 search pages / ~1.5 h a day | **Keep** |
 | Squarefoot (+ haunted list) | listings, haunted list | robots.txt answers **403** to our user agent | not fetched | – | – | **Drop** (blocked) |
-| Spacious | sale + rent listings | allowed; territory paging capped at page 100, `/api` disallowed | server-rendered; no floor/flat | current (+ price history) | ~800 pages / ~20 min a day | **Keep** (secondary) |
+| Spacious | sale + rent listings | allowed; territory paging capped at page 100, `/api` disallowed | server-rendered; no floor/flat | current (+ price history) | ~800 pages / ~20 min a day | **Blocked since 2026-10-29** (Cloudflare challenge; off in `daily`, checked monthly) |
 | house730 | listings | robots.txt answers **403** | not fetched | – | – | **Drop** (blocked) |
 | Midland | listings | robots.txt answers **403** | not fetched | – | – | **Drop** (blocked) |
 | SRPE | first-hand sales | everything allowed, **crawl-delay 30 s** | JS app + token API | not measured (platform since 2013) | ~3,600 requests / ~30 h one-off | **Keep, deferred** to Phase 3 |
@@ -49,7 +49,8 @@ time), one host at a time. Different hosts can run in parallel. All counts are r
   including HOS and single buildings. About 25,000–30,000 block pages in all → roughly
   **10–12 hours** for one territory-wide pass.
 - **Use:** master estate → block → flat list (names, codes, completion date, floors), and
-  one older deal per flat. Weekly re-reads of block pages add new latest deals going forward.
+  one older deal per flat. The weekly re-read is built (`hkestate master --refresh`, Fridays 20:00, from 2026-11-17: every
+  loaded estate's block pages, ~22 h at 3 s a page) and adds new latest deals going forward.
 - **Verdict: keep**, as the building master and a cross-check, not as transaction master.
 
 ### Centanet listings
@@ -113,7 +114,9 @@ time), one host at a time. Different hosts can run in parallel. All counts are r
   price, saleable area, rooms, age, view and feature tags, and price history, but **no floor
   or flat**; agent licence shown (skip).
 - **Estimated pages:** ~800 search pages a day via neighbourhood pages ≈ 20 minutes.
-- **Verdict: keep** as a secondary listing source (weaker matching without floor).
+- **Blocked since 2026-10-29:** a Cloudflare challenge page answers our requests. We do not try to
+  get round it. The daily job skips Spacious; `check-blocked` tests it monthly; the code stays.
+- **Verdict: blocked** (was: keep as a secondary listing source, weaker matching without floor).
 
 ### house730
 - robots.txt returns **HTTP 403**. **Verdict: drop** (blocked).

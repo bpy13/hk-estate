@@ -64,7 +64,7 @@ coordinator merges.
 
 ## Phase 2 – Schedule, docs, first run (sonnet)
 
-- [ ] **Task 3: weekly task and docs** needs: Task 1
+- [x] **Task 3: weekly task and docs** needs: Task 1
   - Files: `scripts/register_task.ps1` (new task `weekly centadata`, Fridays 20:00,
     `daily.ps1 -Command "master --refresh"`, 14-day limit not needed: 2-day limit), 
     `docs/operations.md`, `docs/sources.md` (Spacious blocked; Centadata weekly),

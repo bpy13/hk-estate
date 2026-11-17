@@ -11,6 +11,10 @@
                                up to 14, then the watchdog resumes the week's pass)
   \hk-estate\daily rank       every day at 14:00          scripts\daily.ps1 -Command rank
                               (after the 08:00 listings, which take about 4.5 hours)
+  \hk-estate\weekly centadata  every Friday at 20:00      scripts\daily.ps1 -Command "master --refresh"
+                              (re-reads every loaded estate's Centadata block pages, ~22 h at 3 s a
+                               page; may run 2 days; resumable within the ISO week; ends before the
+                               Sunday 12:00 train)
   \hk-estate\weekly train     every Sunday at 12:00       scripts\daily.ps1 -Command train
                               (after the 07:00 deal update; before that day's rank)
 
@@ -42,16 +46,16 @@ $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" 
 # `conhost.exe --headless` runs PowerShell with no window at all. Started directly,
 # powershell.exe -WindowStyle Hidden still flashes a window and takes the focus on
 # Windows 11, where new consoles open in Windows Terminal (which ignores -WindowStyle).
-function New-HiddenAction([string]$PsArguments) {
+function New-HiddenAction([string]$PsArguments, [string]$Policy = '-ExecutionPolicy Bypass') {
     New-ScheduledTaskAction -Execute 'conhost.exe' `
-        -Argument "--headless powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden $PsArguments" `
+        -Argument "--headless powershell.exe -NoProfile $Policy -WindowStyle Hidden $PsArguments" `
         -WorkingDirectory $repo
 }
 
 function Register-Job([string]$Name, [string]$Command, $Trigger, [string]$Description,
-                      $JobSettings = $settings) {
+                      $JobSettings = $settings, [string]$Policy = '-ExecutionPolicy Bypass') {
     if ($Only -and $Only -ne $Name) { return }
-    $action = New-HiddenAction "-File `"$script`" -Python `"$python`" -Command $Command"
+    $action = New-HiddenAction "-File `"$script`" -Python `"$python`" -Command $Command" $Policy
     Register-ScheduledTask -TaskPath '\hk-estate\' -TaskName $Name -Action $action `
         -Trigger $Trigger -Settings $JobSettings -Principal $principal `
         -Description $Description -Force | Out-Null
@@ -75,6 +79,16 @@ Register-Job 'weekly ricacorp' 'ricacorp' `
     (New-ScheduledTaskTrigger -Weekly -DaysOfWeek Sunday -At '10:00') `
     'HK Estate: Ricacorp estate pages, previous-deal pairs (one pass, resumable within the week).' `
     $longSettings
+
+# New since 2026-11-17: no -ExecutionPolicy Bypass (the policy is RemoteSigned). The command has a
+# space, so it is quoted; daily.ps1 splits it on spaces.
+$centadataSettings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries `
+    -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew `
+    -ExecutionTimeLimit (New-TimeSpan -Days 2)
+Register-Job 'weekly centadata' '"master --refresh"' `
+    (New-ScheduledTaskTrigger -Weekly -DaysOfWeek Friday -At '20:00') `
+    'HK Estate: re-read the Centadata block pages of every loaded estate once a week for new sales (hkestate master --refresh; resumable).' `
+    $centadataSettings ''
 
 Register-Job 'daily rank' 'rank' (New-ScheduledTaskTrigger -Daily -At '14:00') `
     'HK Estate: value active sale listings with the fair-price model (ranked CSV + dashboard data).'

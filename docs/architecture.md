@@ -31,7 +31,7 @@ hkestate daily  (= listings, all sources, + cache prune; Task Scheduler 08:00, d
        ├─ sources/centanet.py: sitemap -> detail pages (new + rotating 1/7)
        ├─ sources/hse28_listings.py: estate search pages -> detail if new / price changed
        │    (skipped while data/locks/hse28.lock is held by a backfill or update)
-       ├─ sources/spacious.py: neighbourhood search pages (cards only)
+       ├─ sources/spacious.py: neighbourhood search pages (cards only; off since 2026-11-17, blocked)
        ├─ listings.store_raw -> listing_raw   append when changed; free text never stored
        ├─ listings.record_seen -> listing, listing_snapshot (one per HK day), mark_delisted
        ├─ match.py -> listing.building_id, floor_band, dup_group; relink_relistings
@@ -100,7 +100,7 @@ hkestate report                              (growth study, Phase 5)
 | `backfill.py` | crawl plan per estate, resumable steps, loading; `update_estates` (weekly) |
 | `listing_types.py` | the `Listing` record every listing parser returns |
 | `sources/centanet.py`, `sources/hse28_listings.py`, `sources/spacious.py` | listing parsers and URLs (agent details never read) |
-| `listing_run.py` | the daily listing run: pilot targets per site plus the territory group (Centanet sitemap, Spacious building pages), fetch, store, finish in short sessions |
+| `listing_run.py` | the daily listing run: pilot targets per site plus the territory group (Centanet sitemap; Spacious is off, blocked), fetch, store, finish in short sessions |
 | `listings.py` | listing storage, snapshots, delisting, relisting links |
 | `match.py` | listing → building (manual / single / exact / range / contains / fuzzy), floor band, cross-site duplicates |
 | `flags.py`, `keywords.yml` | keyword risk flags with negations |

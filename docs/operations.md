@@ -12,6 +12,7 @@ Registered for the current user by `scripts\register_task.ps1` (rerun it to upda
 | `daily listings` | every day 08:00 | `scripts\daily.ps1` → `hkestate daily` (may run up to 23 h: every due Centanet page is read) |
 | `watchdog` | every 15 minutes | `scripts\watchdog.ps1` → `hkestate watchdog` (restarts jobs that died; see Watchdog) |
 | `weekly deals` | Sundays 07:00 | `scripts\daily.ps1 -Command update` → `hkestate update` |
+| `weekly centadata` | Fridays 20:00 | `scripts\daily.ps1 -Command "master --refresh"` → `hkestate master --refresh` (about 22 h; the task may run 2 days; see Weekly Centadata refresh) |
 | `weekly ricacorp` | Sundays 10:00 | `scripts\daily.ps1 -Command ricacorp` → `hkestate ricacorp` (a pass is about 30 hours with restarts; the task may run 14 and the watchdog resumes it) |
 | `daily rank` | every day 14:00 | `scripts\daily.ps1 -Command rank` → `hkestate rank` (after the 08:00 listings, ~4.5 h; about 1-3 minutes, of which the database read is about 1 minute) |
 | `weekly train` | Sundays 12:00 | `scripts\daily.ps1 -Command train` → `hkestate train` (after the deal update; about 5 minutes) |
@@ -87,12 +88,34 @@ still stop that source for the run; 404 means the listing is gone.
 A first run reads every pilot listing's detail page (about 2,500 on Centanet: ~1.5 hours at 2 s).
 Later runs read only new and rotating pages (minutes).
 
+## Weekly Centadata refresh (`hkestate master --refresh`, from 2026-11-17)
+
+- **What:** re-reads the Centadata block pages of every estate on the master list (not excluded,
+  not pilot, `blocks > 0`; about 27,000 pages). Each page shows every flat's latest sale, so a
+  flat sold since the last read adds a new sale. Sales already stored are not added twice. It
+  never writes an exclusion for an estate already on the list.
+- **Schedule:** task `weekly centadata`, Fridays 20:00, so it ends before the Sunday 12:00
+  `train`. Execution time limit 2 days; a second start while it runs is ignored.
+- **Pace:** 3 s between requests (`REFRESH_INTERVAL_S`; the normal master pass keeps 4 s):
+  about 22 h for a full pass. The first live run measures the real pace (plan Task 4).
+- **Cache:** refresh pages use the page type `weekly`, with a 2-day lifetime, so next week's run
+  always fetches them again.
+- **Resume:** once per ISO week. Each estate is a step `refresh:<year>-W<week>:<code>` in
+  `run_progress`; rerunning the same command carries on where it stopped and does nothing once the
+  week is done. `--estates a,b` limits it to some estates; `--max-hours N` stops cleanly after N
+  hours (the next start resumes).
+- **Locks:** none. `master` takes no lock file; it shares hk.centanet.com with the daily
+  listings (2 s) and `cd-history` (2 s), and waits for the database like the other long jobs.
+- **Spacious is off** (from 2026-11-17): a Cloudflare challenge has blocked it since 2026-10-29,
+  so `daily` and `listings` skip it by default. `check-blocked` now also tests www.spacious.hk
+  monthly; `--sources spacious` still works if the block lifts.
+
 ## Territory listings (from 2026-10-16)
 
 `hkestate daily` now runs `--estates all`: the pilot groups plus a `territory` group. Per run
 Centanet reads the whole sitemap and **every due detail page** (new listings first, then the
 oldest read) at 2 s: the first pass is about 26,000 pages (~14 h), after that about 6,000 a
-day (new plus a seventh of known, ~3.5 h). Spacious reads every building sale page at 1 s.
+day (new plus a seventh of known, ~3.5 h). Spacious is off since 2026-11-17 (blocked).
 There is no cap by default since 2026-10-20 (owner's decision; the earlier caps of 30,000 and
 6,000 were a run-length choice); `--centanet-budget N` / `--spacious-budget N` set one for a
 manual run. 28Hse is pilot only. Territory listings are matched to master (`cd-`) buildings from the
@@ -106,7 +129,7 @@ whose process has ended is ignored.
 
 - `hse28.lock`: held by `hkestate backfill` and `hkestate update`. While it is held, the
   daily job **skips 28Hse** for that day (it would double the request rate and trigger 429s)
-  and still runs Centanet and Spacious. The skipped source is noted in the run's message and
+  and still runs Centanet. The skipped source is noted in the run's message and
   the day doesn't count towards delisting 28Hse listings.
 - `listings.lock`: held by `hkestate daily` / `hkestate listings`; a second listing run
   started meanwhile records `skipped` and exits.
@@ -197,7 +220,7 @@ conda run -n hk-estate hkestate cd-history --max-hours 8         # stop after 8 
 ## Pacing and throttling (from 2026-10-20)
 
 Each job sets a base gap per host (never below 1 s or the robots.txt Crawl-delay): Centanet
-listings 2 s, cd-history 2 s, master pass 4 s, 28Hse 4 s, Ricacorp 3 s, Spacious 1 s. The
+listings 2 s, cd-history 2 s, master pass 4 s (weekly refresh 3 s), 28Hse 4 s, Ricacorp 3 s, Spacious 1 s (off). The
 fetcher adapts it per host, within the process (`fetch.py`):
 
 - **Slow down**: HTTP 429 or 503, a 5xx still failing after its 3 retries, or a timeout
