@@ -391,9 +391,9 @@ def pilot_codes(fetcher, log=print) -> set[str]:
     return codes
 
 
-def _fetch_page(fetcher, name: str, code: str):
+def _fetch_page(fetcher, name: str, code: str, refresh: bool = False):
     url = cd.block_url(name, code)
-    html = fetcher.get(url, "transaction")
+    html = fetcher.get(url, "weekly" if refresh else "transaction")
     return url, html
 
 
@@ -407,7 +407,7 @@ def process_estate(fetcher, db_path, code: str, name: str, *, pilot: bool,
     reason is returned but not saved); it still adds new sales and blocks."""
     pause = pause or (lambda: None)
     pause()
-    url, html = _fetch_page(fetcher, name, code)
+    url, html = _fetch_page(fetcher, name, code, refresh)
     info = parse_estate_info(html)
     if not info.code:
         info.code = code
@@ -436,7 +436,7 @@ def process_estate(fetcher, db_path, code: str, name: str, *, pilot: bool,
                 skipped += 1
                 continue
             pause()
-            burl, bhtml = _fetch_page(fetcher, name, bcode)
+            burl, bhtml = _fetch_page(fetcher, name, bcode, refresh)
             blk = cd.parse_block_page(bhtml)
             page = parse_estate_info(bhtml)
             own_flag = page.is_house

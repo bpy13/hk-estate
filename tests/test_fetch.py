@@ -319,6 +319,8 @@ def test_different_hosts_do_not_wait_for_each_other(tmp_path):
     [
         ("listing", 0, False),
         ("listing", 1, True),
+        ("weekly", 1, False),
+        ("weekly", 2, True),
         ("transaction", 6, False),
         ("transaction", 7, True),
         ("static", 29, False),
@@ -561,7 +563,7 @@ def test_404_raises_fetch_error_without_retry(tmp_path):
 def test_unknown_page_type_is_rejected(tmp_path):
     fetcher, _, _ = make_fetcher(tmp_path, ok)
     with pytest.raises(ValueError):
-        fetcher.get("https://example.com/x", "weekly")
+        fetcher.get("https://example.com/x", "monthly")
 
 
 def test_forget_deletes_the_cached_copy(tmp_path):

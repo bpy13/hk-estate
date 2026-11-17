@@ -61,7 +61,9 @@ __all__ = [
 ]
 
 # How long a cached page is reused before it is fetched again, by page type.
-PAGE_LIFETIME_DAYS = {"listing": 1, "transaction": 7, "static": 30}
+# "weekly": pages a weekly job re-reads (the Centadata refresh). A run spans ~1 day, so a
+# 7-day lifetime would hand next week's run pages read 6 days before and miss new sales.
+PAGE_LIFETIME_DAYS = {"listing": 1, "weekly": 2, "transaction": 7, "static": 30}
 
 MIN_INTERVAL_S = 1.0
 MAX_JITTER_S = 0.5
