@@ -85,6 +85,14 @@ cache pruning.)*
   answers again (first estate 21:07). It counts 3,349 estates to do, not ~990. The task still
   hosts the backfill (14-day limit), so delete it only after the backfill ends. Then the
   catch-up run starts.)*
+- **No territory sales arrive after the one-off runs (found 2026-11-17).** The Sunday `update`
+  reads 28Hse deal pages for the 5 pilot estates only; nothing repeats the Centadata master
+  pass. Being fixed: plan `docs/plans/2026-11-17-weekly-centadata.md`. Still open after it:
+  once the 28Hse territory backfill ends, nothing reads new 28Hse territory deals either.
+- **Spacious blocked since 2026-10-29.** Every page, robots.txt included, answers a Cloudflare
+  "Just a moment..." check, so the fetcher counts all pages as not allowed (4,789 errors a
+  day, 0 listings). Before that it gave 300-800 new listings a day. Owner's OK 2026-11-17:
+  mark it blocked (same plan, Task 2).
 - **Rebuild audit "unclear" items.** R1: Mei Foo Centadata rows from the 10-16 07:09 run may
   sit on a wrong block; compare with the later run. R15: check whether `features.py`
   re-parses stored floor labels, or `unit.floor_num` keeps its load-day parse.
