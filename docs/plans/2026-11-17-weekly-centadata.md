@@ -37,7 +37,7 @@ blocked.
 Both tasks edit `src/hkestate/cli.py`: each helper works in its own git worktree; the
 coordinator merges.
 
-- [ ] **Task 1: `master --refresh`** `[parallel-ok]`
+- [x] **Task 1: `master --refresh`** `[parallel-ok]`
   - Files: modify `src/hkestate/sources/cd_master.py`, `src/hkestate/cli.py` (flag on the
     `master` parser); test `tests/test_cd_master.py`.
   - Done when: (1) new tests pass: a refresh reads only estates with `master_estate.blocks > 0`

@@ -270,11 +270,13 @@ def cmd_master(args) -> int:
 
     log = _logger("master")
     # 4 s between requests: hk.centanet.com is shared with the listings and cd-history,
-    # which run at the same time
-    with Fetcher(min_interval=cd_master.MIN_INTERVAL_S) as f:
+    # which run at the same time; the weekly refresh reads ~27,000 pages, so 3 s
+    gap = cd_master.REFRESH_INTERVAL_S if args.refresh else cd_master.MIN_INTERVAL_S
+    with Fetcher(min_interval=gap) as f:
         cd_master.run_master(f, db_path=args.db, log=log, limit=args.limit,
                              recheck_house=args.recheck_house,
-                             estates=_tokens(args.estates))
+                             estates=_tokens(args.estates), refresh=args.refresh,
+                             max_hours=args.max_hours)
     return 0
 
 
@@ -626,6 +628,10 @@ def main(argv: list[str] | None = None) -> int:
     m.add_argument("--recheck-house", action="store_true",
                    help="read again only the estates skipped as 'house', loading their tower "
                         "blocks (resumable; steps house:<code>)")
+    m.add_argument("--refresh", action="store_true",
+                   help="weekly pass: read again the blocks of every loaded estate, once per "
+                        "ISO week, adding new sales (resumable; steps refresh:<week>:<code>)")
+    m.add_argument("--max-hours", type=float, default=None, help="stop after N hours")
     m.add_argument("--estates", default=None, help=SUBSET_HELP)
     m.set_defaults(func=cmd_master)
 
