@@ -1,7 +1,7 @@
 ﻿"""`hkestate` command line.
 
     hkestate backfill --estates taikoo-shing,goldwin-heights   (or --estates pilot)
-    hkestate listings [--sources centanet,hse28,spacious]      listing snapshots
+    hkestate listings [--sources centanet,hse28]               listing snapshots
     hkestate daily                                              scheduled: listings + prune
     hkestate update                                             scheduled weekly: new deals
     hkestate backfill-territory [--discover]   28Hse, whole territory, largest first
@@ -198,7 +198,7 @@ def cmd_listings(args) -> int:
 
 def cmd_daily(args) -> int:
     """The scheduled daily job: every listing source, then prune old cached listing pages."""
-    return _listings(args, "daily", ["centanet", "hse28", "spacious"], prune=True)
+    return _listings(args, "daily", ["centanet", "hse28"], prune=True)
 
 
 def cmd_prune(args) -> int:
@@ -701,11 +701,12 @@ def main(argv: list[str] | None = None) -> int:
     s = sub.add_parser("status", help="recent runs and row counts")
     s.set_defaults(func=cmd_status)
 
-    li = sub.add_parser("listings", help="snapshot listings (Centanet, 28Hse, Spacious)")
+    li = sub.add_parser("listings", help="snapshot listings (Centanet, 28Hse; Spacious is off)")
     li.add_argument("--estates", default="pilot",
                     help="comma-separated groups, or pilot / territory / all")
     _budgets(li)
-    li.add_argument("--sources", default="centanet,hse28,spacious")
+    li.add_argument("--sources", default="centanet,hse28",
+                    help="comma-separated: centanet, hse28, spacious (blocked by Cloudflare)")
     li.set_defaults(func=cmd_listings)
 
     d = sub.add_parser("daily", help="scheduled daily job: all listing sources + cache prune")

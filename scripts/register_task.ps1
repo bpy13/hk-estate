@@ -63,7 +63,7 @@ $dailySettings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfO
     -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew `
     -ExecutionTimeLimit (New-TimeSpan -Hours 23)
 Register-Job 'daily listings' 'daily' (New-ScheduledTaskTrigger -Daily -At '08:00') `
-    'HK Estate: snapshot listings (Centanet, 28Hse, Spacious) and prune cached listing pages.' `
+    'HK Estate: snapshot listings (Centanet, 28Hse) and prune cached listing pages.' `
     $dailySettings
 Register-Job 'weekly deals' 'update' (New-ScheduledTaskTrigger -Weekly -DaysOfWeek Sunday -At '07:00') `
     'HK Estate: read the newest 28Hse deal-list pages for the pilot estates.'

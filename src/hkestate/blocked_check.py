@@ -27,7 +27,15 @@ SITES = (
     Site("squarefoot", "www.squarefoot.com.hk"),
     Site("house730", "www.house730.com"),
     Site("hkp", "www.hkp.com.hk"),
+    # Cloudflare challenge on every page since 2026-10-29; the parser code stays.
+    Site("spacious", "www.spacious.hk"),
 )
+
+
+def _is_robots_file(text: str) -> bool:
+    """True for a real robots.txt; a Cloudflare challenge page (HTML) is not one."""
+    head = text.lstrip().lower()[:2000]
+    return "<html" not in head and "<!doctype" not in head and "user-agent" in text.lower()
 
 
 @dataclass(frozen=True)
@@ -47,8 +55,12 @@ def run_check(fetcher: Fetcher, db_path: str | Path | None, log: Callable[[str],
         status = fetcher.robots_status(f"https://{site.host}/")
         results.append(Result(site, status))
         log(f"{site.name} ({site.host}): robots.txt answered {status}")
-        if status == 200:
+        if status == 200 and _is_robots_file(fetcher.robots_txt(f"https://{site.host}/")):
             log(f"{site.name}: now reachable, review docs/sources.md")
+        elif status == 200:
+            log(f"{site.name}: still blocked (200 but not a robots.txt: a challenge page)")
+        else:
+            log(f"{site.name}: still blocked")
         message = json.dumps({"host": site.host, "robots_status": status})
         with db.session(db_path) as con:
             db.finish_run(con, run_id, "ok", 0, message)

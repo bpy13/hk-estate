@@ -53,7 +53,7 @@ coordinator merges.
     left. Accepts `--max-hours` (stop cleanly, resume next start). Excluded and house blocks
     are skipped as today; new blocks found on a page are loaded as the master pass would.
 
-- [ ] **Task 2: Spacious off** `[parallel-ok]`
+- [x] **Task 2: Spacious off** `[parallel-ok]`
   - Files: modify `src/hkestate/cli.py` (daily and `listings` default sources),
     `src/hkestate/blocked_check.py` (add Spacious), `scripts/daily.ps1` and
     `scripts/register_task.ps1` (descriptions only); tests `tests/test_blocked_check.py`,

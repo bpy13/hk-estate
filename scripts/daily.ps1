@@ -3,7 +3,7 @@
   The daily listing job (Task Scheduler runs it at 08:00): `hkestate daily`.
 
 .DESCRIPTION
-  Snapshots the pilot estates' listings from Centanet, 28Hse and Spacious, matches them to
+  Snapshots the pilot estates' listings from Centanet and 28Hse (Spacious is off), matches them to
   buildings, flags keywords, marks delistings and deletes cached listing pages 7+ days old.
   While a backfill or the weekly update holds the 28Hse lock, 28Hse is skipped for the day
   (28Hse rate-limits hard); the other sites still run. Two daily jobs never overlap.
