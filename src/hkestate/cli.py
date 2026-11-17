@@ -270,7 +270,7 @@ def cmd_master(args) -> int:
 
     log = _logger("master")
     # 4 s between requests: hk.centanet.com is shared with the listings and cd-history,
-    # which run at the same time; the weekly refresh reads ~27,000 pages, so 3 s
+    # which run at the same time; the refresh reads ~51,000 pages, so 3 s
     gap = cd_master.REFRESH_INTERVAL_S if args.refresh else cd_master.MIN_INTERVAL_S
     with Fetcher(min_interval=gap) as f:
         cd_master.run_master(f, db_path=args.db, log=log, limit=args.limit,

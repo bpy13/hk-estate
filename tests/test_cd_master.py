@@ -504,6 +504,27 @@ def test_refresh_twice_in_a_week_reads_nothing_and_next_week_reads_again(tmp_pat
     assert len(next_week.asked) == 2
 
 
+def test_refresh_stopped_late_in_a_week_carries_on_next_week(tmp_path, monkeypatch):
+    # a 55-90 h catch-up split with --max-hours may resume after a Monday
+    monkeypatch.setattr(cm, "load_overrides", lambda: {})
+    path = tmp_path / "t.duckdb"
+    seed_refresh(path)
+    refresh(path, RefreshPages(), WEEK1, estates=["2-DDDDDDDDDD"])
+    f = RefreshPages()
+    assert refresh(path, f, WEEK2)["estates"] == 1
+    assert [u[-12:] for u in f.asked] == ["2-EEEEEEEEEE"]
+    assert "refresh:2026-W47:2-EEEEEEEEEE" in steps(path)
+
+
+def test_refresh_does_not_carry_on_an_old_unfinished_pass(tmp_path, monkeypatch):
+    monkeypatch.setattr(cm, "load_overrides", lambda: {})
+    path = tmp_path / "t.duckdb"
+    seed_refresh(path)
+    refresh(path, RefreshPages(), WEEK1, estates=["2-DDDDDDDDDD"])
+    f = RefreshPages()
+    assert refresh(path, f, date(2029, 3, 5))["estates"] == 2  # years later: a fresh pass
+
+
 def test_refresh_adds_only_new_sales(tmp_path, monkeypatch):
     monkeypatch.setattr(cm, "load_overrides", lambda: {})
     path = tmp_path / "t.duckdb"

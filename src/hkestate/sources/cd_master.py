@@ -43,7 +43,7 @@ SITEMAP_URL = "https://hk.centanet.com/sitemap-index/estate/sitemap_estate_zh_hk
 # hk.centanet.com is shared with the Centanet listings (2 s) and cd-history (6 s), which
 # run at the same time (no pauses since 2026-10-20). A rare manual job, so a slow 4 s.
 MIN_INTERVAL_S = 4.0
-# the weekly refresh (~27,000 block pages) must end before the Sunday train: 3 s ≈ 22 h
+# the refresh (~51,000 pages; measured 2026-11-18: 55-90 h) runs by hand before the data is used
 REFRESH_INTERVAL_S = 3.0
 MAX_CONSECUTIVE_ERRORS = 8
 
@@ -456,6 +456,33 @@ def process_estate(fetcher, db_path, code: str, name: str, *, pilot: bool,
     return None, loaded, added, skipped
 
 
+REFRESH_CARRY_DAYS = 14
+
+
+def _refresh_week(db_path, codes: list[str], today: date) -> str:
+    """The pass a refresh belongs to, as an ISO week ("2026-W47"). A full read takes 55-90 h,
+    so a run split with --max-hours may resume after a Monday: carry on the newest pass begun
+    up to REFRESH_CARRY_DAYS ago that still has estates to do; otherwise this week's."""
+    year, wk, _ = today.isocalendar()
+    current = f"{year}-W{wk:02d}"
+    with db.session(db_path) as con:
+        keys = [r[0] for r in con.execute(
+            "SELECT step_key FROM run_progress WHERE command = ? AND step_key LIKE 'refresh:%'",
+            [COMMAND]).fetchall()]
+    done: dict[str, set[str]] = {}
+    for k in keys:
+        _, w, code = k.split(":", 2)
+        done.setdefault(w, set()).add(code)
+    if current in done:
+        return current
+    for w in sorted(done, reverse=True):
+        y, n = w.split("-W")
+        start = date.fromisocalendar(int(y), int(n), 1)
+        if (today - start).days <= REFRESH_CARRY_DAYS and set(codes) - done[w]:
+            return w
+    return current
+
+
 def run_master(fetcher, db_path=None, log=print, limit: int | None = None,
                wait=time.sleep, recheck_house: bool = False,
                estates: list[str] | None = None, refresh: bool = False,
@@ -484,8 +511,8 @@ def run_master(fetcher, db_path=None, log=print, limit: int | None = None,
             estates_all = select_estates(estates_all, estates)
             log(f"estates subset {','.join(estates)}: {len(estates_all)} master estates")
         pilot = set()
-        year, week, _ = (today or date.today()).isocalendar()
-        step = lambda c: f"refresh:{year}-W{week:02d}:{c}"  # noqa: E731
+        week = _refresh_week(db_path, [c for c, _ in estates_all], today or date.today())
+        step = lambda c: f"refresh:{week}:{c}"  # noqa: E731
     else:
         xml = fetcher.get(SITEMAP_URL, "static")
         listed = sitemap_estates(xml)

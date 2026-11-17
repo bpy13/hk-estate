@@ -95,6 +95,10 @@ cache pruning.)*
   day, 0 listings). Before that it gave 300-800 new listings a day. Owner's OK 2026-11-17:
   mark it blocked (same plan, Task 2). *(Done 2026-11-17: off in the daily job; in the monthly
   check-blocked, which now needs a real robots file to call a site open.)*
+- **Old Spacious listings stay "active" (review, 2026-11-18).** A listing is marked gone only
+  when its own source runs. Spacious stopped on 2026-10-29, so its listings last seen before
+  then keep `status='active'`, and `rank` and the shortlist can still value them. Fix on
+  resume (project paused 2026-11-18), e.g. mark them gone once.
 - **Weekly Centadata refresh, leftovers (2026-11-18).** (a) Some estates on the master list
   now read as houses under today's rules (e.g. 桂盧, 2 floors). The refresh never excludes an
   estate already listed, so they stay; a clean-up would need the owner's call. (b) The

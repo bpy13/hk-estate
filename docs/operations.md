@@ -3,6 +3,23 @@
 How the scheduled jobs run on the laptop, where to look when something goes wrong, and how
 to run things by hand. Commands assume the repo folder and the `hk-estate` conda env.
 
+## Paused (owner, 2026-11-18)
+
+Nothing runs: every `\hk-estate\` task is disabled and every process stopped (dashboard, watchdog,
+the 28Hse territory backfill at estate 957 of 3,349). Each job keeps its progress in
+`run_progress`, and a lock left by a stopped process is taken over, so all resume where they
+stopped. To resume (PowerShell):
+
+```powershell
+Get-ScheduledTask -TaskPath '\hk-estate\' | Where-Object { $_.TaskName -notin 'weekly centadata','one-off 28hse restart' } | Enable-ScheduledTask
+Enable-ScheduledTask -TaskPath '\hk-estate\' -TaskName 'one-off 28hse restart'; Start-ScheduledTask -TaskPath '\hk-estate\' -TaskName 'one-off 28hse restart'
+```
+
+The second line restarts the 28Hse territory backfill (it reaches 28Hse ~20 min after the start).
+Then, in order: the catch-up run in decisions.md (after the backfill), and "Catch-up before using
+the data" below for sales since the pause. Spacious listings last seen before 2026-10-29 still
+show as active (open-items): deal with them before trusting a shortlist.
+
 ## Scheduled jobs (Windows Task Scheduler)
 
 Registered for the current user by `scripts\register_task.ps1` (rerun it to update them):
@@ -103,7 +120,9 @@ Later runs read only new and rotating pages (minutes).
 
 ### Catch-up before using the data (e.g. before a purchase)
 Start about a week before the numbers are needed; each step is resumable.
-1. `hkestate master --refresh` (55-90 h): every flat's latest sale. Use `--max-hours` to split it.
+1. `hkestate master --refresh` (55-90 h): every flat's latest sale. Use `--max-hours` to split it;
+   a rerun carries on a pass begun up to 14 days before, even across a Monday. Then
+   `hkestate crosscheck --estates pilot`: the refresh skips the 5 pilot estates.
 2. `hkestate cd-history`: every sale of each flat, including flats sold twice since the last
    read. It skips buildings marked done, so first clear its progress (a one-line delete):
    `DELETE FROM run_progress WHERE command = 'cd-history'` (~30 h or more at its 2 s pace).

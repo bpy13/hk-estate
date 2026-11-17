@@ -659,6 +659,9 @@ weighted average by the profile's goal weights.
   cleared, then `train`, `rank`, `report` (docs/operations.md "Catch-up"). The task
   `weekly centadata` stays registered but disabled. Daily listings keep running: past
   listings cannot be fetched later.
+- **Project paused** (owner, 2026-11-18): "nothing about this project should run now, and when
+  picked up it can resume from what we have seamlessly". All tasks disabled, all processes
+  stopped, daily listings included. Resume steps: docs/operations.md "Paused".
 
 ## Repository
 - **Public GitHub repo `hk-estate` on account `bpy13`** (2026-10-16). Because it is public:

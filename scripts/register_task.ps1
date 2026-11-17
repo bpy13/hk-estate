@@ -11,15 +11,14 @@
                                up to 14, then the watchdog resumes the week's pass)
   \hk-estate\daily rank       every day at 14:00          scripts\daily.ps1 -Command rank
                               (after the 08:00 listings, which take about 4.5 hours)
-  \hk-estate\weekly centadata  every Friday at 20:00      scripts\daily.ps1 -Command "master --refresh"
-                              (re-reads every loaded estate's Centadata block pages, ~22 h at 3 s a
-                               page; may run 2 days; resumable within the ISO week; ends before the
-                               Sunday 12:00 train)
+  \hk-estate\weekly centadata  DISABLED (Fridays 20:00 if enabled)  scripts\daily.ps1 -Command "master --refresh"
+                              (re-reads every loaded estate's Centadata block pages, ~51,000 pages,
+                               55-90 h; registered disabled, run by hand before using the data)
   \hk-estate\weekly train     every Sunday at 12:00       scripts\daily.ps1 -Command train
                               (after the 07:00 deal update; before that day's rank)
 
   \hk-estate\monthly blocked-check  the 1st of each month at 09:00  scripts\daily.ps1 -Command check-blocked
-                              (robots.txt of Midland, Squarefoot, house730, HKP; a few requests)
+                              (robots.txt of Midland, Squarefoot, house730, HKP, Spacious; a few requests)
 
   \hk-estate\watchdog         every 15 minutes            scripts\watchdog.ps1 (python -m hkestate watchdog)
                               (restarts long jobs / today's daily run that died; may run 10 min)
@@ -87,8 +86,12 @@ $centadataSettings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStar
     -ExecutionTimeLimit (New-TimeSpan -Days 2)
 Register-Job 'weekly centadata' '"master --refresh"' `
     (New-ScheduledTaskTrigger -Weekly -DaysOfWeek Friday -At '20:00') `
-    'HK Estate: re-read the Centadata block pages of every loaded estate once a week for new sales (hkestate master --refresh; resumable).' `
+    'HK Estate: re-read the Centadata block pages of every loaded estate for new sales (hkestate master --refresh; resumable). Disabled: run by hand before using the data.' `
     $centadataSettings ''
+# Owner, 2026-11-18: no scheduled refresh (55-90 h a pass); keep the task, disabled.
+if (-not $Only -or $Only -eq 'weekly centadata') {
+    Disable-ScheduledTask -TaskPath '\hk-estate\' -TaskName 'weekly centadata' | Out-Null
+}
 
 Register-Job 'daily rank' 'rank' (New-ScheduledTaskTrigger -Daily -At '14:00') `
     'HK Estate: value active sale listings with the fair-price model (ranked CSV + dashboard data).'
@@ -99,7 +102,7 @@ Register-Job 'weekly train' 'train' `
 # New-ScheduledTaskTrigger has no -Monthly in Windows PowerShell 5.1: register with a daily
 # trigger, then swap its <ScheduleByDay> for a "day 1 of every month" <ScheduleByMonth>.
 Register-Job 'monthly blocked-check' 'check-blocked' (New-ScheduledTaskTrigger -Daily -At '09:00') `
-    'HK Estate: request robots.txt of the blocked sites (Midland, Squarefoot, house730, HKP) once; log any that now answer 200.'
+    'HK Estate: request robots.txt of the blocked sites (Midland, Squarefoot, house730, HKP, Spacious) once; log any that now serve a real robots.txt.'
 if (-not $Only -or $Only -eq 'monthly blocked-check') {
     $xml = Export-ScheduledTask -TaskPath '\hk-estate\' -TaskName 'monthly blocked-check'
     $months = 'January February March April May June July August September October November December'.Split(' ') |
