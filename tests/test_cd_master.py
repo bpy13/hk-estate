@@ -436,3 +436,140 @@ def test_master_pass_takes_only_the_subset_and_counts_what_is_left(tmp_path, mon
         msg = con.execute("SELECT message FROM run_log WHERE command = 'master' "
                           "ORDER BY run_id DESC LIMIT 1").fetchone()[0]
     assert json.loads(msg)["left"] == 0
+
+
+# ---- weekly refresh (`master --refresh`, plans/2026-11-17-weekly-centadata.md) ------------------
+
+WEEK1, WEEK2 = date(2026, 11, 16), date(2026, 11, 23)  # ISO weeks 2026-W47 and 2026-W48
+
+
+def seed_refresh(path):
+    """Master estates: kept with no blocks, pilot, excluded, and two kept with blocks. Only
+    2-DDDDDDDDDD and 2-EEEEEEEEEE qualify."""
+    with db.session(path) as c:
+        db.init_db(c)
+        cm.ensure_tables(c)
+        cm.save_estate(c, info(code="2-AAAAAAAAAA"), excluded=None, blocks=0, pilot=False)
+        cm.save_estate(c, info(code="2-BBBBBBBBBB"), excluded=None, blocks=1, pilot=True)
+        cm.save_estate(c, info(code="2-CCCCCCCCCC"), excluded="hos", blocks=1, pilot=False)
+        cm.save_estate(c, info(code="2-DDDDDDDDDD"), excluded=None, blocks=1, pilot=False)
+        cm.save_estate(c, info(code="2-EEEEEEEEEE"), excluded=None, blocks=1, pilot=False)
+
+
+class RefreshPages:
+    """Serves each kept estate's page (one block); `deals` per code can grow between weeks."""
+
+    def __init__(self, deals=None):
+        self.deals = deals or {}
+        self.asked = []
+
+    def get(self, url, page_type):
+        self.asked.append(url)
+        assert url != cm.SITEMAP_URL  # a refresh works from master_estate, not the sitemap
+        code = url[-len("2-DDDDDDDDDD"):]
+        return nuxt_page(code=code, block_code="1-" + code[2:], deals=self.deals.get(code, ()))
+
+
+def refresh(path, f, week, **kw):
+    return cm.run_master(f, db_path=path, log=lambda m: None, refresh=True, today=week, **kw)
+
+
+def steps(path):
+    with db.session(path) as c:
+        return {r[0] for r in c.execute(
+            "SELECT step_key FROM run_progress WHERE command = 'master'").fetchall()}
+
+
+def test_refresh_reads_only_kept_non_pilot_estates_with_blocks(tmp_path, monkeypatch):
+    monkeypatch.setattr(cm, "load_overrides", lambda: {})
+    path = tmp_path / "t.duckdb"
+    seed_refresh(path)
+    f = RefreshPages()
+    stats = refresh(path, f, WEEK1)
+    assert sorted(u[-12:] for u in f.asked) == ["2-DDDDDDDDDD", "2-EEEEEEEEEE"]
+    assert stats["estates"] == 2 and stats["left"] == 0
+    assert steps(path) == {"refresh:2026-W47:2-DDDDDDDDDD", "refresh:2026-W47:2-EEEEEEEEEE"}
+
+
+def test_refresh_twice_in_a_week_reads_nothing_and_next_week_reads_again(tmp_path, monkeypatch):
+    monkeypatch.setattr(cm, "load_overrides", lambda: {})
+    path = tmp_path / "t.duckdb"
+    seed_refresh(path)
+    refresh(path, RefreshPages(), WEEK1)
+    same_week = RefreshPages()
+    assert refresh(path, same_week, WEEK1)["estates"] == 0
+    assert same_week.asked == []
+    next_week = RefreshPages()
+    assert refresh(path, next_week, WEEK2)["estates"] == 2
+    assert len(next_week.asked) == 2
+
+
+def test_refresh_adds_only_new_sales(tmp_path, monkeypatch):
+    monkeypatch.setattr(cm, "load_overrides", lambda: {})
+    path = tmp_path / "t.duckdb"
+    seed_refresh(path)
+    code = "2-DDDDDDDDDD"
+    assert refresh(path, RefreshPages({code: [DEALS[0]]}), WEEK1)["deals"] == 1
+    # next week the page still shows T1 and one more sale: only the new one is added
+    assert refresh(path, RefreshPages({code: [DEALS[0], DEALS[2]]}), WEEK2)["deals"] == 1
+    with db.session(path) as c:
+        ids = [r[0] for r in c.execute(
+            "SELECT source_id FROM txn_raw ORDER BY source_id").fetchall()]
+    assert ids == ["T1", "T3"]  # T1 was read twice and stored once
+
+
+def test_stopped_refresh_resumes_where_it_stopped(tmp_path, monkeypatch):
+    monkeypatch.setattr(cm, "load_overrides", lambda: {})
+    path = tmp_path / "t.duckdb"
+    seed_refresh(path)
+    ticks = iter([0, 0, 10_000_000, 10_000_000])  # start, then a check per estate: over after one
+    stats = refresh(path, RefreshPages(), WEEK1, max_hours=1, clock=lambda: next(ticks))
+    assert stats["estates"] == 1 and stats["left"] == 1
+    rest = RefreshPages()
+    stats = refresh(path, rest, WEEK1)
+    assert stats["estates"] == 1 and len(rest.asked) == 1
+    assert len(steps(path)) == 2
+
+
+def test_refresh_never_drops_an_estate_from_the_master_list(tmp_path, monkeypatch):
+    # live trial 2026-11-17: 桂盧 (2 floors) was loaded earlier, but today's rules read it as a
+    # house; a refresh must leave master_estate alone, not exclude it
+    monkeypatch.setattr(cm, "load_overrides", lambda: {})
+    path = tmp_path / "t.duckdb"
+    seed_refresh(path)
+    f = RefreshPages()
+    real_get = f.get
+    f.get = lambda url, pt: real_get(url, pt).replace('"noOfFloors": 30', '"noOfFloors": 2')
+    stats = refresh(path, f, WEEK1)
+    assert stats["estates"] == 2 and stats["blocks"] == 0 and stats["deals"] == 0
+    with db.session(path) as c:
+        rows = c.execute("SELECT excluded, blocks FROM master_estate WHERE code IN "
+                         "('2-DDDDDDDDDD', '2-EEEEEEEEEE')").fetchall()
+    assert rows == [(False, 1), (False, 1)]
+
+
+def test_refresh_subset_takes_only_named_estates(tmp_path, monkeypatch):
+    monkeypatch.setattr(cm, "load_overrides", lambda: {})
+    path = tmp_path / "t.duckdb"
+    seed_refresh(path)
+    f = RefreshPages()
+    stats = refresh(path, f, WEEK1, estates=["2-EEEEEEEEEE"])
+    assert stats["estates"] == 1 and f.asked[0].endswith("2-EEEEEEEEEE")
+
+
+def test_refresh_waits_out_429_like_the_master_pass(tmp_path, monkeypatch):
+    from hkestate.fetch import FetchError
+    monkeypatch.setattr(cm, "load_overrides", lambda: {})
+    path = tmp_path / "t.duckdb"
+    seed_refresh(path)
+    f, waits = RefreshPages(), []
+    real_get, fails = f.get, iter([True])
+
+    def get(url, pt):
+        if next(fails, False):
+            raise FetchError(url, 429)
+        return real_get(url, pt)
+
+    f.get = get
+    stats = refresh(path, f, WEEK1, wait=waits.append)
+    assert waits == [600] and stats["errors"] == 1 and stats["estates"] == 2

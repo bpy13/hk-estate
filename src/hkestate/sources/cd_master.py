@@ -43,6 +43,8 @@ SITEMAP_URL = "https://hk.centanet.com/sitemap-index/estate/sitemap_estate_zh_hk
 # hk.centanet.com is shared with the Centanet listings (2 s) and cd-history (6 s), which
 # run at the same time (no pauses since 2026-10-20). A rare manual job, so a slow 4 s.
 MIN_INTERVAL_S = 4.0
+# the weekly refresh (~27,000 block pages) must end before the Sunday train: 3 s ≈ 22 h
+REFRESH_INTERVAL_S = 3.0
 MAX_CONSECUTIVE_ERRORS = 8
 
 MASTER_DDL = [
@@ -397,10 +399,12 @@ def _fetch_page(fetcher, name: str, code: str):
 
 def process_estate(fetcher, db_path, code: str, name: str, *, pilot: bool,
                    overrides: dict[str, str],
-                   pause=None) -> tuple[str | None, int, int, int]:
+                   pause=None, refresh: bool = False) -> tuple[str | None, int, int, int]:
     """Read one `2-` page (and its blocks); returns (exclusion reason, blocks loaded, deals
     added, house blocks skipped). House blocks are not loaded; an estate whose blocks are all
-    houses is saved with reason "house". `pause()`, if given, is called before each page."""
+    houses is saved with reason "house". `pause()`, if given, is called before each page.
+    `refresh`: the weekly re-read never excludes an estate already on the master list (the
+    reason is returned but not saved); it still adds new sales and blocks."""
     pause = pause or (lambda: None)
     pause()
     url, html = _fetch_page(fetcher, name, code)
@@ -414,8 +418,9 @@ def process_estate(fetcher, db_path, code: str, name: str, *, pilot: bool,
         return None, 0, 0, 0
     reason = exclusion_reason(info, overrides)
     if reason:
-        with db.session(db_path) as con:
-            save_estate(con, info, excluded=reason, blocks=0, pilot=False)
+        if not refresh:
+            with db.session(db_path) as con:
+                save_estate(con, info, excluded=reason, blocks=0, pilot=False)
         return reason, 0, 0, 0
     added = loaded = skipped = 0
     codes = block_codes(entry)
@@ -442,8 +447,9 @@ def process_estate(fetcher, db_path, code: str, name: str, *, pilot: bool,
             added += load_block(con, info, blk, burl, page)
         loaded += 1
     if loaded == 0 and skipped:  # every block is a house: same result as the old estate flag
-        with db.session(db_path) as con:
-            save_estate(con, info, excluded="house", blocks=0, pilot=False)
+        if not refresh:
+            with db.session(db_path) as con:
+                save_estate(con, info, excluded="house", blocks=0, pilot=False)
         return "house", 0, 0, skipped
     with db.session(db_path) as con:
         save_estate(con, info, excluded=None, blocks=loaded, pilot=False)
@@ -452,51 +458,76 @@ def process_estate(fetcher, db_path, code: str, name: str, *, pilot: bool,
 
 def run_master(fetcher, db_path=None, log=print, limit: int | None = None,
                wait=time.sleep, recheck_house: bool = False,
-               estates: list[str] | None = None) -> dict:
+               estates: list[str] | None = None, refresh: bool = False,
+               max_hours: float | None = None, clock=time.monotonic,
+               today: date | None = None) -> dict:
     """Walk every estate in the sitemap; resumable through run_progress (one step per code).
+    `refresh`: the weekly pass. Reads again the block pages of every estate the master list
+    loaded (kept, not pilot, blocks > 0) once per ISO week, adding only sales not stored yet;
+    steps are `refresh:<ISO year>-W<week>:<code>`. `max_hours` stops cleanly (resume later).
     Runs alongside the Centanet listings and cd-history (same host, each at its own pace);
     throttling is waited out (`wait` sleeps the job's own cool-downs).
     `recheck_house`: read again only the estates saved with exclude_reason 'house' (they were
     dropped whole before blocks were judged one by one); steps are `house:<code>`, so the
     normal steps are untouched. `estates`: a test subset (names or codes, `select_estates`).
     `stats["left"]`: estates of this run's to-do list still not done (errors, a stop)."""
-    xml = fetcher.get(SITEMAP_URL, "static")
-    listed = sitemap_estates(xml)
-    estates_all = [(c, n) for c, n in listed if c.startswith("2-")]
-    if estates is not None:
-        estates_all = select_estates(listed, estates)
-        log(f"estates subset {','.join(estates)}: {len(estates_all)} sitemap entries")
-    estates = estates_all
     overrides = load_overrides()
-    pilot = pilot_codes(fetcher, log)
     with db.session(db_path) as con:
         db.init_db(con)
         ensure_tables(con)
+        if refresh:  # from the master list; no sitemap, no pilot pages
+            estates_all = con.execute(
+                "SELECT code, name_zh FROM master_estate WHERE NOT coalesce(excluded, false) "
+                "AND NOT coalesce(pilot, false) AND blocks > 0 ORDER BY code").fetchall()
+    if refresh:
+        if estates is not None:
+            estates_all = select_estates(estates_all, estates)
+            log(f"estates subset {','.join(estates)}: {len(estates_all)} master estates")
+        pilot = set()
+        year, week, _ = (today or date.today()).isocalendar()
+        step = lambda c: f"refresh:{year}-W{week:02d}:{c}"  # noqa: E731
+    else:
+        xml = fetcher.get(SITEMAP_URL, "static")
+        listed = sitemap_estates(xml)
+        estates_all = [(c, n) for c, n in listed if c.startswith("2-")]
+        if estates is not None:
+            estates_all = select_estates(listed, estates)
+            log(f"estates subset {','.join(estates)}: {len(estates_all)} sitemap entries")
+        pilot = pilot_codes(fetcher, log)
+        step = (lambda c: f"house:{c}") if recheck_house else (lambda c: c)
+    estates = estates_all
+    with db.session(db_path) as con:
         done = {r[0] for r in con.execute(
             "SELECT step_key FROM run_progress WHERE command = ?", [COMMAND]).fetchall()}
         house_codes = {r[0] for r in con.execute(
             "SELECT code FROM master_estate WHERE exclude_reason = 'house'").fetchall()}
-        args = ("recheck-house " if recheck_house else "") + (f"limit={limit}" if limit else "")
+        args = ("refresh " if refresh else "") + ("recheck-house " if recheck_house else "") + (
+            f"limit={limit}" if limit else "")
         run_id = db.start_run(con, COMMAND, args.strip())
-    step = (lambda c: f"house:{c}") if recheck_house else (lambda c: c)
     todo = [(c, n) for c, n in estates
             if step(c) not in done and (not recheck_house or c in house_codes)]
     if limit:
         todo = todo[:limit]
-    log(f"{len(estates)} estates in the sitemap, {len(done)} done, {len(todo)} to do")
+    log(f"{len(estates)} estates in the {'master list' if refresh else 'sitemap'}, "
+        f"{len(done)} steps done, {len(todo)} to do")
     stats = {"estates": 0, "excluded": 0, "blocks": 0, "deals": 0, "house_blocks": 0,
              "errors": 0, "left": len(todo)}
     streak, status, message = 0, "ok", ""
     # throttling (429/503, 5xx, timeouts): wait and try the same estate again (patience.py)
     patience = Patience(log, what="master", fetcher=fetcher, sleep=wait)
+    started = clock()
     try:
         for i, (code, name) in enumerate(todo, 1):
+            if max_hours is not None and clock() - started > max_hours * 3600:
+                stats["stopped"] = "max-hours"
+                log(f"stopped after {max_hours} hours")
+                break
             skipped = False
             while True:
                 try:
                     reason, blocks, added, houses = process_estate(
                         fetcher, db_path, code, name, pilot=code in pilot,
-                        overrides=overrides)
+                        overrides=overrides, refresh=refresh)
                 except SourceBlocked:
                     raise
                 except (FetchError, httpx.HTTPError, cd.NotData, KeyError, ValueError) as e:
