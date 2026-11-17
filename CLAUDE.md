@@ -20,7 +20,7 @@ Read these before substantial changes:
   `conda run -n hk-estate python -m pip install -e ".[dev]"` (conda env `hk-estate`, Python 3.12)
 - Run: `conda run -n hk-estate hkestate <command>`: `backfill --estates pilot` (resumable),
   `rebuild` (every data step in order from an empty data folder; resumable; docs/rebuild.md),
-  `master --refresh` (weekly re-read of every loaded estate's Centadata block pages; ~22 h; task `weekly centadata`; `--estates`, `--max-hours`), `rvd`, `crosscheck --estates pilot`, `cd-history` (every sale per flat from Centadata; resumable;
+  `master --refresh` (re-read of every loaded estate's Centadata block pages for new sales; 55-90 h; by hand before using the data, task `weekly centadata` disabled; docs/operations.md "Catch-up"; `--estates`, `--max-hours`), `rvd`, `crosscheck --estates pilot`, `cd-history` (every sale per flat from Centadata; resumable;
   `--estates`, `--limit`, `--max-hours`), `listings`, `daily`, `update`, `prune-cache`,
   `status`, `datacheck` (checks on the snapshot; `--read-db`, `--no-fetch`),
   `train` (`--since`, `--compare-since`, `--previous`; the 2026-10-18 model is in

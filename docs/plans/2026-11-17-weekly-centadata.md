@@ -72,7 +72,10 @@ coordinator merges.
   - Done when: the task is registered and `Get-ScheduledTask -TaskPath '\hk-estate\'` shows
     `weekly centadata` with next run Friday 20:00; docs name the command, schedule and lock.
 
-- [ ] **Task 4: first live run** `(checkpoint)` needs: Task 3
+- [x] **Task 4: first live run** `(checkpoint)` needs: Task 3
+  - *Result 2026-11-18: 250 estates in 80 min, ~2.9 pages each, 6.5 s a page, 120 new sales,
+    0 errors; projected 55-90 h, over the week. Owner's call: no schedule, catch up by hand
+    (decisions.md "New sales and Spacious"). Task disabled, run stopped.*
   - Done when: started through the scheduled task (`Start-ScheduledTask`), not as a child
     process; after its first hour the log shows estates read, deals added and errors, and the
     measured pages per hour; the projected length is written to `docs/operations.md`. If it

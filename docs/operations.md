@@ -12,7 +12,7 @@ Registered for the current user by `scripts\register_task.ps1` (rerun it to upda
 | `daily listings` | every day 08:00 | `scripts\daily.ps1` → `hkestate daily` (may run up to 23 h: every due Centanet page is read) |
 | `watchdog` | every 15 minutes | `scripts\watchdog.ps1` → `hkestate watchdog` (restarts jobs that died; see Watchdog) |
 | `weekly deals` | Sundays 07:00 | `scripts\daily.ps1 -Command update` → `hkestate update` |
-| `weekly centadata` | Fridays 20:00 | `scripts\daily.ps1 -Command "master --refresh"` → `hkestate master --refresh` (about 22 h; the task may run 2 days; see Weekly Centadata refresh) |
+| `weekly centadata` | **disabled** (owner, 2026-11-18) | `scripts\daily.ps1 -Command "master --refresh"` → `hkestate master --refresh` (55-90 h; run by hand before using the data; see Centadata refresh) |
 | `weekly ricacorp` | Sundays 10:00 | `scripts\daily.ps1 -Command ricacorp` → `hkestate ricacorp` (a pass is about 30 hours with restarts; the task may run 14 and the watchdog resumes it) |
 | `daily rank` | every day 14:00 | `scripts\daily.ps1 -Command rank` → `hkestate rank` (after the 08:00 listings, ~4.5 h; about 1-3 minutes, of which the database read is about 1 minute) |
 | `weekly train` | Sundays 12:00 | `scripts\daily.ps1 -Command train` → `hkestate train` (after the deal update; about 5 minutes) |
@@ -88,16 +88,27 @@ still stop that source for the run; 404 means the listing is gone.
 A first run reads every pilot listing's detail page (about 2,500 on Centanet: ~1.5 hours at 2 s).
 Later runs read only new and rotating pages (minutes).
 
-## Weekly Centadata refresh (`hkestate master --refresh`, from 2026-11-17)
+## Centadata refresh (`hkestate master --refresh`, from 2026-11-17; run by hand)
 
 - **What:** re-reads the Centadata block pages of every estate on the master list (not excluded,
-  not pilot, `blocks > 0`; about 27,000 pages). Each page shows every flat's latest sale, so a
+  not pilot, `blocks > 0`). Each page shows every flat's latest sale, so a
   flat sold since the last read adds a new sale. Sales already stored are not added twice. It
   never writes an exclusion for an estate already on the list.
-- **Schedule:** task `weekly centadata`, Fridays 20:00, so it ends before the Sunday 12:00
-  `train`. Execution time limit 2 days; a second start while it runs is ignored.
-- **Pace:** 3 s between requests (`REFRESH_INTERVAL_S`; the normal master pass keeps 4 s):
-  about 22 h for a full pass. The first live run measures the real pace (plan Task 4).
+- **Not scheduled (owner, 2026-11-18).** Centaline has no newest-sales list we may read, so
+  finding new sales means opening every building page: about 51,000 pages, 55-90 h. The task
+  `weekly centadata` exists but is **disabled**. Run the catch-up below when the data is needed.
+- **Pace:** 3 s between requests (`REFRESH_INTERVAL_S`; the normal master pass keeps 4 s).
+  Measured 2026-11-18 while the 28Hse backfill ran: ~2.9 pages per estate, 6.5 s a page on
+  average (median 3.8 s), 250 estates in 80 min, ~1 new sale per 2 estates after 3 weeks.
+
+### Catch-up before using the data (e.g. before a purchase)
+Start about a week before the numbers are needed; each step is resumable.
+1. `hkestate master --refresh` (55-90 h): every flat's latest sale. Use `--max-hours` to split it.
+2. `hkestate cd-history`: every sale of each flat, including flats sold twice since the last
+   read. It skips buildings marked done, so first clear its progress (a one-line delete):
+   `DELETE FROM run_progress WHERE command = 'cd-history'` (~30 h or more at its 2 s pace).
+3. `hkestate train`, `rank`, `report`.
+The daily listings keep running meanwhile: past listings cannot be fetched later.
 - **Cache:** refresh pages use the page type `weekly`, with a 2-day lifetime, so next week's run
   always fetches them again.
 - **Resume:** once per ISO week. Each estate is a step `refresh:<year>-W<week>:<code>` in

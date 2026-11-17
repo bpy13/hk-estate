@@ -648,6 +648,18 @@ weighted average by the profile's goal weights.
 - **Page-cache prune unchanged** (owner): the daily prune keeps deleting all pages on the three
   listing hosts after 7 days; rebuilds fetch again.
 
+## New sales and Spacious (2026-11-17/18, owner's answers)
+- **Spacious is off** (owner): a Cloudflare challenge has blocked every page since 2026-10-29.
+  The daily job skips it; the monthly check-blocked tests it. We do not get round it.
+- **No scheduled Centadata refresh; catch up by hand** (owner, 2026-11-18). The owner wanted
+  cheap daily new sales, to avoid a big fetch before a future purchase. Centaline offers no
+  newest-sales list we may read, so finding new sales means re-reading ~51,000 building pages
+  (55-90 h; measured on the first run). Centadata keeps every sale of every flat, so a
+  catch-up later loses nothing: `master --refresh`, then `cd-history` with its progress
+  cleared, then `train`, `rank`, `report` (docs/operations.md "Catch-up"). The task
+  `weekly centadata` stays registered but disabled. Daily listings keep running: past
+  listings cannot be fetched later.
+
 ## Repository
 - **Public GitHub repo `hk-estate` on account `bpy13`** (2026-10-16). Because it is public:
   scraped data, the database and raw-page cache are never committed (`data/` ignored), and no

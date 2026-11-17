@@ -87,8 +87,9 @@ cache pruning.)*
   catch-up run starts.)*
 - **No territory sales arrive after the one-off runs (found 2026-11-17).** The Sunday `update`
   reads 28Hse deal pages for the 5 pilot estates only; nothing repeats the Centadata master
-  pass. Being fixed: plan `docs/plans/2026-11-17-weekly-centadata.md`. Still open after it:
-  once the 28Hse territory backfill ends, nothing reads new 28Hse territory deals either.
+  pass. *(Settled 2026-11-18: catch up by hand before using the data, decisions.md "New sales
+  and Spacious".)* Same for 28Hse: once the territory backfill ends, nothing reads new 28Hse
+  territory deals; under the same decision that is fine.
 - **Spacious blocked since 2026-10-29.** Every page, robots.txt included, answers a Cloudflare
   "Just a moment..." check, so the fetcher counts all pages as not allowed (4,789 errors a
   day, 0 listings). Before that it gave 300-800 new listings a day. Owner's OK 2026-11-17:
@@ -106,9 +107,10 @@ cache pruning.)*
   6.5 s a page on average (median 3.8 s, 90th percentile 13 s; suspected database waits
   while the 28Hse backfill writes, unconfirmed), 104 new sales, 0 errors. Projected ~90 h,
   ~55 h after the backfill ends; the task stops at 48 h and each week restarts from the
-  start. Many reads are house blocks fetched then skipped. Waiting on the owner: (a) skip
-  blocks already judged houses and run Monday 00:00 with a 6-day limit (proposed), (b) also
-  2 s pace, (c) read every two weeks.
+  start. Many reads are house blocks fetched then skipped. *(Settled 2026-11-18,
+  decisions.md: no scheduled refresh; catch-up by hand before using the data. Task disabled,
+  first run stopped at 250 estates, 120 new sales. If the refresh is ever scheduled again,
+  skip blocks already judged houses first.)*
 - **Rebuild audit "unclear" items.** R1: Mei Foo Centadata rows from the 10-16 07:09 run may
   sit on a wrong block; compare with the later run. R15: check whether `features.py`
   re-parses stored floor labels, or `unit.floor_num` keeps its load-day parse.
