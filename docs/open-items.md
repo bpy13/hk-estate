@@ -92,7 +92,23 @@ cache pruning.)*
 - **Spacious blocked since 2026-10-29.** Every page, robots.txt included, answers a Cloudflare
   "Just a moment..." check, so the fetcher counts all pages as not allowed (4,789 errors a
   day, 0 listings). Before that it gave 300-800 new listings a day. Owner's OK 2026-11-17:
-  mark it blocked (same plan, Task 2).
+  mark it blocked (same plan, Task 2). *(Done 2026-11-17: off in the daily job; in the monthly
+  check-blocked, which now needs a real robots file to call a site open.)*
+- **Weekly Centadata refresh, leftovers (2026-11-18).** (a) Some estates on the master list
+  now read as houses under today's rules (e.g. 桂盧, 2 floors). The refresh never excludes an
+  estate already listed, so they stay; a clean-up would need the owner's call. (b) The
+  watchdog does not restart a dead refresh; the next Friday run starts the new week afresh
+  and the unfinished estates wait a week. (c) The first run started 2026-11-18 (ISO week 47),
+  so the Friday 2026-11-20 run finds nothing to do if it finished; the next full read is
+  2026-11-27.
+  (d) **Too slow for a week (first run, 2026-11-18 00:03-01:06):** 200 of 17,497 estates,
+  582 pages (~2.9 per estate, not the ~1.5 the plan assumed; ~51,000 pages a full read),
+  6.5 s a page on average (median 3.8 s, 90th percentile 13 s; suspected database waits
+  while the 28Hse backfill writes, unconfirmed), 104 new sales, 0 errors. Projected ~90 h,
+  ~55 h after the backfill ends; the task stops at 48 h and each week restarts from the
+  start. Many reads are house blocks fetched then skipped. Waiting on the owner: (a) skip
+  blocks already judged houses and run Monday 00:00 with a 6-day limit (proposed), (b) also
+  2 s pace, (c) read every two weeks.
 - **Rebuild audit "unclear" items.** R1: Mei Foo Centadata rows from the 10-16 07:09 run may
   sit on a wrong block; compare with the later run. R15: check whether `features.py`
   re-parses stored floor labels, or `unit.floor_num` keeps its load-day parse.
